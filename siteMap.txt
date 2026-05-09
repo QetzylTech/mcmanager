@@ -1,0 +1,471 @@
+Suggested Site Map / Navigation Hierarchy
+
+Purpose
+- Organize the current prototype, legacy carry-over features, and the next-generation multi-world requirements into one navigation plan.
+- Preserve the strengths of the old shell layout while making room for multi-world, multi-version, and future multi-node growth.
+
+Navigation principles
+- Keep the shell model from the legacy app:
+  - shared nav
+  - shared alerts
+  - shared live state ownership
+  - page-level content panes
+- Separate manager-wide pages from per-world pages.
+- Avoid putting everything on Home once multiple worlds exist.
+- Make destructive or advanced actions live near the thing they affect.
+- Keep read-only operational views easy to reach from anywhere.
+
+Top-level navigation
+- Dashboard
+- Worlds
+- Backups & Restore
+- Maintenance
+- Logs
+- Activity & Alerts
+- Settings
+- Setup
+- Docs
+
+1. Dashboard
+- Purpose:
+  - Manager-wide summary
+  - Fast operational awareness
+  - Primary landing page
+- Content:
+  - Manager health summary
+  - Host storage / CPU / RAM
+  - Global alerts
+  - Worlds overview cards
+  - Recently active worlds
+  - Recent backups / restores / failures
+  - Quick actions
+- Suggested panes:
+  - Global Status
+  - World Summary
+  - Active Alerts
+  - Recent Activity
+  - Quick Actions
+- Notes:
+  - This replaces the old single-world Home as the true landing page.
+  - The current prototype Home layout can still be reused visually, but its content should become manager-wide.
+
+2. Worlds
+- Purpose:
+  - Main entry point for all managed Minecraft worlds
+  - Central place to browse, create, and select worlds
+- Children:
+  - World List
+  - Create World
+  - Templates / Server Bases
+  - Java Runtimes
+
+2.1 World List
+- Content:
+  - Search
+  - Filters
+  - Status badges
+  - Version badges
+  - Server type badges
+  - Host / node ownership
+  - Address / connection target
+  - Quick actions
+- Actions:
+  - Open world detail
+  - Start
+  - Stop
+  - Backup
+  - Open logs
+
+2.2 Create World
+- Content:
+  - World name
+  - World ID preview
+  - Version selection
+  - Server type / baseline selection
+  - Java runtime selection
+  - Port / address allocation
+  - Storage path
+  - Initial backup / retention defaults
+
+2.3 Templates / Server Bases
+- Content:
+  - Curated Vanilla baselines
+  - Forge baselines
+  - Fabric baselines
+  - Future custom baselines
+
+2.4 Java Runtimes
+- Content:
+  - Registered Java runtimes
+  - Version mapping
+  - Default runtime
+  - Per-world compatibility notes
+
+3. World Detail
+- Purpose:
+  - Replacement for the legacy single-world Home page
+  - Main page for operating one world
+- Route model:
+  - `/worlds/<world-id>`
+- Children:
+  - Overview
+  - Console
+  - Files
+  - Config
+  - Backups
+  - Restore
+  - Logs
+  - Maintenance
+  - History
+
+3.1 Overview
+- Closest carry-over from the current prototype Home page
+- Content:
+  - Start / stop / backup controls
+  - World stats
+  - Runtime state
+  - Players online
+  - Uptime
+  - Tick/performance
+  - Last / next backup
+  - Storage pressure
+  - Critical warnings
+
+3.2 Console
+- Content:
+  - Live world console
+  - RCON command entry
+  - Log source switcher if needed
+
+3.3 Files
+- Content:
+  - World file manager
+  - Upload / rename / create / delete actions
+
+3.4 Config
+- Content:
+  - Protected `server.properties` editor
+  - Approved settings editor
+  - Runtime launch settings
+
+3.5 Backups
+- Content:
+  - Backup list
+  - Filter
+  - Sort
+  - Download
+  - Create backup
+
+3.6 Restore
+- Content:
+  - Restore candidates
+  - Restore preview
+  - Restore log stream
+  - Last restore summary
+
+3.7 Logs
+- Content:
+  - World-specific log files
+  - Crash logs
+  - Backup logs
+  - Restore logs
+  - Sync logs
+  - Debug logs
+
+3.8 Maintenance
+- Content:
+  - World-specific retention rules
+  - Manual cleanup
+  - Dry-run preview
+  - Scheduled cleanup status
+
+3.9 History
+- Content:
+  - Immutable world action history
+  - Start / stop / backup / restore / config changes
+  - File actions
+  - Security-relevant events
+
+4. Backups & Restore
+- Purpose:
+  - Manager-wide backup and restore center
+  - Cross-world visibility
+- Children:
+  - All Backups
+  - Restore Queue / Active Restores
+  - Offsite Sync
+  - Retention Summary
+
+4.1 All Backups
+- Content:
+  - Backups across all worlds
+  - Filter by world, type, age, size, host
+
+4.2 Restore Queue / Active Restores
+- Content:
+  - Running restores
+  - Recent restores
+  - Failures
+  - World lock/conflict state
+
+4.3 Offsite Sync
+- Content:
+  - Sync targets
+  - Last sync per world
+  - Failed syncs
+  - Queue state
+
+4.4 Retention Summary
+- Content:
+  - Backup counts by world
+  - Stale artifacts
+  - Rules summary
+
+5. Maintenance
+- Purpose:
+  - Manager-wide cleanup and housekeeping control
+- Children:
+  - Backup Cleanup
+  - Stale Worlds
+  - Logs Cleanup
+  - History / Missed Runs
+
+5.1 Backup Cleanup
+- Carry-forward from legacy Cleanup page
+- Content:
+  - Rules
+  - File eligibility list
+  - Manual cleanup
+  - Dry-run modal
+
+5.2 Stale Worlds
+- Content:
+  - Old worlds
+  - Archived worlds
+  - Restore leftovers
+
+5.3 Logs Cleanup
+- New page suggested by the new design
+- Content:
+  - Crash/debug/backup/sync/manager log retention
+
+5.4 History / Missed Runs
+- Content:
+  - Cleanup history
+  - Missed scheduled runs
+  - Acknowledge / rerun prompts
+
+6. Logs
+- Purpose:
+  - Unified read-only log center
+- Children:
+  - Live Logs
+  - World Logs
+  - Manager Logs
+  - Crash Reports
+  - Sync Logs
+
+6.1 Live Logs
+- Content:
+  - Live feeds grouped by world or source
+
+6.2 World Logs
+- Content:
+  - Minecraft server logs by world
+
+6.3 Manager Logs
+- Content:
+  - Manager actions log
+  - Manager system/error log
+
+6.4 Crash Reports
+- Content:
+  - World crash reports
+  - Manager crash/error events if applicable
+
+6.5 Sync Logs
+- Content:
+  - Offsite backup sync activity
+
+7. Activity & Alerts
+- Purpose:
+  - Centralize cross-cutting notifications and audit browsing
+- Children:
+  - Alerts
+  - Client Activity
+  - Audit History
+  - Security Events
+
+7.1 Alerts
+- Content:
+  - Current alerts
+  - Severity groups
+  - World filters
+
+7.2 Client Activity
+- Content:
+  - Connected clients
+  - Current page/view
+  - Recent actions
+  - Suspicious activity markers
+
+7.3 Audit History
+- Content:
+  - Immutable event stream across the whole manager
+
+7.4 Security Events
+- Content:
+  - Unauthorized attempts
+  - Password throttle events
+  - High-risk actions
+
+8. Settings
+- Purpose:
+  - Replacement and expansion of the legacy Panel Settings page
+- Children:
+  - General
+  - Security
+  - Paths & Storage
+  - Networking
+  - Device Mapping
+  - Defaults
+  - Integrations
+  - App Control
+
+8.1 General
+- Content:
+  - Display timezone
+  - Branding/name
+  - Default shell behavior
+
+8.2 Security
+- Content:
+  - Admin password
+  - Superadmin password
+  - Privilege rules
+  - Per-device rulesets
+
+8.3 Paths & Storage
+- Content:
+  - World storage roots
+  - Backup directories
+  - Archive locations
+  - Storage safety thresholds
+
+8.4 Networking
+- Content:
+  - Base hostname
+  - Port/address allocation strategy
+  - Reverse proxy guidance
+  - Future multi-node host mapping
+
+8.5 Device Mapping
+- Carry-forward from legacy Panel Settings
+- Content:
+  - Device/IP mapping
+  - CSV import
+  - Owners
+  - Last seen
+
+8.6 Defaults
+- Content:
+  - Default backup rules
+  - Default cleanup rules
+  - Default Java runtime
+  - Default world creation template
+
+8.7 Integrations
+- Content:
+  - Network storage sync target
+  - Future Google Drive settings
+
+8.8 App Control
+- Content:
+  - Refresh state
+  - Restart manager
+  - Future update/revert actions
+
+9. Setup
+- Purpose:
+  - First-run onboarding and re-entry setup flow
+- Content:
+  - Welcome
+  - Paths
+  - Timezone
+  - Password bootstrap
+  - Device import
+  - Java runtime registration
+  - Initial template catalog
+- Notes:
+  - Unlike the old system, Setup should not be only a failure fallback.
+
+10. Docs
+- Purpose:
+  - Keep the legacy Instructions/README-style page
+- Children:
+  - Quick Start
+  - World Operations
+  - Backup & Restore Guide
+  - Maintenance Guide
+  - Networking Guide
+  - Troubleshooting
+  - Architecture Notes
+
+Suggested shell hierarchy for prototype evolution
+- Current prototype pages:
+  - Home
+  - Backup & Restore
+  - Cleanup
+  - Panel Settings
+  - Instructions
+  - Log Files
+- Suggested next prototype reorganization:
+  - Dashboard
+  - Worlds
+    - World List
+    - World Detail
+  - Backups & Restore
+  - Maintenance
+  - Logs
+  - Activity & Alerts
+  - Settings
+  - Setup
+  - Docs
+
+Suggested phase plan
+- Phase 1:
+  - Keep current layout style
+  - Rename Home -> Dashboard
+  - Add Worlds page
+  - Move current single-world Home into World Detail -> Overview
+- Phase 2:
+  - Split logs into manager-wide Logs page and per-world Logs tab
+  - Split Cleanup into manager-wide Maintenance and per-world Maintenance tab
+- Phase 3:
+  - Add Activity & Alerts as a dedicated area
+  - Expand Settings into multi-section configuration
+
+Open sitemap questions
+- Should Dashboard be purely manager-wide, or should it have a selected-world focus mode?
+- Should World Detail use tabs, left-side subnav, or pane switcher buttons?
+- Should Backups & Restore remain one page, or split into list and restore workflow pages?
+- Should Activity & Alerts be top-level, or live under Dashboard with deeper drill-down pages?
+- Should Setup remain top-level after onboarding, or become a section within Settings?
+
+Recommended immediate nav for the next prototype
+- Dashboard
+- Worlds
+- Backups & Restore
+- Maintenance
+- Logs
+- Settings
+- Docs
+
+Recommended immediate page mapping from current prototype
+- Current Home -> World Detail / Overview
+- Current Backup & Restore -> Backups & Restore
+- Current Cleanup -> Maintenance
+- Current Panel Settings -> Settings
+- Current Instructions -> Docs
+- Current Log Files -> Logs
+- Missing page to add next -> Worlds

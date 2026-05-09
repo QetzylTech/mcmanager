@@ -1,0 +1,115 @@
+<main id="mcweb-page-root" class="content" data-page-key="home" data-page-title="Minecraft Control">
+<div class="wrap page-panes page-panes--home">
+    <section class="panel page-pane page-pane--header" aria-labelledby="control-panel-title">
+        <div class="pane-head">
+            <div class="pane-head-row">
+                <h1 id="control-panel-title" class="pane-title">Control Panel</h1>
+                <div class="pane-head-actions actions">
+                    <span class="server-time">Server time: <strong id="server-time">--</strong></span>
+                    <div class="action-buttons">
+                        <form class="ajax-form" method="post" action="#">
+                            <button id="start-btn" class="btn-start" type="button">Start</button>
+                        </form>
+                        <form class="ajax-form sudo-form" method="post" action="#">
+                            <input type="hidden" name="sudo_password">
+                            <button id="stop-btn" class="btn-stop" type="button" disabled>Stop</button>
+                        </form>
+                        <form class="ajax-form" method="post" action="#">
+                            <button id="backup-btn" class="btn-backup" type="button">Backup</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="pane-content">
+            <div class="stats-groups">
+                <div class="stats-group server-stats">
+                    <p class="group-title">Server Stats</p>
+                    <div class="status-row">
+                        <span>RAM: <strong id="ram-usage">1.9 GB / 16 GB</strong></span>
+                        <span>CPU: <strong id="cpu-per-core">CPU0 4% | CPU1 8% | CPU2 5% | CPU3 11%</strong></span>
+                        <span>CPU freq: <strong id="cpu-frequency">4.2 GHz</strong></span>
+                        <span>Storage: <strong id="storage-usage">61% used, 732 GB free</strong></span>
+                    </div>
+                </div>
+                <div class="stats-group">
+                    <p class="group-title">Minecraft Stats</p>
+                    <div class="status-row">
+                        <span>Server Status: <strong id="service-status">Off</strong><span id="service-status-duration-prefix"></span><strong id="session-duration" style="display:none;">--</strong></span>
+                        <span>Players online: <strong id="players-online">0</strong></span>
+                        <span>Tick time: <strong id="tick-rate">--</strong></span>
+                        <span>Auto-stop in: <strong id="idle-countdown">--:--</strong></span>
+                    </div>
+                </div>
+                <div class="stats-group">
+                    <p class="group-title">Backup Stats</p>
+                    <div class="status-row">
+                        <span>Backup status: <strong id="backup-status">Idle</strong></span>
+                        <span>Last backup: <strong id="last-backup-time">2026-05-09 21:14</strong></span>
+                        <span>Next backup: <strong id="next-backup-time">2026-05-09 22:00</strong></span>
+                        <span>Backups folder: <strong id="backups-status">248 archives</strong></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel page-pane page-pane--live" aria-label="Live Logs and Command Panel">
+        <div class="pane-head">
+            <div class="pane-head-row home-log-row">
+                <div class="pane-head-actions pane-head-actions-group pane-head-actions-group--live">
+                    <label class="sr-only" for="log-source">Log source</label>
+                    <select id="log-source">
+                        <option value="minecraft">Live Server Console</option>
+                        <option value="backup">Live Backup Activity</option>
+                        <option value="mcweb">Live Control Panel Activity (Actions)</option>
+                        <option value="mcweb_log">Live Control Panel Logs (Errors/System)</option>
+                    </select>
+                    <form class="panel-controls ajax-form sudo-form" action="#">
+                        <input type="hidden" name="sudo_password">
+                        <input id="rcon-command" class="ui-text-input" type="text" placeholder="Enter Minecraft server command" autocomplete="off">
+                        <button id="rcon-submit" type="submit">Submit</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="pane-content">
+            <pre id="minecraft-log" class="console-box"></pre>
+        </div>
+    </section>
+</div>
+<div id="sudo-modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sudo-modal-title">
+        <h3 id="sudo-modal-title" class="modal-title">Password Required</h3>
+        <p id="sudo-modal-text" class="modal-text">Enter sudo password to continue.</p>
+        <img id="sudo-modal-image" class="modal-image" src="https://i.imgflip.com/6k8gqw.jpg" alt="Incorrect password image" hidden>
+        <input id="sudo-modal-input" class="modal-input ui-text-input" type="password" placeholder="Sudo password">
+        <p id="sudo-modal-error" class="modal-text modal-error" hidden></p>
+        <div class="modal-actions">
+            <button id="sudo-modal-cancel" class="btn-secondary" type="button">Cancel</button>
+            <button id="sudo-modal-submit" class="btn-backup" type="button">Continue</button>
+        </div>
+    </div>
+</div>
+<div id="message-modal" class="modal-overlay" aria-hidden="true" hidden></div>
+<div id="success-modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="success-modal-title">
+        <h3 id="success-modal-title" class="modal-title">Action Completed</h3>
+        <p id="success-modal-text" class="modal-text"></p>
+        <div class="modal-actions">
+            <button id="success-modal-ok" class="btn-backup" type="button">OK</button>
+        </div>
+    </div>
+</div>
+<div id="error-modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="error-modal-title">
+        <h3 id="error-modal-title" class="modal-title">Action Failed</h3>
+        <p id="error-modal-text" class="modal-text"></p>
+        <button id="error-modal-more" class="btn-secondary modal-more-btn" type="button">Show more</button>
+        <pre id="error-modal-details" class="modal-details" hidden></pre>
+        <div class="modal-actions">
+            <button id="error-modal-ok" class="btn-backup" type="button">OK</button>
+        </div>
+    </div>
+</div>
+</main>

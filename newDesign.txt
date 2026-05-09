@@ -1,0 +1,433 @@
+Next-Generation Minecraft Manager Requirements
+
+Purpose
+- Define a polished requirements baseline for a new manager that preserves the useful parts of the legacy single-world dashboard while expanding it into a multi-world, multi-version, OS-agnostic platform.
+- This document describes product requirements and behavior goals first. It does not lock in architecture, framework, or deployment details yet.
+
+Guiding goals
+- Manage multiple independent Minecraft worlds concurrently on one machine.
+- Support different Minecraft server versions and server types without worlds interfering with one another.
+- Remove hard dependency on `systemd`, `journalctl`, and shell-script-centric control flow.
+- Preserve the strong operational features of the old app: live status, backup/restore, cleanup, setup, notifications, auditability, and defensive guardrails, web UI.
+- Keep resource use extremely low while remaining robust under concurrent web users and world processes (almost 0% cpu utilization at idle).
+- Be portable across operating systems that can run Java and Python.
+
+Terminology
+- Manager: the control application and web UI.
+- World instance: one independently managed Minecraft server runtime, including its files, process, config, logs, backups, and policies.
+- Server type: Vanilla, Forge, Fabric, Paper, or another supported baseline/template.
+- Version runtime: the Java runtime and Minecraft server version assigned to a world instance.
+- Client: a browser session connected to the manager UI.
+- Privileged action: any action other than basic world start and read-only viewing.
+
+Scope
+- The system must manage many world instances on one host.
+- Each world instance must be independently startable, stoppable, observable, backed up, restored, and configurable.
+- The manager must present a shared web UI for users on the trusted network.
+- The system must remain functional without Linux-specific service management.
+
+1. Product model
+
+1.1 Multi-world model
+- The manager must support multiple world instances existing at the same time on one host.
+- World instances must be isolated from one another in process handling, ports, file paths, logs, backups, retention rules, and crash handling.
+- One world crashing, being restored, or being backed up must not corrupt or block unrelated worlds unless a shared global safety rule requires it.
+- The system must support running multiple worlds concurrently, subject to host resource limits and admin-defined concurrency rules.
+
+1.2 Multi-version model
+- Each world instance must be able to declare its own:
+  - Minecraft server version
+  - server type or baseline
+  - Java executable or Java version
+  - startup arguments
+- The manager must support side-by-side use of different Java runtimes when configured.
+- The manager must support a curated template/baseline catalog for creating new world instances.
+- The initial template catalog should be able to represent at least:
+  - Vanilla
+  - Forge
+  - Fabric
+  - other approved server bases later
+- There should be a way to manage the template catalog (add, edit, delete categories and specific items under each category)
+
+1.3 World identity
+- Each world instance must have a unique machine-readable ID.
+- Each world instance must have a human-readable display name.
+- Each world instance must have a unique network identity for both:
+  - web access context
+  - Minecraft client connection target
+- The system must support at least these possible addressing strategies:
+  - subdomain-style naming such as `world1.servername`
+  - port-based naming such as `servername:4251`
+  - path-based UI routing such as `servername/world1`
+- The final deployment may choose one primary strategy, but the product requirements must not assume only one.
+
+2. World lifecycle management
+
+2.1 Start and stop
+- Any trusted network user may start a world without entering a password.
+- Privileged users may stop a world, force stop a world, or perform advanced control actions.
+- Each world instance must start independently of every other world.
+- Start actions must be idempotent and must not create duplicate launch attempts.
+- Stop actions must clearly differentiate:
+  - graceful stop
+  - forced stop/kill
+  - emergency stop
+- The manager must not rely on `systemd` as the primary control mechanism.
+- The manager must be able to launch worlds directly through configured Java commands, server launch scripts, or equivalent portable process-control mechanisms.
+
+2.2 Runtime status
+- Each world instance must expose a clear runtime state model, including at minimum:
+  - off
+  - queued
+  - starting
+  - running
+  - stopping
+  - restoring
+  - backing up
+  - crashed
+  - error
+- Runtime status must be derived from a combination of process state, startup signals, logs, and health checks rather than a single fragile trigger.
+- If the manager boots while worlds are already running, it must discover and reconcile their actual state.
+
+2.3 Runtime metrics
+- For each world instance, the manager must track at minimum:
+  - player count
+  - time since startup
+  - online/offline state
+  - latest logs
+  - backup state
+  - last backup time
+  - next scheduled backup time
+  - autosave schedule state
+  - crash/error indicators
+- The system should also support optional per-world CPU, RAM, disk, and tick/performance indicators where technically feasible.
+
+2.4 RCON and command execution
+- Each world instance must support RCON command execution where the server supports it.
+- RCON credentials must be managed per world instance.
+- The manager must be able to enforce approved RCON settings in protected configuration files.
+- The manager must support safe execution of common commands without exposing raw dangerous command access to unprivileged users.
+
+3. Observability and live updates
+
+3.1 Realtime data
+- The manager must provide realtime status updates to connected UI clients.
+- The system should preserve the shell-owned live update model from the legacy app:
+  - shared manager-level streams
+  - world-specific streams
+  - no high-frequency client polling for live state
+- Live world logs must be viewable in near realtime.
+- Startup, shutdown, restore, backup, sync, and crash flows must expose live progress and logs.
+
+3.2 Log collection
+- Each world instance must retain separate log channels at minimum for:
+  - Minecraft stdout/stderr or equivalent live console output
+  - crash logs
+  - debug logs when enabled
+  - backup logs
+  - restore logs
+  - offsite sync logs
+  - manager action logs
+  - manager system/error logs
+- Log storage locations must be clearly defined and consistent across supported operating systems.
+- The UI must support viewing, filtering, and downloading these logs.
+- The system should support a user-facing "explain error" action for selected logs in a future-safe way.
+
+3.3 Client monitoring
+- The manager must track connected web clients and basic session metadata.
+- The manager must record what a client is viewing or doing at a meaningful operational level.
+- Suspicious or abnormal client behavior must be detectable and eligible for alerting.
+- The system must be careful not to turn client monitoring into a destructive privacy or performance burden inside the trusted network.
+
+4. Backup, restore, sync, and retention
+
+4.1 Backup model
+- Each world instance must support independent backups.
+- The backup subsystem must no longer require a `.sh` implementation, even if script-based adapters remain possible.
+- The product should prefer a native, portable backup engine implemented in the manager stack.
+- Supported backup triggers must include at minimum:
+  - manual backup
+  - scheduled backup
+  - session-end backup
+  - pre-restore backup
+  - emergency backup
+- Backup names must encode world identity, trigger type, and timestamp.
+
+4.2 Autosave and backup coordination
+- Each world instance must support autosave at a configurable interval.
+- Backup execution must coordinate with the server to preserve data integrity.
+- The backup flow must restore normal save behavior after abnormal exits whenever possible.
+- Backup actions should optionally notify in-world players through RCON when appropriate.
+
+4.3 Restore model
+- Each world instance must support restore from its own local backup inventory.
+- Restore must create a protected pre-restore backup before applying changes unless explicitly disabled by an administrator with elevated confirmation.
+- Restore must expose live progress and detailed logs.
+- Restore must record immutable history, including:
+  - source artifact
+  - target world
+  - operator
+  - timestamps
+  - outcome
+  - any rollback or recovery steps
+- The manager should support restore from offsite storage in later phases.
+
+4.4 Offsite sync
+- The system must support automatic offsite backup sync after backup creation.
+- Offsite sync targets must be configurable per world or inherited from global defaults.
+- The first offsite target to support should be a network storage device at a configured address.
+- Google Drive sync is a supported future requirement and should remain compatible with the design.
+- Sync logs and sync failures must be stored and surfaced in the UI.
+
+4.5 Retention and housekeeping
+- Each world instance must support backup housekeeping rules.
+- Housekeeping must support at minimum:
+  - keep latest X backups by type
+  - age-based deletion
+  - size or storage-pressure-based deletion
+  - dry-run preview
+  - manual execution
+  - scheduled execution
+- The manager must also support cleanup of stale worlds, old restore artifacts, and old logs according to policy.
+- Cleanup must never delete the last safe recovery artifact of a required category unless explicitly forced by a superadmin flow.
+
+5. World file and configuration management
+
+5.1 World manager
+- Each world instance must provide a protected file manager.
+- The file manager must support at minimum:
+  - browse files and folders
+  - upload files
+  - download files
+  - rename files and folders
+  - create files and folders
+  - delete files and folders
+- Destructive file operations must require privileged confirmation and must be logged.
+
+5.2 Protected configuration editing
+- The manager must support protected creation and editing of `server.properties`.
+- The manager must validate and constrain edits to approved keys and approved value formats where possible.
+- Unsafe or unsupported values must be rejected with clear explanations.
+- Additional important config files should be editable later through guarded editors, not only raw file access.
+
+5.3 World creation
+- The manager must support creating a new world instance from:
+  - an empty approved template
+  - a curated baseline catalog
+  - an imported existing world package
+- World creation must guide the operator through required selections such as version, server type, Java runtime, storage location, and address/port assignment.
+
+6. Networking and access
+
+6.1 Network assumptions
+- The primary access model is a trusted private network such as Tailscale with MagicDNS enabled.
+- Typing the base server name in a browser should open the manager UI.
+- Typing the assigned Minecraft connection target should connect to the correct world instance.
+- The manager must support a reverse proxy or equivalent routing layer when needed, but core product behavior must not require nginx-specific logic.
+
+6.2 Routing support
+- The design must support mapping multiple worlds to distinct connection targets without requiring a separate full system service definition per world.
+- The design must support HTTP routing for the manager UI and TCP routing for Minecraft connections.
+- The system must clearly separate:
+  - manager web routing
+  - Minecraft protocol routing
+  - internal process control
+
+7. Manager-wide UI requirements
+
+7.1 Shell model
+- The UI should retain the strong shell-based behavior of the legacy app.
+- Shared data streams, notifications, alert state, theme state, and client identity should remain shell-owned.
+- Page state should be preserved reliably when navigating away and back.
+- Multi-tab behavior should continue to behave like a single logical client where practical.
+
+7.2 Core pages
+- The manager UI must include at minimum:
+  - dashboard/home
+  - worlds list
+  - per-world detail page
+  - backups and restore
+  - maintenance and retention
+  - logs
+  - settings
+  - setup/onboarding
+  - documentation/help
+  - audit/history views
+
+7.3 Alerts and notifications
+- The system must provide a global alert system for:
+  - world started
+  - world stopped
+  - world crashed
+  - world being backed up
+  - world being restored
+  - sync failure
+  - suspicious client activity
+  - unauthorized action attempts
+  - critical low storage
+  - missed scheduled jobs
+- Alerts must be visible from any page.
+- The notification system should preserve the legacy strengths of popups, nav indicators, and optional sounds/chimes.
+
+8. Security and permissions
+
+8.1 Access model
+- All users on the trusted network may view the UI and start allowed worlds.
+- Only privileged users may perform protected actions such as stop, restore, cleanup, file edits, config edits, or security changes.
+- The system must support multiple privilege levels at minimum:
+  - viewer/operator
+  - admin
+  - superadmin
+
+8.2 Authentication and authorization
+- Passwords must be hashed and salted.
+- CSRF protection or equivalent request forgery protections must be enabled for privileged actions.
+- Per-device or per-user rulesets from the old roadmap should be supported.
+- Device identity mapping and importable device lists must be supported.
+- Unauthorized attempts must be logged immutably and surfaced to privileged users.
+
+8.3 Defensive programming
+- Clients must not be able to destabilize the manager through repeated clicks, duplicate requests, invalid states, or malformed input.
+- The system must enforce server-side guards for idempotency, conflict resolution, throttling, and validation.
+- Password retry throttling and abusive-action throttling must exist.
+- The manager must fail closed for privileged actions.
+
+9. Auditability, history, and immutability
+
+9.1 Immutable records
+- User action history, events, crashes, operational records, and important logs must be immutable.
+- The system may allow new corrective entries, acknowledgements, or annotations, but should not allow silent destructive rewriting of historical records.
+
+9.2 Audit coverage
+- The manager must log at minimum:
+  - world starts and stops
+  - config changes
+  - backups and restores
+  - cleanup executions
+  - file operations
+  - login or password failures
+  - suspicious activity alerts
+  - crashes and recovery attempts
+  - sync operations
+  - manager restarts and updates
+- Audit records should identify the actor by mapped device or user identity when available.
+
+10. Reliability and recovery
+
+10.1 Error handling
+- Failed starts, partial starts, crashes, backup failures, restore failures, sync failures, and validation errors must be captured and surfaced clearly.
+- Error messages must be more detailed than generic failure messages.
+- World crash handling must include:
+  - detection
+  - status transition
+  - logging
+  - user notification
+  - optional safe recovery actions
+
+10.2 Recovery
+- On manager restart, the system must reconcile persisted state with actual running processes.
+- The system must rehydrate UI clients with current known state after reconnect.
+- Scheduled-job misses must be recorded and surfaced instead of silently replayed without operator awareness.
+
+11. Performance and resource requirements
+
+11.1 Efficiency
+- The manager must be designed for extremely low idle resource consumption.
+- Idle manager overhead should remain in the range of megabytes of RAM and negligible CPU use where feasible.
+- Expensive background work must be event-driven, throttled, or paused when not needed.
+- The design must avoid unnecessary polling loops, duplicated stream ownership, and heavy per-client background tasks.
+
+11.2 Concurrency
+- The manager must safely handle simultaneous:
+  - web users
+  - multiple running world instances
+  - background jobs
+  - backup/sync/cleanup activity
+- Simultaneous jobs must follow explicit conflict rules.
+- World-local operations should not serialize unrelated worlds unnecessarily.
+
+12. Portability and deployment
+
+12.1 OS independence
+- The manager must run anywhere Java and Python run, within documented supported environments.
+- The primary control plane must be OS-agnostic.
+- Platform-specific adapters may exist, but they must be optional implementation details behind portable interfaces.
+
+12.2 Deployment assumptions
+- Reverse proxy use should be optional, not mandatory.
+- The manager should be able to run without nginx, even if nginx remains a supported deployment pattern.
+- Optional boot-time helpers such as wake-on-LAN and boot animations may be supported later, but must not be core dependencies.
+
+13. Setup and settings
+
+13.1 Setup
+- The first-run experience must be a dedicated setup flow, not only an error fallback.
+- Setup must remain accessible later as a normal settings area.
+- Setup/settings must support at minimum:
+  - manager network settings
+  - data and storage paths
+  - backup and sync defaults
+  - timezone
+  - password and role setup
+  - device list import
+  - Java runtime registration
+  - approved template catalog configuration
+
+13.2 Settings page
+- A full settings page is required.
+- Settings must include the old roadmap items and expanded multi-world concerns:
+  - password settings
+  - upload/import device lists
+  - per-device rulesets
+  - default world creation settings
+  - storage and retention defaults
+  - offsite sync settings
+  - network/routing settings
+  - alert settings
+
+14. Legacy feature carry-forward
+
+14.1 Legacy behaviors to preserve
+- Shell-based UI with realtime updates
+- Offline/reconnect-friendly web experience
+- Multi-tab coordination
+- Start, stop, backup, restore, cleanup, and live log views
+- Per-action notifications and activity logs
+- Setup flow and device mapping
+- Storage safety protections
+- Missed-job tracking
+- Audit-friendly operation records
+
+14.2 Legacy weaknesses to eliminate
+- Hard dependency on `systemd`
+- Hard dependency on `journalctl`
+- Backup logic centered on one shell script
+- Single-world assumptions baked into data model and UI
+- Fragile status transitions tied too heavily to one log pattern
+- Incomplete page state preservation
+
+15. Nice-to-have and later-phase requirements
+
+15.1 Supported future expansions
+- Google Drive backup sync with auto-delete policies
+- Error explanation helper in log viewers
+- World template marketplace or richer curated catalog
+- Remote artifact restore from cloud or NAS
+- Additional protocol-aware health checks
+- Optional wake-on-LAN and proxy boot flow
+- Higher-level compliance mapping against ISO/IEC 25010 and related standards
+
+16. Acceptance direction
+
+16.1 The new manager will be considered directionally successful if it:
+- manages multiple worlds concurrently without cross-world interference
+- runs on more than one operating system without redesigning the core control model
+- preserves the useful operational strengths of the legacy manager
+- improves reliability, observability, portability, and maintainability over the legacy app
+- remains lightweight enough to be practical on modest home-lab hardware
+
+16.2 The new manager will not be considered successful if it:
+- still fundamentally depends on Linux service-manager assumptions
+- cannot cleanly isolate worlds from one another
+- loses auditability or defensive protections from the legacy app
+- becomes too heavy or too operationally fragile for its intended environment

@@ -1,0 +1,50 @@
+<main id="mcweb-page-root" class="content docs-shell" data-page-key="readme" data-page-title="Instructions">
+  <header id="stickyHeader" class="sticky-header">
+    <div class="sticky-inner">
+      <button id="stickyMenu" class="sticky-menu" type="button" aria-label="Toggle table of contents" aria-controls="tocSidebar" aria-expanded="false">
+        <span class="sticky-menu-lines" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+        <span id="stickyMenuLabel" class="sticky-menu-label" hidden>Table of Contents</span>
+      </button>
+      <span id="stickyHeaderTitle" class="sticky-title"></span>
+    </div>
+  </header>
+  <div class="page-panes page-panes--docs">
+    <aside id="tocSidebar" class="toc-sidebar panel page-pane page-pane--toc" aria-label="Table of contents sidebar">
+      <div class="pane-head toc-sidebar-header">
+        <span>Contents</span>
+      </div>
+      <div class="pane-content toc-sidebar-content">
+        <div id="tocSidebarBody" class="toc-body"></div>
+      </div>
+    </aside>
+    <section class="panel page-pane page-pane--docs" aria-label="Instructions content">
+      <div class="pane-content docs-content-body">
+        <article id="content">
+          <h1>Instructions</h1>
+          <p>This prototype keeps the legacy documentation layout so we can test readability, table-of-contents behavior, and page density before the real system exists.</p>
+          <h2>What This Prototype Covers</h2>
+          <p>The shell, page panes, alerts, file views, maintenance layout, and settings forms are all simulated using browser-side state.</p>
+          <h2>Questions To Pressure-Test</h2>
+          <h3>Multi-world visibility</h3>
+          <p>Should the home dashboard remain single-world focused, or should it become a world switcher and summary page?</p>
+          <h3>Privilege surfaces</h3>
+          <p>Which actions need modal confirmation, inline confirmation, or both when multiple worlds exist at the same time?</p>
+          <h3>Cluster readiness</h3>
+          <p>If worlds eventually live on different machines, which of these pages should show host ownership explicitly?</p>
+          <h2>Next UI Iteration Targets</h2>
+          <ul>
+            <li>Multi-world list page</li>
+            <li>Per-world address and version badges</li>
+            <li>More explicit alert severity model</li>
+            <li>Cleaner file-management affordances</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  </div>
+  <a id="backToTop" class="back-to-top" href="#top" aria-label="Back to top">Back to top</a>
+</main>
