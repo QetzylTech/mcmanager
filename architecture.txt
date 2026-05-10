@@ -1,0 +1,662 @@
+Next-Generation Minecraft Manager Architecture
+
+Purpose
+- Define the target architecture for the next-generation manager described in `newDesign.txt`.
+- Translate the end-goal design, prior project requirements, useful legacy patterns, and ISO/IEC 25010 quality concerns into a build-guiding architecture.
+- Describe architectural structure, boundaries, data ownership, runtime flows, and quality decisions without overcommitting to one web framework or one deployment style.
+
+Architecture sequencing
+- Product design should come before architecture because the architecture exists to serve the product behavior, quality goals, and constraints.
+- In this project, the end-goal design already exists in `newDesign.txt`, so architecture work should now proceed.
+- This document therefore treats `newDesign.txt` as the primary source of truth for required behavior, and treats this architecture as the way the system should be organized to deliver that behavior.
+
+1. Architectural stance
+
+1.1 Chosen style
+- The manager should be built as a modular monolith with strong internal boundaries, not as a distributed microservice system.
+- The modular monolith should use ports-and-adapters boundaries so operating-system-specific behavior, Minecraft-server-specific behavior, and storage-specific behavior remain replaceable.
+- Realtime updates and background work should be event-driven internally even when deployed as one process.
+- World instances must be isolated as managed runtime contexts inside one manager, not as one giant shared single-world state model.
+
+1.2 Why this style fits
+- It preserves low idle overhead better than a microservice architecture.
+- It is easier to deploy on modest home-lab hardware.
+- It keeps data consistency, auditability, and conflict enforcement inside one authoritative control plane.
+- It still allows strong separation of concerns through modules, adapters, and background workers.
+- It fits the legacy shell-owned UI strengths while removing the old Linux-specific control assumptions.
+
+1.3 Architectural goals
+- Multi-world isolation without cross-world interference.
+- Portable process control without `systemd` or `journalctl` being architectural dependencies.
+- Realtime observability without high-frequency client polling.
+- Strong auditability, defensive controls, and safe destructive-action handling.
+- Very low idle resource use on modest hardware.
+- Clear maintainability and testability in line with ISO/IEC 25010 quality concerns.
+
+2. System context
+
+2.1 External actors
+- Browser clients on a trusted private network.
+- Managed Minecraft server runtimes.
+- Java runtimes and launch commands for different server types and versions.
+- Local filesystems for world data, logs, and backups.
+- Optional offsite storage targets such as NAS or future cloud storage.
+- Optional reverse proxy or routing layer for HTTP and Minecraft TCP traffic.
+
+2.2 System boundary
+- The manager owns:
+  - the control plane
+  - the web UI
+  - world registry and settings
+  - operation orchestration
+  - backup, restore, cleanup, and audit logic
+  - secret handling for RCON and integrations
+  - live status and log delivery
+- The manager does not own:
+  - the Java runtime implementation
+  - the Minecraft server internals
+  - the reverse proxy implementation
+  - the operating system's native process manager, except as an optional adapter detail
+
+3. Top-level architecture
+
+3.1 Major planes
+- Presentation plane:
+  - persistent web shell
+  - page fragments or equivalent routed UI modules
+  - realtime client hydration and multi-tab coordination
+- Control plane:
+  - API/session gateway
+  - authorization and policy enforcement
+  - world orchestration
+  - operation coordination
+  - scheduler and background jobs
+- Runtime plane:
+  - world process supervision
+  - RCON session handling
+  - health probes
+  - startup and shutdown detection
+- Data plane:
+  - relational application state
+  - append-only audit and event records
+  - logs
+  - world files
+  - backup artifacts
+  - secrets
+- Integration plane:
+  - OS process adapter
+  - filesystem adapter
+  - networking/routing adapter
+  - offsite sync adapter
+  - optional future cluster adapters
+
+3.2 High-level subsystem map
+- UI Shell subsystem
+- HTTP/API and session subsystem
+- Realtime stream subsystem
+- World registry subsystem
+- World lifecycle orchestration subsystem
+- Background job subsystem
+- Backup, restore, sync, and retention subsystem
+- File and configuration management subsystem
+- Security and secret-management subsystem
+- Audit, history, and event subsystem
+- Observability and diagnostics subsystem
+- Setup and settings subsystem
+- Platform adapter subsystem
+
+4. Core architectural principles
+
+4.1 Single authoritative control plane
+- All privileged operations must be authorized, validated, coordinated, and recorded by one authoritative manager control plane.
+- Clients must never directly manipulate world files, processes, or RCON credentials.
+
+4.2 Per-world isolation
+- Every world instance must be represented as its own runtime context with isolated:
+  - identity
+  - directories
+  - process metadata
+  - ports
+  - Java/runtime selection
+  - logs
+  - backup inventory
+  - retention rules
+  - secrets
+  - operation locks
+
+4.3 Event-driven shared state
+- Shared live state should be produced once per event source and then broadcast to all relevant clients.
+- The architecture must avoid per-client recomputation and unnecessary client polling.
+- The shell should remain the owner of shared client state, notifications, and multi-tab coordination.
+
+4.4 Durable intent and durable history
+- Commands must create durable operation records before or as they begin execution.
+- Important user actions and system events must create immutable audit records.
+- Runtime state visible in the UI should come from reconciled durable state plus observed live state, not from fragile in-memory flags alone.
+
+4.5 Portable adapters
+- OS-specific process control, filesystem quirks, network routing, and offsite storage integrations must live behind stable interfaces.
+- Platform adapters may differ by operating system, but the application core must not assume one platform.
+
+4.6 Fail safe behavior
+- Unsafe or ambiguous destructive operations must fail closed.
+- Backups, restores, cleanup, config writes, and shutdown flows must all include hard guards and explicit scope checks.
+
+5. Recommended module architecture
+
+5.1 Presentation and shell subsystem
+- Responsibilities:
+  - render the persistent shell
+  - own shared client state
+  - manage navigation and page-state persistence
+  - manage multi-tab primary ownership
+  - consume live streams and rebroadcast within the browser
+  - surface notifications, alerts, offline state, and reconnection behavior
+- Notes:
+  - Preserve the legacy shell-owned state model.
+  - Page modules should own only page-local rendering and user interaction logic.
+  - Offline-capable shell behavior is an architectural requirement, not a cosmetic enhancement.
+
+5.2 HTTP/API and session gateway subsystem
+- Responsibilities:
+  - route browser requests
+  - issue authenticated sessions
+  - enforce CSRF and request protections
+  - map requests to application commands and queries
+  - expose health, diagnostics, setup, and admin endpoints
+- Notes:
+  - Keep routes thin.
+  - Business rules belong in use cases or application services, not in routing code.
+  - State-changing endpoints must pass through authorization and operation guards.
+
+5.3 Realtime stream subsystem
+- Responsibilities:
+  - publish live metrics
+  - publish operation updates
+  - publish notifications and alerts
+  - publish live log streams
+  - rehydrate reconnecting clients with the latest known snapshot
+- Transport:
+  - Server-Sent Events should be the default transport because it fits the legacy model and keeps resource usage low.
+  - A transport abstraction may exist so WebSocket support can be added later if justified.
+- Notes:
+  - Shared streams should be manager-level and world-specific.
+  - The manager should compute once and fan out, rather than run separate polling loops per client.
+
+5.4 World registry subsystem
+- Responsibilities:
+  - persist world identity and metadata
+  - manage world display name, machine ID, ports, routing metadata, version, server type, Java runtime, startup args, and policy references
+  - own the canonical list of worlds
+- Notes:
+  - The registry is the source of truth for what worlds exist.
+  - World IDs must be immutable once created.
+  - Display names and some policies may be edited later without changing identity.
+
+5.5 World lifecycle orchestration subsystem
+- Responsibilities:
+  - validate start, stop, kill, restore, and maintenance requests
+  - enforce idempotency, cooldowns, conflict rules, and permission checks
+  - create durable operation records
+  - trigger world process actions through adapters
+  - reconcile observed state after action execution or manager restart
+- Notes:
+  - This subsystem owns the runtime state machine for each world.
+  - Runtime state should come from observed process state, logs, health checks, and operation checkpoints together.
+
+5.6 World runtime session subsystem
+- Responsibilities:
+  - define a world runtime session as one contiguous period from successful world launch until that world is fully stopped
+  - create per-session runtime metadata
+  - generate per-session unique RCON credentials
+  - track session start time, session end time, and session-derived schedules
+- Notes:
+  - RCON credentials must be unique per world and per runtime session.
+  - Credentials must be generated before or during startup and rotated every time a new world runtime session begins.
+  - Session metadata must be durable enough to survive manager restart and state reconciliation.
+
+5.7 Background job and scheduler subsystem
+- Responsibilities:
+  - run asynchronous operations that should not block request handling
+  - manage scheduled backups, scheduled cleanup, missed-job detection, and deferred reconciliation tasks
+  - enforce explicit conflict rules between jobs
+- Notes:
+  - Background execution should be available both in single-process mode and split web-plus-worker mode.
+  - The web/API process should not be the only place where long-running operations can safely complete.
+
+5.8 Backup, restore, sync, and retention subsystem
+- Responsibilities:
+  - create local backups
+  - coordinate autosave and backup integrity behavior
+  - create pre-restore backups
+  - perform restores with live progress and rollback-aware logging
+  - manage offsite sync targets
+  - evaluate retention and cleanup rules
+- Notes:
+  - Prefer native manager-controlled backup workflows over shell-script-led workflows.
+  - Script-based adapters may still exist, but the architecture must not depend on them.
+  - Restore must be modeled as a first-class operation with checkpoints and immutable history.
+
+5.9 File and configuration management subsystem
+- Responsibilities:
+  - provide guarded file browsing and file operations
+  - expose protected configuration editors
+  - validate approved settings such as `server.properties`
+  - enforce per-world filesystem boundaries
+- Notes:
+  - Safe editors should be preferred over unrestricted raw writes where possible.
+  - All destructive file operations must pass through authorization, scope preview, and audit logging.
+
+5.10 Security and secret-management subsystem
+- Responsibilities:
+  - authenticate sessions
+  - authorize actions
+  - manage device trust and future account extensibility
+  - store and rotate secrets
+  - enforce step-up authentication for sensitive actions
+  - log privilege failures and suspicious activity
+- Notes:
+  - Trusted-network placement is a deployment assumption, not the primary security mechanism.
+  - IP address or device name may contribute trust context but must not be the sole basis for privileged authorization.
+  - Secrets must be server-side only.
+
+5.11 Audit, history, and event subsystem
+- Responsibilities:
+  - record immutable operational history
+  - store user and system events
+  - provide append-only audit trails
+  - feed realtime notifications and history views
+- Notes:
+  - This subsystem should support both UI history views and internal reconciliation.
+  - Mutable current state and immutable history should be separate concerns.
+
+5.12 Observability and diagnostics subsystem
+- Responsibilities:
+  - collect manager and world status
+  - aggregate logs
+  - surface diagnostics, health checks, and consistency reports
+  - record failures with enough context to explain them later
+- Notes:
+  - Logging should be structured where practical, even if user-facing views also expose plain text.
+  - The architecture should support future "explain error" helpers without changing the data flow.
+
+5.13 Setup and settings subsystem
+- Responsibilities:
+  - handle first-run setup
+  - manage persistent settings
+  - register Java runtimes
+  - manage templates
+  - manage device maps and role policies
+- Notes:
+  - Setup is not a one-time dead-end wizard.
+  - Setup state and normal settings must share the same underlying configuration model.
+
+5.14 Platform adapter subsystem
+- Responsibilities:
+  - process spawning and termination
+  - filesystem operations
+  - disk-usage and path checks
+  - network route helpers
+  - offsite sync integrations
+  - optional future cluster/distributed ownership support
+- Notes:
+  - This is the main portability boundary.
+  - Linux-specific helpers may exist, but only as adapter implementations.
+
+6. Data architecture
+
+6.1 Storage model
+- Use a small number of clearly separated stores rather than one catch-all store.
+- Recommended categories:
+  - relational state store
+  - append-only audit/event store
+  - filesystem artifact stores
+  - secret store
+  - transient caches
+
+6.2 Relational state store
+- Recommended contents:
+  - world registry
+  - runtime session records
+  - operation records
+  - schedules and policies
+  - device/client registry
+  - template catalog metadata
+  - settings
+  - job checkpoints
+  - file inventories and artifact indexes where useful
+- Notes:
+  - SQLite is a reasonable initial and possibly long-term fit because the deployment target is one host with limited hardware.
+  - The schema must be multi-world from the start.
+  - World-scoped tables should carry world IDs explicitly.
+
+6.3 Append-only audit and event store
+- Recommended contents:
+  - user actions
+  - authorization failures
+  - operation state transitions
+  - restore history
+  - cleanup history
+  - notifications
+  - suspicious activity
+  - manager restarts and upgrades
+- Notes:
+  - Events should not replace domain state, but they should complement it.
+  - Append-only history supports accountability, non-repudiation, and reconciliation.
+
+6.4 Filesystem data layout
+- Recommended logical roots:
+  - manager config root
+  - manager data root
+  - manager logs root
+  - secrets root
+  - world storage root
+  - backups root
+  - restore staging root
+  - old-world or archived-artifact root
+- Notes:
+  - Each world should have stable, isolated paths under world and artifact roots.
+  - Cross-world file access must be prevented by path policy, not just by UI hiding.
+
+6.5 Secret storage
+- Recommended contents:
+  - password hashes
+  - session signing secrets
+  - per-world current RCON credentials
+  - offsite sync credentials
+  - future external integration secrets
+- Notes:
+  - Secrets must not be stored in client-visible state or logs.
+  - Secret storage may initially live on disk if protected appropriately, but the subsystem boundary should allow stronger backends later.
+
+6.6 Caching model
+- Cache only for performance, never as the sole source of truth.
+- Useful caches:
+  - latest metrics snapshot
+  - latest per-world state snapshot
+  - latest live log windows
+  - file inventory snapshots
+  - client session activity snapshot
+- Notes:
+  - Cache invalidation should be event-driven where possible.
+  - Cached data should carry freshness metadata.
+
+7. Runtime and operation architecture
+
+7.1 World state model
+- Each world must expose a reconciled runtime state including:
+  - off
+  - queued
+  - starting
+  - running
+  - stopping
+  - restoring
+  - backing_up
+  - crashed
+  - error
+- Notes:
+  - State must not depend on one single log line.
+  - The state resolver should combine:
+    - desired operation intent
+    - observed process state
+    - startup and shutdown signals
+    - health checks
+    - operation checkpoints
+    - crash markers
+
+7.2 Operation model
+- Every privileged or state-changing action should become an operation with:
+  - unique operation ID
+  - world scope or global scope
+  - actor identity
+  - idempotency key
+  - type
+  - status
+  - checkpoints
+  - timestamps
+  - error code and message
+- Notes:
+  - Operations provide durability, concurrency control, and better UI feedback.
+  - World-local operations should not block unrelated worlds unless policy requires it.
+
+7.3 Concurrency and conflict model
+- Concurrency should be explicit, not accidental.
+- Required principles:
+  - per-world locks for world-local operations
+  - global locks only for truly shared resources
+  - conflict matrices for backup, restore, cleanup, and file mutations
+  - queueing or rejection behavior defined per operation type
+- Notes:
+  - A restore for world A must not block backup for world B unless a global storage-safety rule demands it.
+
+7.4 Startup reconciliation model
+- On manager startup or restart:
+  - load persisted world and operation state
+  - discover active world processes
+  - reconcile runtime sessions
+  - close or repair stale operations
+  - republish current snapshots to clients
+- Notes:
+  - Reconciliation is a first-class subsystem concern.
+  - The manager must not assume that a restart means all worlds are off.
+
+8. Security architecture
+
+8.1 Identity and trust model
+- Trusted private networking reduces exposure but does not replace authn/authz.
+- Use layered trust:
+  - network placement
+  - optional device identity signals
+  - authenticated session token
+  - role and policy authorization
+  - step-up confirmation for sensitive actions
+
+8.2 Session architecture
+- Session tokens must be server-issued, signed, revocable, and time-bounded.
+- Known device registration may lower friction for low-risk actions.
+- Sensitive actions must require step-up authentication even for recognized devices.
+
+8.3 Authorization architecture
+- Authorization should be policy-driven and evaluate:
+  - actor identity
+  - device trust
+  - role
+  - world scope
+  - action category
+  - current system safety state
+- The authorization layer must be server-side and non-bypassable.
+
+8.4 Secret and RCON architecture
+- Each world runtime session must receive a newly generated unique RCON credential.
+- The control plane writes or injects that credential through a protected configuration path before or during world startup.
+- The credential remains server-side only and is used by manager-controlled command execution.
+- Credential rotation is mandatory whenever a new runtime session begins and may also be triggered by explicit security actions.
+
+8.5 Audit and accountability architecture
+- Every protected action, denial, suspicious event, credential rotation, restore step, and destructive file action must create auditable history.
+- Actor attribution should prefer stable logical identity over raw IP display, while still retaining raw network evidence where appropriate for forensics.
+
+8.6 Defensive-control architecture
+- Require:
+  - idempotency guards
+  - conflict guards
+  - password retry throttling
+  - session abuse throttling
+  - destructive-action scope preview
+  - elevated confirmation for high-impact actions
+  - non-bypassable recovery-artifact protection
+
+9. Backup, restore, and retention architecture
+
+9.1 Backup architecture
+- Backups should be orchestrated by the manager as explicit jobs.
+- A backup job should:
+  - validate storage safety
+  - coordinate world save behavior
+  - capture the artifact
+  - record metadata
+  - publish live progress
+  - optionally trigger offsite sync
+- Backup metadata must be indexed per world.
+
+9.2 Restore architecture
+- Restore must be a checkpointed workflow, not a single opaque script call.
+- Core stages:
+  - validate artifact and current safety state
+  - create pre-restore backup
+  - stage files
+  - archive replaced world state
+  - apply restored state
+  - repair or validate configuration bindings
+  - record immutable outcome
+- Notes:
+  - Restore must be able to emit live progress and detailed logs.
+  - Partial failure handling must leave the system in a known state.
+
+9.3 Retention and cleanup architecture
+- Retention evaluation should run against indexed artifact metadata and filesystem verification.
+- Cleanup should separate:
+  - candidate discovery
+  - preview generation
+  - safety filtering
+  - execution
+  - immutable result recording
+- Notes:
+  - Cleanup rules should be policy-driven and world-aware.
+  - Hard guards must protect the last viable recovery artifacts.
+
+10. Networking and routing architecture
+
+10.1 Separation of concerns
+- The architecture must clearly separate:
+  - manager web routing
+  - Minecraft protocol routing
+  - internal process supervision
+
+10.2 Manager web routing
+- The manager should expose one stable HTTP entrypoint for the UI and API.
+- Reverse proxy support is optional, not foundational.
+
+10.3 Minecraft connection routing
+- World addressing may be implemented through:
+  - per-world ports
+  - DNS/subdomain routing where supported
+  - another documented routing strategy
+- The routing strategy must not leak into unrelated core business logic.
+
+10.4 Routing adapters
+- If a routing helper layer is required, it should live behind an adapter boundary so the core app does not depend on one specific reverse proxy product.
+
+11. Deployment architecture
+
+11.1 Supported topologies
+- Topology A: single-process or single-service deployment
+  - web/API server
+  - background workers in the same runtime
+  - suitable for minimal installations
+- Topology B: split web process and worker process
+  - web/API process
+  - background worker process
+  - shared durable state store
+  - suitable for better isolation of long-running tasks
+- Topology C: future clustered control plane
+  - not required now
+  - architecture should avoid blocking this future direction
+
+11.2 Recommended default
+- The default target should be a modular monolith that can run as either:
+  - one process with background workers
+  - two cooperating local processes sharing the same state store
+- This balances simplicity, low hardware use, and room for long-running tasks.
+
+11.3 Process supervision
+- Managed world processes should be supervised by the manager through portable process-control adapters.
+- The architecture must not require one OS service definition per world.
+- Parent/child supervision, PID tracking, and runtime metadata registration should be sufficient for the core model.
+
+12. Quality-attribute alignment
+
+12.1 Functional suitability
+- The world registry, operation model, and dedicated backup/restore subsystems support functional completeness.
+- Durable operation checkpoints and reconciled runtime state support functional correctness.
+- Shell-owned shared state and targeted workflows support functional appropriateness.
+
+12.2 Performance efficiency
+- Shared stream fan-out, event-driven caches, and modular-monolith deployment support low resource use.
+- The architecture explicitly avoids high-frequency client polling and heavy per-client ownership loops.
+- Single-host durable stores and local artifact indexing reduce unnecessary overhead.
+
+12.3 Compatibility
+- Ports-and-adapters boundaries support coexistence across different operating systems and Java runtimes.
+- RCON, filesystem, and sync integrations are treated as replaceable interoperability points.
+
+12.4 Interaction capability
+- Persistent shell, offline support, reconnect hydration, and multi-tab coordination support operability and self-descriptiveness.
+- Guarded workflows, previews, and explainable errors support user error protection.
+
+12.5 Reliability
+- Reconciliation, durable operations, crash-aware runtime state, and checkpointed restore flows support availability and recoverability.
+- Explicit conflict rules and isolated world contexts support fault tolerance at the product level.
+
+12.6 Security
+- Server-side authorization, session tokens, secret isolation, audit trails, and per-session RCON rotation support confidentiality, integrity, accountability, authenticity, and resistance.
+
+12.7 Maintainability
+- Modular boundaries, adapters, explicit subsystem responsibilities, and durable diagnostics support modularity, analysability, modifiability, and testability.
+
+12.8 Flexibility
+- Portable adapters, configurable routing strategies, per-world runtime settings, and optional split deployment support adaptability and scalability.
+
+12.9 Safety
+- Storage guards, destructive-action previews, artifact-protection guards, emergency shutdown logic, and fail-closed privileged actions support operational constraint, risk identification, fail safe behavior, and hazard warning.
+
+13. Architectural decisions to lock early
+
+13.1 Lock now
+- Multi-world-first relational schema
+- Operation-based control plane
+- Append-only audit/event history
+- Per-world isolated runtime contexts
+- Ports-and-adapters boundary for platform integrations
+- Shell-owned shared client state with shared live streams
+- Per-world, per-runtime-session RCON credential rotation
+
+13.2 Do not lock too early
+- Exact Python web framework
+- Exact frontend library choice
+- Exact transport beyond the default SSE choice
+- Exact database engine beyond the current recommendation
+- Exact reverse proxy product
+- Exact offsite sync provider implementations
+
+14. Suggested build order from this architecture
+
+14.1 Foundational layers first
+- world registry and schema
+- settings and setup model
+- operation and audit model
+- platform adapter interfaces
+- session and authorization core
+
+14.2 Control plane second
+- world lifecycle orchestration
+- runtime state reconciliation
+- background job runner
+- metrics and log stream services
+
+14.3 Operational subsystems third
+- backup and restore workflows
+- cleanup and retention engine
+- file and configuration management
+- offsite sync
+
+14.4 Experience and hardening fourth
+- shell polish and offline support
+- multi-tab coordination
+- diagnostics and consistency repair tools
+- ISO-aligned verification, testing, and measurable threshold work
+
+15. Final architectural summary
+- The target architecture should be a low-overhead, portable, modular monolith with strong per-world isolation, durable operation tracking, append-only audit history, server-side security enforcement, and event-driven realtime UI hydration.
+- It should preserve the legacy shell strengths, but replace Linux-specific control assumptions with adapter-based process supervision and replace fragile single-world logic with explicit world-scoped models.
+- If the design remains the end-goal specification, this architecture is the correct next document to define before detailed implementation planning.

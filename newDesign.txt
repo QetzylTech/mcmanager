@@ -9,7 +9,9 @@ Guiding goals
 - Support different Minecraft server versions and server types without worlds interfering with one another.
 - Remove hard dependency on `systemd`, `journalctl`, and shell-script-centric control flow.
 - Preserve the strong operational features of the old app: live status, backup/restore, cleanup, setup, notifications, auditability, and defensive guardrails, web UI.
-- Keep resource use extremely low while remaining robust under concurrent web users and world processes (almost 0% cpu utilization at idle).
+- Keep resource use very low while remaining robust under concurrent web users and world processes.
+- On a documented reference host, the manager must keep idle CPU usage below a defined threshold averaged over a 5-minute window when no world state changes, backups, restores, or active log streams are occurring.
+- On the same reference host, the manager must keep baseline memory usage within a documented target range for the manager alone, excluding managed Minecraft server processes.
 - Be portable across operating systems that can run Java and Python.
 
 Terminology
@@ -51,7 +53,7 @@ Scope
 
 1.3 World identity
 - Each world instance must have a unique machine-readable ID.
-- Each world instance must have a human-readable display name.
+- Each world instance must have a human-readable and editable display name.
 - Each world instance must have a unique network identity for both:
   - web access context
   - Minecraft client connection target
@@ -105,6 +107,7 @@ Scope
 2.4 RCON and command execution
 - Each world instance must support RCON command execution where the server supports it.
 - RCON credentials must be managed per world instance.
+- For each world runtime session, the manager must generate a new unique RCON credential before or during startup.
 - The manager must be able to enforce approved RCON settings in protected configuration files.
 - The manager must support safe execution of common commands without exposing raw dangerous command access to unprivileged users.
 
@@ -116,7 +119,8 @@ Scope
   - shared manager-level streams
   - world-specific streams
   - no high-frequency client polling for live state
-- Live world logs must be viewable in near realtime.
+- Live world logs must be viewable with low-latency streaming behavior.
+- Under normal local-network conditions, newly emitted log lines should appear in connected clients within a documented target delay.
 - Startup, shutdown, restore, backup, sync, and crash flows must expose live progress and logs.
 
 3.2 Log collection
@@ -266,43 +270,63 @@ Scope
   - unauthorized action attempts
   - critical low storage
   - missed scheduled jobs
-- Alerts must be visible from any page.
+- Alerts must be visible from any page by any client.
 - The notification system should preserve the legacy strengths of popups, nav indicators, and optional sounds/chimes.
+- History of notifications must be kept as well as actions taken if actions are prompted.
 
 8. Security and permissions
 
 8.1 Access model
-- All users on the trusted network may view the UI and start allowed worlds.
-- Only privileged users may perform protected actions such as stop, restore, cleanup, file edits, config edits, or security changes.
+- The primary deployment assumption is a trusted private network, such as Tailscale with MagicDNS.
+- Trusted network placement reduces exposure but does not replace authentication, authorization, audit logging, or server-side validation.
 - The system must support multiple privilege levels at minimum:
   - viewer/operator
   - admin
   - superadmin
+- Read-only access and allowed low-risk actions may be granted to approved clients without repeated password prompts, subject to administrator policy.
+- Protected actions such as stop, restore, cleanup, file edits, config edits, credential rotation, and security changes must require explicit authorization and server-side permission checks.
+- The permission model must be capable of granting permissions per client, per user, per world, and per action category.
 
-8.2 Authentication and authorization
-- Passwords must be hashed and salted.
-- CSRF protection or equivalent request forgery protections must be enabled for privileged actions.
+8.2 Identity, authentication, and authorization
+- Client IP address, device name, reverse-DNS name, or MagicDNS identity may be used as contextual trust signals, but must not be the sole basis for privileged authorization.
+- Each client session must be bound to a server-issued authenticated session token with expiration, revocation, and integrity protections.
+- The system must support administrator-approved device registration so known local devices can be recognized and assigned default access policies.
+- Sensitive actions must support step-up authentication, such as password re-entry or equivalent privileged confirmation, even for already recognized devices.
+- Passwords must be hashed and salted using a modern password hashing algorithm with configurable work factors.
+- CSRF protection or equivalent request forgery protections must be enabled for state-changing requests.
 - Per-device or per-user rulesets from the old roadmap should be supported.
 - Device identity mapping and importable device lists must be supported.
-- Unauthorized attempts must be logged immutably and surfaced to privileged users.
+- Unauthorized attempts, privilege failures, and policy denials must be logged immutably and surfaced to privileged users.
+- The design must allow a future transition to a fuller account-based model without redesigning the authorization core.
 
-8.3 Defensive programming
-- Clients must not be able to destabilize the manager through repeated clicks, duplicate requests, invalid states, or malformed input.
-- The system must enforce server-side guards for idempotency, conflict resolution, throttling, and validation.
-- Password retry throttling and abusive-action throttling must exist.
+8.3 Secrets and privileged channels
+- RCON credentials, sync credentials, and other secrets must be stored only in protected server-side secret storage.
+- RCON credentials must be unique to both the world instance and the current world runtime session.
+- Secrets must never be exposed to clients, embedded in client code, or written to client-readable logs.
+- The manager must support credential rotation, revocation, and recovery workflows for protected integrations.
+- Per-world secrets must be isolated so compromise or reset of one world does not require reuse of credentials in another.
+
+8.4 Defensive controls
+- Clients must not be able to destabilize the manager through repeated clicks, duplicate requests, invalid states, malformed input, or excessive connection churn.
+- The system must enforce server-side idempotency, conflict handling, throttling, validation, and state guards for protected operations.
+- Password retry throttling, session abuse throttling, and destructive-action throttling must exist and be configurable.
 - The manager must fail closed for privileged actions.
+- High-impact destructive actions must require explicit scope preview, elevated confirmation, and immutable audit logging.
+- Bulk destructive actions must require the manager to calculate and display the affected scope before execution.
+- The system must define configurable upper bounds for how many worlds, files, backups, or records may be affected by a single action without elevated confirmation.
+- The system must include non-bypassable safety guards that prevent total deletion of required recovery artifacts and reject invalid or dangerous configuration combinations.
 
 9. Auditability, history, and immutability
 
 9.1 Immutable records
-- User action history, events, crashes, operational records, and important logs must be immutable.
+- User action history, events, crashes, operational records, notifications, backup, restoration, and important logs must be immutable.
 - The system may allow new corrective entries, acknowledgements, or annotations, but should not allow silent destructive rewriting of historical records.
 
 9.2 Audit coverage
 - The manager must log at minimum:
   - world starts and stops
   - config changes
-  - backups and restores
+  - backups and restores, including steps
   - cleanup executions
   - file operations
   - login or password failures
@@ -316,7 +340,7 @@ Scope
 
 10.1 Error handling
 - Failed starts, partial starts, crashes, backup failures, restore failures, sync failures, and validation errors must be captured and surfaced clearly.
-- Error messages must be more detailed than generic failure messages.
+- Error messages must be more detailed than generic failure messages. A short error code or summary must be shown along with a see more button that expands to show the complete detail of the message.
 - World crash handling must include:
   - detection
   - status transition
@@ -325,17 +349,24 @@ Scope
   - optional safe recovery actions
 
 10.2 Recovery
-- On manager restart, the system must reconcile persisted state with actual running processes.
+- On manager restart or cold startup, the system must reconcile persisted state with actual running processes.
 - The system must rehydrate UI clients with current known state after reconnect.
 - Scheduled-job misses must be recorded and surfaced instead of silently replayed without operator awareness.
+- Errors or other issues in general should be recorded and surfaced by default instead of silent recovery. Prompts should contain recovery options, defer fix to a later time, and other actions.
+- Client side communication failure with the server must be surfaced but reconnection attempts must be done automatically.
 
 11. Performance and resource requirements
 
 11.1 Efficiency
-- The manager must be designed for extremely low idle resource consumption.
-- Idle manager overhead should remain in the range of megabytes of RAM and negligible CPU use where feasible.
+- The manager must be designed for low idle resource consumption on modest home-lab hardware.
+- The project must define and document a reference hardware profile and a repeatable measurement method for idle CPU, memory, disk activity, and network activity.
+- Acceptance thresholds for idle overhead must be evaluated against that documented profile rather than informal observation.
 - Expensive background work must be event-driven, throttled, or paused when not needed.
 - The design must avoid unnecessary polling loops, duplicated stream ownership, and heavy per-client background tasks.
+- If possible, some workload may be offloaded to clients such as log file color coding and interpretation.
+- CDN delivery may be supported as an optional optimization.
+- The manager must remain fully functional without external CDN dependencies, including in offline or isolated trusted-network environments.
+- If CDN-backed assets are used, the deployment must support a local fallback or bundled self-hosted equivalent.
 
 11.2 Concurrency
 - The manager must safely handle simultaneous:
@@ -357,6 +388,7 @@ Scope
 - Reverse proxy use should be optional, not mandatory.
 - The manager should be able to run without nginx, even if nginx remains a supported deployment pattern.
 - Optional boot-time helpers such as wake-on-LAN and boot animations may be supported later, but must not be core dependencies.
+- Production environment has extremely limited hardware resources.
 
 13. Setup and settings
 
@@ -415,6 +447,7 @@ Scope
 - Remote artifact restore from cloud or NAS
 - Additional protocol-aware health checks
 - Optional wake-on-LAN and proxy boot flow
+- Cluster support to allow multiple instances of the manager to run on different devices and run worlds locally (worlds can only run on 1 device at a time)
 - Higher-level compliance mapping against ISO/IEC 25010 and related standards
 
 16. Acceptance direction
@@ -424,7 +457,7 @@ Scope
 - runs on more than one operating system without redesigning the core control model
 - preserves the useful operational strengths of the legacy manager
 - improves reliability, observability, portability, and maintainability over the legacy app
-- remains lightweight enough to be practical on modest home-lab hardware
+- remains lightweight enough to be practical on modest to low end home-lab hardware
 
 16.2 The new manager will not be considered successful if it:
 - still fundamentally depends on Linux service-manager assumptions
