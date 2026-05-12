@@ -1,0 +1,10 @@
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem("mcweb-theme");
+    document.documentElement.classList.toggle("theme-dark", stored === "dark");
+  } catch (_err) {
+    document.documentElement.classList.remove("theme-dark");
+  }
+})();
+</script>

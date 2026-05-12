@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MC Manager Prototype</title>
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem("mcweb-theme");
+    var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var theme = stored || (prefersDark ? "dark" : "light");
+    document.documentElement.classList.toggle("theme-dark", theme === "dark");
+  } catch (_err) {
+    document.documentElement.classList.remove("theme-dark");
+  }
+})();
+</script>
+<link rel="stylesheet" href="../static/global.css">
+</head>
+<body data-page="manager_home" data-shell="persistent">
+<button id="nav-toggle" class="nav-toggle" type="button" aria-label="Toggle navigation" aria-controls="side-nav" aria-expanded="false">
+    <span class="nav-toggle-bar"></span>
+    <span class="nav-toggle-bar"></span>
+    <span class="nav-toggle-bar"></span>
+</button>
+<div id="nav-backdrop" class="nav-backdrop" aria-hidden="true"></div>
+<div class="layout">
+    <nav id="side-nav" class="sidebar" aria-labelledby="sidebar-title">
+        <h2 id="sidebar-title" class="sidebar-title pane-title">Navigation</h2>
+        <a class="nav-link active" href="#manager_home" data-page="manager_home">Home</a>
+        <a class="nav-link" href="#servers" data-page="servers">Server Selection</a>
+        <a class="nav-link" href="#create_server" data-page="create_server">Create Server</a>
+        <a class="nav-link" href="#home" data-page="home">Server Console</a>
+        <a class="nav-link" href="#backups" data-page="backups">Backup &amp; Restore</a>
+        <a class="nav-link" href="#maintenance" data-page="maintenance">Cleanup</a>
+        <hr class="nav-separator">
+        <a class="nav-link" href="#panel_settings" data-page="panel_settings">Panel Settings</a>
+        <a class="nav-link" href="#readme" data-page="readme">Instructions</a>
+        <hr class="nav-separator">
+        <a class="nav-link" href="#minecraft_logs" data-page="minecraft_logs">Log Files</a>
+        <hr class="nav-separator">
+        <button id="theme-toggle" class="nav-link nav-link-button" type="button">Toggle Theme</button>
+    </nav>
+    <div id="mcweb-app-content" class="content" data-current-page="home"></div>
+</div>
+<div id="mcweb-offline-banner" class="mcweb-offline-banner" aria-live="polite">Prototype mode: simulated data only.</div>
+<script src="../static/prototype_data.js"></script>
+<script src="../static/app_shell.js"></script>
+</body>
+</html>

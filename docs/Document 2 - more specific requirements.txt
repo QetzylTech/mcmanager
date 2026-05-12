@@ -1,8 +1,9 @@
-Next-Generation Minecraft Manager Requirements
+Document 2: Next-Generation Minecraft Manager Requirements
 
 Purpose
 - Define a polished requirements baseline for a new manager that preserves the useful parts of the legacy single-world dashboard while expanding it into a multi-world, multi-version, OS-agnostic platform.
 - This document describes product requirements and behavior goals first. It does not lock in architecture, framework, or deployment details yet.
+- This document is based document 1
 
 Guiding goals
 - Manage multiple independent Minecraft worlds concurrently on one machine.

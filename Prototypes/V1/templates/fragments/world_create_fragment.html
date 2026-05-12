@@ -1,0 +1,69 @@
+<main id="mcweb-page-root" class="content" data-page-key="create_server" data-page-title="Create Server">
+    <div class="wrap page-panes page-panes--manager page-panes--manager-split">
+        <section class="panel page-pane pane-primary" aria-labelledby="create-server-title">
+            <div class="pane-head">
+                <div class="pane-head-row">
+                    <h1 id="create-server-title" class="pane-title">Create Server</h1>
+                </div>
+            </div>
+            <div class="pane-content">
+                <form id="create-server-form" class="server-create-form">
+                    <div class="server-create-grid">
+                        <label>
+                            <span class="settings-label">Display name</span>
+                            <input id="create-server-name" class="ui-card-input" type="text" value="Sky Archive">
+                        </label>
+                        <label>
+                            <span class="settings-label">Machine ID</span>
+                            <input id="create-server-id" class="ui-card-input" type="text" value="sky_archive">
+                        </label>
+                        <label>
+                            <span class="settings-label">Template</span>
+                            <select id="create-server-template"></select>
+                        </label>
+                        <label>
+                            <span class="settings-label">Java runtime</span>
+                            <select id="create-server-runtime"></select>
+                        </label>
+                        <label>
+                            <span class="settings-label">Host machine</span>
+                            <select id="create-server-host"></select>
+                        </label>
+                        <label>
+                            <span class="settings-label">Port</span>
+                            <input id="create-server-port" class="ui-card-input" type="number" value="25570">
+                        </label>
+                        <label class="server-create-span-2">
+                            <span class="settings-label">World path</span>
+                            <input id="create-server-path" class="ui-card-input" type="text" value="F:\Minecraft\worlds\sky_archive">
+                        </label>
+                        <label class="server-create-span-2">
+                            <span class="settings-label">Address</span>
+                            <input id="create-server-address" class="ui-card-input" type="text" value="sky-archive.tailnet">
+                        </label>
+                        <label class="server-create-span-2">
+                            <span class="settings-label">Startup arguments</span>
+                            <input id="create-server-args" class="ui-card-input" type="text" value="-Xms2G -Xmx6G nogui">
+                        </label>
+                    </div>
+                    <div class="settings-actions">
+                        <button id="create-server-submit" class="btn-backup" type="submit">Create</button>
+                        <button id="create-server-open-selection" class="btn-start" type="button">Back to Selection</button>
+                    </div>
+                </form>
+                <p id="create-server-status" class="settings-status" role="status" aria-live="polite"></p>
+            </div>
+        </section>
+
+        <section class="panel page-pane pane-primary" aria-labelledby="create-server-preview-title">
+            <div class="pane-head">
+                <div class="pane-head-row">
+                    <h2 id="create-server-preview-title" class="pane-title">Preview</h2>
+                </div>
+            </div>
+            <div class="pane-content">
+                <div id="create-server-preview" class="server-preview-card"></div>
+            </div>
+        </section>
+    </div>
+</main>

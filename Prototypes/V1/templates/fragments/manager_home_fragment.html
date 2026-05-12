@@ -1,0 +1,70 @@
+<main id="mcweb-page-root" class="content" data-page-key="manager_home" data-page-title="Home">
+    <div class="wrap page-panes page-panes--manager">
+        <section class="panel page-pane pane-primary" aria-labelledby="manager-home-title">
+            <div class="pane-head">
+                <div class="pane-head-row">
+                    <h1 id="manager-home-title" class="pane-title">Manager Home</h1>
+                    <div class="pane-head-actions">
+                        <button id="manager-home-open-selection" class="btn-backup" type="button">Select Server</button>
+                        <button id="manager-home-open-create" class="btn-start" type="button">Create Server</button>
+                    </div>
+                </div>
+            </div>
+            <div class="pane-content">
+                <div class="manager-current-card">
+                    <div class="manager-current-copy">
+                        <p class="manager-current-label">Current server</p>
+                        <h2 id="manager-current-name" class="manager-current-title">-</h2>
+                        <p id="manager-current-meta" class="manager-current-meta">-</p>
+                    </div>
+                    <button id="manager-home-open-console" class="btn-backup" type="button">Open Console</button>
+                </div>
+                <div class="manager-stats-grid">
+                    <div class="stats-group">
+                        <p class="group-title">Server Stats</p>
+                        <div class="status-row">
+                            <span>Total servers: <strong id="manager-total-servers">0</strong></span>
+                            <span>Running: <strong id="manager-running-servers">0</strong></span>
+                        </div>
+                    </div>
+                    <div class="stats-group">
+                        <p class="group-title">Storage &amp; Jobs</p>
+                        <div class="status-row">
+                            <span>Storage: <strong id="manager-storage-summary">-</strong></span>
+                            <span>Next backup: <strong id="manager-next-backup-summary">-</strong></span>
+                        </div>
+                    </div>
+                    <div class="stats-group">
+                        <p class="group-title">Current Selection</p>
+                        <div class="status-row">
+                            <span>Status: <strong id="manager-current-status">-</strong></span>
+                            <span>Players: <strong id="manager-current-players">-</strong></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel page-pane pane-primary" aria-labelledby="manager-server-overview-title">
+            <div class="pane-head">
+                <div class="pane-head-row">
+                    <h2 id="manager-server-overview-title" class="pane-title">Server Overview</h2>
+                </div>
+            </div>
+            <div class="pane-content">
+                <div id="manager-server-list" class="server-card-grid"></div>
+            </div>
+        </section>
+
+        <section class="panel page-pane pane-primary" aria-labelledby="manager-alerts-title">
+            <div class="pane-head">
+                <div class="pane-head-row">
+                    <h2 id="manager-alerts-title" class="pane-title">Manager Notes</h2>
+                </div>
+            </div>
+            <div class="pane-content">
+                <div id="manager-alert-list" class="manager-alert-list"></div>
+            </div>
+        </section>
+    </div>
+</main>
