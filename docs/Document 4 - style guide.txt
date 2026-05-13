@@ -113,6 +113,9 @@ Div groups
 Nav
 - Contains primarily buttons and site logo
 - Can contain sections and divs for grouping buttons
+- Nav must be sticky.
+- Nav must not create its own scrollable area.
+- Nav must span the full available screen height.
 
 3.2 Structural rules
 
@@ -186,6 +189,10 @@ Navigation styling
 - Nav items follow one shared global style.
 - Nav links should visually behave like general buttons.
 - Active nav item should use the highlighted general button style.
+- Navigation must use sticky positioning; it should remain visible while the page scrolls.
+- Navigation must not be scrollable inside itself; the page can scroll as a whole when content is taller than the viewport.
+- Navigation must span the full viewport height while respecting the shared outer page padding.
+- Navigation spacing must come from the shared global rhythm and inherited control styling.
 
 Forbidden nav styling
 - No alert pulse
@@ -348,6 +355,10 @@ Shared rules for both input kinds
 - Shared disabled behavior
 - Shared focus behavior
 - No page-specific visual overrides
+- Text inputs, dropdowns, and toggles must sit beside their label when the available row width permits.
+- Labels and controls may wrap only when the available width cannot fit both the label and the control.
+- Controls keep the shared `80px` minimum width when wrapping.
+- Form label/control placement must come from shared CSS, not inline page styles.
 
 Pane Title Area input
 - Used in Pane Title Area rows and Pane Title Area action rows
@@ -403,6 +414,8 @@ Lists
 - Use one shared list surface style.
 - Shared background should be based on the body/input background system.
 - Shared item spacing and separators should be reused throughout the site.
+- List item padding must stay at `12px`.
+- List row action spacing must use the shared `12px` gap.
 
 Selection highlighting
 - Keep selection affordances consistent.
@@ -498,6 +511,7 @@ Do not do this
 - style nav differently from the rest of the control system
 - create a custom pane appearance for one page
 - add local alert styling to nav or pane headers
+- use forced CSS overrides for shared component geometry or spacing
 
 14. Explicit bans
 

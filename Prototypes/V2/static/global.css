@@ -88,6 +88,12 @@ select {
   font-family: var(--font);
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html {
   background: var(--canvas-bg);
   color-scheme: light;
@@ -168,6 +174,13 @@ article.pane {
   margin-bottom: var(--gap);
 }
 
+.pane-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex: 0 0 auto;
+}
+
 /* Title area: first card only; no separate background chrome */
 .pane-content-area {
   background: var(--body-bg);
@@ -187,7 +200,7 @@ ul.list {
 }
 
 ul.list li {
-  padding: 10px 12px;
+  padding: 12px;
   border-top: 1px solid var(--border);
 }
 
@@ -217,8 +230,7 @@ select.ui-text-input {
   color: inherit;
   box-shadow: none;
 
-  /* Never overflow the card; keep 12px inner spacing rule */
-  max-width: calc(100% - 24px);
+  max-width: 100%;
 
   /* Prevent default native styling overlap */
   appearance: none;
@@ -259,6 +271,83 @@ input:disabled,
 textarea:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* ============ Shared form field layout ============ */
+.pane-form .pane-content-area div:has(
+  > p + :is(
+    input.ui-title-input,
+    input.ui-text-input,
+    select.ui-title-input,
+    select.ui-text-input,
+    textarea.ui-title-input,
+    textarea.ui-text-input,
+    .ui-toggle
+  )
+) {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: wrap;
+}
+
+.pane-form .pane-content-area div:has(
+  > p + :is(
+    input.ui-title-input,
+    input.ui-text-input,
+    select.ui-title-input,
+    select.ui-text-input,
+    textarea.ui-title-input,
+    textarea.ui-text-input,
+    .ui-toggle
+  )
+) > p:first-child {
+  flex: 0 1 180px;
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.pane-form .pane-content-area div:has(
+  > p + :is(
+    input.ui-title-input,
+    input.ui-text-input,
+    select.ui-title-input,
+    select.ui-text-input,
+    textarea.ui-title-input,
+    textarea.ui-text-input,
+    .ui-toggle
+  )
+) > :is(
+  input.ui-title-input,
+  input.ui-text-input,
+  select.ui-title-input,
+  select.ui-text-input,
+  textarea.ui-title-input,
+  textarea.ui-text-input,
+  .ui-toggle
+) {
+  flex: 1 1 var(--control-min-width);
+  min-width: var(--control-min-width);
+}
+
+.pane-form .pane-content-area div:has(
+  > p + :is(
+    input.ui-title-input,
+    input.ui-text-input,
+    select.ui-title-input,
+    select.ui-text-input,
+    textarea.ui-title-input,
+    textarea.ui-text-input,
+    .ui-toggle
+  )
+) > p:not(:first-child) {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.pane-form .pane-content-area div:has(> p + :is(textarea.ui-title-input, textarea.ui-text-input)) {
+  align-items: flex-start;
 }
 
 /* ============ Unified buttons system ============ */
@@ -422,17 +511,14 @@ label.btn-general-highlighted {
 /* Dropdown trigger must use general button style.
    We don’t implement full dropdown JS here; CSS is ready for later. */
 
-/* ============ Shared max-width rule (12px spacing each side) ============ */
-/* Keep interactive controls inside their parent card width. */
-button,
-a.button-like,
+/* ============ Shared max-width rule ============ */
+/* Keep form controls inside their parent card width. Buttons size naturally in rows. */
 input.ui-title-input,
 input.ui-text-input,
 textarea.ui-title-input,
 textarea.ui-text-input,
-select,
-ul.list {
-  max-width: calc(100% - 24px);
+select {
+  max-width: 100%;
 }
 
 /* ============ Pane classes (stationary/sliding + use type) ============ */
@@ -507,7 +593,8 @@ nav.shell-nav {
   top: 12px;
   align-self: start;
   height: calc(100vh - 24px);
-  overflow: auto;
+  min-height: calc(100vh - 24px);
+  overflow: visible;
 
   background: var(--pane-surface);
   border-radius: var(--pane-radius);
@@ -568,9 +655,10 @@ nav .nav-list {
     grid-template-columns: 1fr;
   }
   nav.shell-nav {
-    position: relative;
-    height: auto;
-    top: auto;
+    position: sticky;
+    height: calc(100vh - 24px);
+    min-height: calc(100vh - 24px);
+    top: 12px;
   }
 }
 
@@ -582,5 +670,5 @@ nav .nav-list {
 }
 
 .hidden {
-  display: none !important;
+  display: none;
 }
