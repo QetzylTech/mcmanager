@@ -2,7 +2,7 @@ Document 5: MC Manager Proposed Site Map
 
 Purpose
 - Define a proposed site structure and navigation model for the next-generation manager.
-- Keep the structure aligned with `newDesign.txt`, `newArchitecture.txt`, and useful legacy behavior.
+- Keep the structure aligned with `Document 2 - more specific requirements.txt`, `Document 3 - initial architecture.txt`, and useful legacy behavior.
 - Separate manager-level pages from world-level pages so multi-world support stays explicit.
 - The navigation and workflow design of the application supporting and adhering to documents 1-4
 

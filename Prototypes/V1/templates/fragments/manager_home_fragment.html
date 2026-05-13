@@ -1,70 +1,82 @@
-<main id="mcweb-page-root" class="content" data-page-key="manager_home" data-page-title="Home">
-    <div class="wrap page-panes page-panes--manager">
-        <section class="panel page-pane pane-primary" aria-labelledby="manager-home-title">
-            <div class="pane-head">
-                <div class="pane-head-row">
-                    <h1 id="manager-home-title" class="pane-title">Manager Home</h1>
-                    <div class="pane-head-actions">
-                        <button id="manager-home-open-selection" class="btn-backup" type="button">Select Server</button>
-                        <button id="manager-home-open-create" class="btn-start" type="button">Create Server</button>
-                    </div>
-                </div>
-            </div>
-            <div class="pane-content">
-                <div class="manager-current-card">
-                    <div class="manager-current-copy">
-                        <p class="manager-current-label">Current server</p>
-                        <h2 id="manager-current-name" class="manager-current-title">-</h2>
-                        <p id="manager-current-meta" class="manager-current-meta">-</p>
-                    </div>
-                    <button id="manager-home-open-console" class="btn-backup" type="button">Open Console</button>
-                </div>
-                <div class="manager-stats-grid">
-                    <div class="stats-group">
-                        <p class="group-title">Server Stats</p>
-                        <div class="status-row">
-                            <span>Total servers: <strong id="manager-total-servers">0</strong></span>
-                            <span>Running: <strong id="manager-running-servers">0</strong></span>
-                        </div>
-                    </div>
-                    <div class="stats-group">
-                        <p class="group-title">Storage &amp; Jobs</p>
-                        <div class="status-row">
-                            <span>Storage: <strong id="manager-storage-summary">-</strong></span>
-                            <span>Next backup: <strong id="manager-next-backup-summary">-</strong></span>
-                        </div>
-                    </div>
-                    <div class="stats-group">
-                        <p class="group-title">Current Selection</p>
-                        <div class="status-row">
-                            <span>Status: <strong id="manager-current-status">-</strong></span>
-                            <span>Players: <strong id="manager-current-players">-</strong></span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
+<!doctype html>
+<main class="mcweb-page content" data-page-key="manager_home" data-page-title="Home">
+  <div class="wrap page-panes page-panes--manager">
+    <!-- Manager Home: Overview -->
+    <section class="panel page-pane pane-primary" aria-label="Manager Home overview">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h1 class="pane-title">Manager Home</h1>
 
-        <section class="panel page-pane pane-primary" aria-labelledby="manager-server-overview-title">
-            <div class="pane-head">
-                <div class="pane-head-row">
-                    <h2 id="manager-server-overview-title" class="pane-title">Server Overview</h2>
-                </div>
-            </div>
-            <div class="pane-content">
-                <div id="manager-server-list" class="server-card-grid"></div>
-            </div>
-        </section>
+          <div class="pane-head-actions">
+            <button class="btn-backup js-manager-home-open-selection" type="button">Select Server</button>
+            <button class="btn-start js-manager-home-open-create" type="button">Create Server</button>
+          </div>
+        </div>
+      </div>
 
-        <section class="panel page-pane pane-primary" aria-labelledby="manager-alerts-title">
-            <div class="pane-head">
-                <div class="pane-head-row">
-                    <h2 id="manager-alerts-title" class="pane-title">Manager Notes</h2>
-                </div>
+      <div class="pane-content">
+        <div class="manager-current-card">
+          <div class="manager-current-copy">
+            <p class="manager-current-label">Current server</p>
+            <h2 class="manager-current-title js-manager-current-name">-</h2>
+            <p class="manager-current-meta js-manager-current-meta">-</p>
+          </div>
+
+          <button class="btn-backup js-manager-home-open-console" type="button">Open Console</button>
+        </div>
+
+        <div class="manager-stats-grid">
+          <div class="stats-group">
+            <p class="group-title">Server Stats</p>
+            <div class="status-row">
+              <span>Total servers: <strong class="js-manager-total-servers">0</strong></span>
+              <span>Running: <strong class="js-manager-running-servers">0</strong></span>
             </div>
-            <div class="pane-content">
-                <div id="manager-alert-list" class="manager-alert-list"></div>
+          </div>
+
+          <div class="stats-group">
+            <p class="group-title">Storage & Jobs</p>
+            <div class="status-row">
+              <span>Storage: <strong class="js-manager-storage-summary">-</strong></span>
+              <span>Next backup: <strong class="js-manager-next-backup-summary">-</strong></span>
             </div>
-        </section>
-    </div>
+          </div>
+
+          <div class="stats-group">
+            <p class="group-title">Current Selection</p>
+            <div class="status-row">
+              <span>Status: <strong class="js-manager-current-status">-</strong></span>
+              <span>Players: <strong class="js-manager-current-players">-</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Manager Home: Server list -->
+    <section class="panel page-pane pane-primary" aria-label="Servers overview">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h2 class="pane-title">Server Overview</h2>
+        </div>
+      </div>
+
+      <div class="pane-content">
+        <div class="server-card-grid js-manager-server-list"></div>
+      </div>
+    </section>
+
+    <!-- Manager Home: Alerts -->
+    <section class="panel page-pane pane-primary" aria-label="Manager notes">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h2 class="pane-title">Manager Notes</h2>
+        </div>
+      </div>
+
+      <div class="pane-content">
+        <div class="js-manager-alert-list manager-alert-list"></div>
+      </div>
+    </section>
+  </div>
 </main>

@@ -1,19 +1,24 @@
-<main id="mcweb-page-root" class="content" data-page-key="servers" data-page-title="Server Selection">
-    <div class="wrap page-panes page-panes--manager">
-        <section class="panel page-pane pane-primary" aria-labelledby="server-selection-title">
-            <div class="pane-head">
-                <div class="pane-head-row">
-                    <h1 id="server-selection-title" class="pane-title">Server Selection</h1>
-                    <div class="pane-head-actions">
-                        <button id="server-selection-open-create" class="btn-start" type="button">Create Server</button>
-                    </div>
-                </div>
-            </div>
-            <div class="pane-content">
-                <p class="manager-page-copy">Choose which server the existing console, backup, cleanup, and log pages should operate on.</p>
-                <div id="server-selection-current" class="manager-inline-note"></div>
-                <div id="server-selection-list" class="server-card-grid"></div>
-            </div>
-        </section>
-    </div>
+<!doctype html>
+<main class="mcweb-page content" data-page-key="servers" data-page-title="Server Selection">
+  <div class="wrap page-panes page-panes--manager">
+    <section class="panel page-pane pane-primary" aria-label="Worlds selection">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h1 class="pane-title">Server Selection</h1>
+
+          <div class="pane-head-actions">
+            <button class="btn-start js-world-open-create" type="button">Create Server</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane-content">
+        <p class="manager-page-copy">Choose which server the existing console, backup, cleanup, and log pages should operate on.</p>
+
+        <div class="manager-inline-note js-world-current-selection" aria-live="polite"></div>
+
+        <div class="server-card-grid js-world-list" role="list"></div>
+      </div>
+    </section>
+  </div>
 </main>

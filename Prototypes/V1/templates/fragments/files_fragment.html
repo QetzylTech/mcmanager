@@ -1,112 +1,129 @@
-<main id="mcweb-page-root" class="content" data-page-key="files" data-page-title="Files">
-    <div class="wrap page-panes page-panes--files">
-        <section class="panel page-pane page-pane--list pane-primary" aria-labelledby="file-panel-title">
-            <div class="pane-head">
-                <div class="pane-head-row">
-                    <h1 id="file-panel-title" class="pane-title">Files</h1>
-                    <div id="backup-controls" class="backup-controls" hidden>
-                        <div class="filter-row">
-                            <span class="filter-label">Filter</span>
-                            <label class="filter-check"><input class="backup-filter" type="checkbox" value="manual" checked>Manual</label>
-                            <label class="filter-check"><input class="backup-filter" type="checkbox" value="auto" checked>Auto</label>
-                            <label class="filter-check"><input class="backup-filter" type="checkbox" value="session" checked>Session</label>
-                            <label class="filter-check"><input class="backup-filter" type="checkbox" value="prerestore" checked>Prerestore</label>
-                            <label class="filter-check"><input class="backup-filter" type="checkbox" value="others" checked>Others</label>
-                        </div>
-                        <div class="sort-row">
-                            <label for="backup-sort" class="sort-label">Sort by</label>
-                            <select id="backup-sort" class="sort-select">
-                                <option value="newest">Latest to oldest</option>
-                                <option value="oldest">Oldest to latest</option>
-                                <option value="size">Size</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div id="log-view-controls" class="log-view-controls" hidden>
-                        <div class="sort-row">
-                            <label for="file-sort" class="sort-label">Sort by</label>
-                            <select id="file-sort" class="sort-select">
-                                <option value="newest">Newest to oldest</option>
-                                <option value="oldest">Oldest to newest</option>
-                                <option value="size">Size</option>
-                                <option value="alpha">Alphabetical</option>
-                                <option value="reverse_alpha">Reverse alphabetical</option>
-                            </select>
-                        </div>
-                        <div class="log-view-toggles" role="group" aria-label="Log source views">
-                            <button class="nav-link log-source-toggle" type="button" data-log-source="minecraft">Minecraft Logs</button>
-                            <button class="nav-link log-source-toggle" type="button" data-log-source="crash">Crash Reports</button>
-                            <button class="nav-link log-source-toggle" type="button" data-log-source="backup">Backup Logs</button>
-                            <button class="nav-link log-source-toggle" type="button" data-log-source="restore">Restore Logs</button>
-                            <button class="nav-link log-source-toggle" type="button" data-log-source="mcweb">Control Panel Activity</button>
-                            <button class="nav-link log-source-toggle" type="button" data-log-source="mcweb_log">Control Panel Errors/System</button>
-                        </div>
-                    </div>
-                </div>
+<!doctype html>
+<main class="mcweb-page content" data-page-key="files" data-page-title="Files">
+  <div class="wrap page-panes page-panes--files">
+
+    <!-- Files list pane -->
+    <section class="panel page-pane page-pane--list pane-primary" aria-label="Files list">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h1 class="pane-title">Files</h1>
+
+          <div class="backup-controls" hidden>
+            <div class="filter-row">
+              <span class="filter-label">Filter</span>
+              <label class="filter-check"><input class="backup-filter js-backup-filter" type="checkbox" value="manual" checked>Manual</label>
+              <label class="filter-check"><input class="backup-filter js-backup-filter" type="checkbox" value="auto" checked>Auto</label>
+              <label class="filter-check"><input class="backup-filter js-backup-filter" type="checkbox" value="session" checked>Session</label>
+              <label class="filter-check"><input class="backup-filter js-backup-filter" type="checkbox" value="prerestore" checked>Prerestore</label>
+              <label class="filter-check"><input class="backup-filter js-backup-filter" type="checkbox" value="others" checked>Others</label>
             </div>
-            <div class="pane-content">
-                <div id="download-error" class="download-error"></div>
-                <div class="file-action-token-template" hidden aria-hidden="true">
-                    <button class="file-restore-btn" type="button"></button>
-                    <button class="file-download-btn" type="button"></button>
-                </div>
-                <ul id="file-list" class="list">
-                    <li class="list-state empty">Loading prototype data...</li>
-                </ul>
+            <div class="sort-row">
+              <label class="sort-label">Sort by</label>
+              <select class="sort-select js-backup-sort">
+                <option value="newest">Latest to oldest</option>
+                <option value="oldest">Oldest to latest</option>
+                <option value="size">Size</option>
+              </select>
             </div>
-        </section>
-        <div id="file-viewer-resizer" class="file-viewer-resizer" aria-hidden="true"></div>
-        <aside id="file-viewer" class="panel page-pane page-pane--viewer file-viewer pane-editor" aria-hidden="true">
-            <div class="pane-head">
-                <div class="pane-head-row">
-                    <h2 id="pane-title-viewer" class="pane-title pane-title--viewer">File Viewer</h2>
-                    <div class="pane-head-actions pane-head-actions-group pane-head-actions-group--viewer">
-                        <button id="file-viewer-download" class="file-viewer-download" type="button">Download</button>
-                        <button id="file-viewer-close" class="file-viewer-close" type="button">Close</button>
-                        <div id="backup-restore-controls" class="pane-head-actions-group pane-head-actions-group--restore" hidden>
-                            <div class="pane-action-cluster pane-action-cluster--restore">
-                                <button id="backup-restore-cancel" class="backup-restore-cancel" type="button">Cancel</button>
-                                <button id="backup-restore-start" class="backup-restore-start" type="button">Restore</button>
-                                <button id="backup-restore-last-run" class="backup-restore-last-run btn-backup" type="button" hidden>View last run</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+          </div>
+
+          <div class="log-view-controls" hidden>
+            <div class="sort-row">
+              <label class="sort-label">Sort by</label>
+              <select class="sort-select js-log-sort">
+                <option value="newest">Newest to oldest</option>
+                <option value="oldest">Oldest to newest</option>
+                <option value="size">Size</option>
+                <option value="alpha">Alphabetical</option>
+                <option value="reverse_alpha">Reverse alphabetical</option>
+              </select>
             </div>
-            <div class="pane-content">
-                <pre id="file-viewer-content" class="file-viewer-content"></pre>
+
+            <div class="log-view-toggles" role="group" aria-label="Log source views">
+              <button class="nav-link log-source-toggle" type="button" data-log-source="minecraft">Minecraft Logs</button>
+              <button class="nav-link log-source-toggle" type="button" data-log-source="crash">Crash Reports</button>
+              <button class="nav-link log-source-toggle" type="button" data-log-source="backup">Backup Logs</button>
+              <button class="nav-link log-source-toggle" type="button" data-log-source="restore">Restore Logs</button>
+              <button class="nav-link log-source-toggle" type="button" data-log-source="mcweb">Control Panel Activity</button>
+              <button class="nav-link log-source-toggle" type="button" data-log-source="mcweb_log">Control Panel Errors/System</button>
             </div>
-        </aside>
-    </div>
-    <div id="download-password-modal" class="modal-overlay" aria-hidden="true">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="download-password-title">
-            <h3 id="download-password-title" class="modal-title">Enter Password</h3>
-            <p class="modal-text">Enter sudo password to download this backup.</p>
-            <img id="download-password-image" class="modal-image" src="https://i.imgflip.com/6k8gqw.jpg" alt="Incorrect password image" hidden>
-            <input id="download-password-input" class="modal-input ui-text-input" type="password" autocomplete="current-password" placeholder="Password">
-            <p id="download-password-error" class="modal-text modal-error" hidden></p>
-            <div class="modal-actions">
-                <button id="download-password-cancel" class="btn-secondary" type="button">Cancel</button>
-                <button id="download-password-submit" class="btn-backup" type="button">Continue</button>
-            </div>
+          </div>
         </div>
-    </div>
-    <div id="success-modal" class="modal-overlay" aria-hidden="true">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="success-modal-title">
-            <h3 id="success-modal-title" class="modal-title">Action Completed</h3>
-            <p id="success-modal-text" class="modal-text"></p>
-            <div class="modal-actions">
-                <button id="success-modal-ok" class="btn-backup" type="button">OK</button>
-            </div>
+      </div>
+
+      <div class="pane-content">
+        <div class="download-error js-download-error" hidden></div>
+
+        <div class="file-action-token-template" hidden aria-hidden="true">
+          <button class="file-restore-btn js-file-restore-action" type="button"></button>
+          <button class="file-download-btn js-file-download-action" type="button"></button>
         </div>
-    </div>
-    <div id="error-modal" class="modal-overlay" aria-hidden="true">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="error-modal-title">
-            <h3 id="error-modal-title" class="modal-title">Action Failed</h3>
-            <p id="error-modal-text" class="modal-text"></p>
-            <div class="modal-actions">
-                <button id="error-modal-ok" class="btn-backup" type="button">OK</button>
+
+        <ul class="list js-file-list" aria-label="Files"></ul>
+      </div>
+    </section>
+
+    <!-- Optional viewer resizer -->
+    <div class="file-viewer-resizer" aria-hidden="true"></div>
+
+    <!-- Viewer pane -->
+    <aside class="panel page-pane page-pane--viewer file-viewer pane-editor" aria-label="File viewer" aria-hidden="true">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h2 class="pane-title pane-title--viewer js-viewer-title">File Viewer</h2>
+
+          <div class="pane-head-actions pane-head-actions-group pane-head-actions-group--viewer">
+            <button class="file-viewer-download js-file-download" type="button">Download</button>
+            <button class="file-viewer-close js-file-close" type="button">Close</button>
+
+            <div class="pane-head-actions-group pane-head-actions-group--restore js-backup-restore-controls" hidden>
+              <div class="pane-action-cluster pane-action-cluster--restore">
+                <button class="backup-restore-cancel js-backup-restore-cancel" type="button">Cancel</button>
+                <button class="backup-restore-start js-backup-restore-start" type="button">Restore</button>
+              </div>
             </div>
+          </div>
         </div>
+      </div>
+
+      <div class="pane-content">
+        <pre class="file-viewer-content js-viewer-content"></pre>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Modals (ids removed; keep structure minimal for now) -->
+  <div class="modal-overlay js-download-password-modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Enter Password">
+      <h3 class="modal-title">Enter Password</h3>
+      <p class="modal-text">Enter sudo password to download this backup.</p>
+      <input class="modal-input ui-text-input js-download-password-input" type="password" autocomplete="current-password" placeholder="Password">
+      <p class="modal-text modal-error js-download-password-error" hidden></p>
+      <div class="modal-actions">
+        <button class="btn-secondary js-download-password-cancel" type="button">Cancel</button>
+        <button class="btn-backup js-download-password-submit" type="button">Continue</button>
+      </div>
     </div>
+  </div>
+
+  <div class="modal-overlay js-modal-success" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <h3 class="modal-title">Action Completed</h3>
+      <p class="modal-text js-modal-success-text"></p>
+      <div class="modal-actions">
+        <button class="btn-backup js-modal-success-ok" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay js-modal-error" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <h3 class="modal-title">Action Failed</h3>
+      <p class="modal-text js-modal-error-text"></p>
+      <div class="modal-actions">
+        <button class="btn-backup js-modal-error-ok" type="button">OK</button>
+      </div>
+    </div>
+  </div>
 </main>

@@ -72,11 +72,11 @@
     pendingRestoreTimer: null
   };
 
-  var content = document.getElementById("mcweb-app-content");
-  var nav = document.getElementById("side-nav");
-  var navToggle = document.getElementById("nav-toggle");
-  var navBackdrop = document.getElementById("nav-backdrop");
-  var themeToggle = document.getElementById("theme-toggle");
+  var content = document.querySelector(".mcweb-app-content[data-current-page]");
+  var nav = document.querySelector(".sidebar");
+  var navToggle = document.querySelector(".js-nav-toggle");
+  var navBackdrop = document.querySelector(".js-nav-backdrop");
+  var themeToggle = document.querySelector(".js-theme-toggle");
   var dynamicStyleNodes = [];
 
   initShell();
@@ -91,11 +91,13 @@
 
   function wireShellEvents() {
     document.addEventListener("click", function (event) {
-      var navLink = event.target.closest("[data-page]");
-      if (navLink && navLink.tagName === "A") {
-        event.preventDefault();
-        navigate(navLink.getAttribute("data-page"), true);
-      }
+      var navLink = event.target.closest(".js-nav-link");
+      if (!navLink || navLink.tagName !== "A") return;
+      event.preventDefault();
+      var href = navLink.getAttribute("href") || "";
+      var key = href.replace(/^#/, "");
+      if (!routes[key]) key = "manager_home";
+      navigate(key, true);
     });
 
     if (themeToggle) {
@@ -135,7 +137,27 @@
   }
 
   function navigate(page, pushHash) {
-    if (!routes[page]) page = "home";
+    if (!routes[page]) page = "manager_home";
+    app.currentPage = page;
+    app.currentFilesContext = page === "minecraft_logs" ? "minecraft_logs" : "backups";
+    updateNav(page);
+    closeNav();
+
+    if (pushHash && window.location.hash !== "#" + page) {
+      window.location.hash = page;
+      return;
+    }
+
+    applyPageStyles(routes[page].styles || []);
+    loadFragment(routes[page].fragment, function (html) {
+      if (!content) return;
+      content.innerHTML = html;
+      content.setAttribute("data-current-page", page);
+      document.body.dataset.page = page;
+      document.title = routes[page].title + " - MC Manager Prototype";
+      initializePage(page);
+    });
+    if (!routes[page]) page = "manager_home";
     app.currentPage = page;
     app.currentFilesContext = page === "minecraft_logs" ? "minecraft_logs" : "backups";
     updateNav(page);
@@ -150,7 +172,6 @@
       content.dataset.currentPage = page;
       document.body.dataset.page = page;
       document.title = routes[page].title + " - MC Manager Prototype";
-      app.currentRoot = document.getElementById("mcweb-page-root");
       initializePage(page);
     });
   }
@@ -194,8 +215,12 @@
   }
 
   function updateNav(page) {
-    Array.prototype.forEach.call(document.querySelectorAll("[data-page].nav-link"), function (link) {
-      link.classList.toggle("active", link.getAttribute("data-page") === page);
+    Array.prototype.forEach.call(document.querySelectorAll(".js-nav-link.nav-link"), function (link) {
+      var href = link.getAttribute("href") || "";
+      var key = href.replace(/^#/, "");
+      link.classList.toggle("active", key === page);
+      if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
+      if (key === page) link.setAttribute("aria-current", "page");
     });
   }
 
@@ -278,15 +303,15 @@
   }
 
   function initManagerHomePage() {
-    bindClick("manager-home-open-selection", function () {
-      navigate("servers", true);
-    });
-    bindClick("manager-home-open-create", function () {
-      navigate("create_server", true);
-    });
-    bindClick("manager-home-open-console", function () {
-      navigate("home", true);
-    });
+    var openSelection = document.querySelector(".js-manager-home-open-selection");
+    if (openSelection) openSelection.addEventListener("click", function () { navigate("servers", true); });
+
+    var openCreate = document.querySelector(".js-manager-home-open-create");
+    if (openCreate) openCreate.addEventListener("click", function () { navigate("create_server", true); });
+
+    var openConsole = document.querySelector(".js-manager-home-open-console");
+    if (openConsole) openConsole.addEventListener("click", function () { navigate("home", true); });
+
     renderManagerHomePage();
   }
 
@@ -296,18 +321,26 @@
     var running = servers.filter(function (server) {
       return server.runtime && server.runtime.serviceRunning;
     }).length;
-    if (selected) {
-      setText("manager-current-name", selected.name);
-      setText("manager-current-meta", selected.serverType + " " + selected.version + " • " + selected.address + ":" + selected.port);
-      setText("manager-current-status", selected.runtime.serverStatus);
-      setText("manager-current-players", String(selected.runtime.playersOnline));
-      setText("manager-next-backup-summary", selected.runtime.nextBackupTime);
-    }
-    setText("manager-total-servers", String(servers.length));
-    setText("manager-running-servers", String(running));
-    setText("manager-storage-summary", app.data.managerOverview ? app.data.managerOverview.storageSummary : app.data.runtime.storageUsage);
 
-    var serverList = document.getElementById("manager-server-list");
+    if (selected) {
+      setTextBySelector(".js-manager-current-name", selected.name);
+      setTextBySelector(
+        ".js-manager-current-meta",
+        selected.serverType + " " + selected.version + " • " + selected.address + ":" + selected.port
+      );
+      setTextBySelector(".js-manager-current-status", selected.runtime.serverStatus);
+      setTextBySelector(".js-manager-current-players", String(selected.runtime.playersOnline));
+      setTextBySelector(".js-manager-next-backup-summary", selected.runtime.nextBackupTime);
+    }
+
+    setTextBySelector(".js-manager-total-servers", String(servers.length));
+    setTextBySelector(".js-manager-running-servers", String(running));
+    setTextBySelector(
+      ".js-manager-storage-summary",
+      app.data.managerOverview ? app.data.managerOverview.storageSummary : app.data.runtime.storageUsage
+    );
+
+    var serverList = document.querySelector(".js-manager-server-list");
     if (serverList) {
       serverList.innerHTML = servers.map(function (server) {
         return renderServerCard(server, true);
@@ -315,7 +348,7 @@
       wireServerCardActions(serverList);
     }
 
-    var alertList = document.getElementById("manager-alert-list");
+    var alertList = document.querySelector(".js-manager-alert-list");
     if (alertList) {
       var notes = app.data.managerAlerts || [];
       alertList.innerHTML = notes.map(function (note) {
@@ -325,96 +358,133 @@
   }
 
   function initServerSelectionPage() {
-    bindClick("server-selection-open-create", function () {
-      navigate("create_server", true);
-    });
+    var openCreate = document.querySelector(".js-world-open-create");
+    if (openCreate) openCreate.addEventListener("click", function () { navigate("create_server", true); });
     renderServerSelectionPage();
   }
 
   function renderServerSelectionPage() {
     var selected = getSelectedServer();
-    var list = document.getElementById("server-selection-list");
-    if (selected) {
-      setText("server-selection-current", "Current selection: " + selected.name + " (" + selected.address + ":" + selected.port + ")");
+
+    var current = document.querySelector(".js-world-current-selection");
+    if (current) {
+      current.textContent = selected
+        ? "Current selection: " + selected.name + " (" + selected.address + ":" + selected.port + ")"
+        : "No server selected";
     }
+
+    var list = document.querySelector(".js-world-list");
     if (!list) return;
+
     list.innerHTML = (app.data.servers || []).map(function (server) {
       return renderServerCard(server, false);
     }).join("");
+
     wireServerCardActions(list);
   }
 
   function initCreateServerPage() {
     populateCreateServerSelects();
-    bindClick("create-server-open-selection", function () {
-      navigate("servers", true);
+
+    var backBtn = document.querySelector(".js-create-back-to-selection");
+    if (backBtn) backBtn.addEventListener("click", function () { navigate("servers", true); });
+
+    var onAnyChange = function () { renderCreateServerPreview(); };
+
+    var template = document.querySelector(".js-create-template");
+    if (template) template.addEventListener("change", onAnyChange);
+
+    var runtime = document.querySelector(".js-create-runtime");
+    if (runtime) runtime.addEventListener("change", onAnyChange);
+
+    var host = document.querySelector(".js-create-host");
+    if (host) host.addEventListener("change", onAnyChange);
+
+    [
+      ".js-create-name",
+      ".js-create-id",
+      ".js-create-port",
+      ".js-create-path",
+      ".js-create-address",
+      ".js-create-args"
+    ].forEach(function (sel) {
+      var node = document.querySelector(sel);
+      if (node) node.addEventListener("input", onAnyChange);
     });
-    ["create-server-template", "create-server-runtime", "create-server-host"].forEach(function (id) {
-      var node = document.getElementById(id);
-      if (node) {
-        node.onchange = renderCreateServerPreview;
-      }
-    });
-    ["create-server-name", "create-server-id", "create-server-port", "create-server-path", "create-server-address", "create-server-args"].forEach(function (id) {
-      var node = document.getElementById(id);
-      if (node) {
-        node.oninput = renderCreateServerPreview;
-      }
-    });
-    var form = document.getElementById("create-server-form");
+
+    var form = document.querySelector(".js-server-create-form");
     if (form) {
-      form.onsubmit = function (event) {
+      form.addEventListener("submit", function (event) {
         event.preventDefault();
         createServerFromForm();
-      };
+      });
     }
+
     renderCreateServerPreview();
   }
 
   function populateCreateServerSelects() {
-    populateOptions("create-server-template", app.data.serverTemplates || []);
-    populateOptions("create-server-runtime", app.data.javaRuntimes || []);
-    populateOptions("create-server-host", app.data.hosts || []);
+    populateOptionsBySelector(".js-create-template", app.data.serverTemplates || []);
+    populateOptionsBySelector(".js-create-runtime", app.data.javaRuntimes || []);
+    populateOptionsBySelector(".js-create-host", app.data.hosts || []);
   }
 
-  function populateOptions(id, items) {
-    var node = document.getElementById(id);
+  function populateOptionsBySelector(selector, items) {
+    var node = document.querySelector(selector);
     if (!node) return;
+
     node.innerHTML = items.map(function (item) {
       return "<option value='" + escapeAttr(item.id) + "'>" + escapeHtml(item.name) + "</option>";
     }).join("");
   }
 
+  function valueOfBySelector(selector) {
+    var node = document.querySelector(selector);
+    return node ? node.value : "";
+  }
+
   function renderCreateServerPreview() {
-    var preview = document.getElementById("create-server-preview");
+    var preview = document.querySelector(".js-create-preview");
     if (!preview) return;
-    var template = findById(app.data.serverTemplates, valueOf("create-server-template"));
-    var runtime = findById(app.data.javaRuntimes, valueOf("create-server-runtime"));
-    var host = findById(app.data.hosts, valueOf("create-server-host"));
+
+    var templateId = valueOfBySelector(".js-create-template");
+    var runtimeId = valueOfBySelector(".js-create-runtime");
+    var hostId = valueOfBySelector(".js-create-host");
+
+    var template = findById(app.data.serverTemplates, templateId);
+    var runtime = findById(app.data.javaRuntimes, runtimeId);
+    var host = findById(app.data.hosts, hostId);
+
     preview.innerHTML =
-      "<h3>" + escapeHtml(valueOf("create-server-name")) + "</h3>" +
-      "<p>Machine ID: " + escapeHtml(valueOf("create-server-id")) + "</p>" +
+      "<h3>" + escapeHtml(valueOfBySelector(".js-create-name")) + "</h3>" +
+      "<p>Machine ID: " + escapeHtml(valueOfBySelector(".js-create-id")) + "</p>" +
       "<p>Template: " + escapeHtml(template ? template.name : "-") + "</p>" +
       "<p>Java runtime: " + escapeHtml(runtime ? runtime.name : "-") + "</p>" +
       "<p>Host: " + escapeHtml(host ? host.name : "-") + "</p>" +
-      "<p>Address: " + escapeHtml(valueOf("create-server-address")) + ":" + escapeHtml(valueOf("create-server-port")) + "</p>" +
-      "<p>Path: " + escapeHtml(valueOf("create-server-path")) + "</p>" +
-      "<p>Args: " + escapeHtml(valueOf("create-server-args")) + "</p>";
+      "<p>Address: " + escapeHtml(valueOfBySelector(".js-create-address")) + ":" + escapeHtml(valueOfBySelector(".js-create-port")) + "</p>" +
+      "<p>Path: " + escapeHtml(valueOfBySelector(".js-create-path")) + "</p>" +
+      "<p>Args: " + escapeHtml(valueOfBySelector(".js-create-args")) + "</p>";
   }
 
   function createServerFromForm() {
-    var template = findById(app.data.serverTemplates, valueOf("create-server-template"));
-    var runtime = findById(app.data.javaRuntimes, valueOf("create-server-runtime"));
-    var host = findById(app.data.hosts, valueOf("create-server-host"));
-    var name = valueOf("create-server-name");
+    var templateId = valueOfBySelector(".js-create-template");
+    var runtimeId = valueOfBySelector(".js-create-runtime");
+    var hostId = valueOfBySelector(".js-create-host");
+
+    var template = findById(app.data.serverTemplates, templateId);
+    var runtime = findById(app.data.javaRuntimes, runtimeId);
+    var host = findById(app.data.hosts, hostId);
+
+    var name = valueOfBySelector(".js-create-name");
+
     var server = {
-      id: valueOf("create-server-id"),
+      id: valueOfBySelector(".js-create-id"),
       name: name,
       summary: "Prototype-created server ready for the existing console pages.",
       serverType: template ? template.serverType : "Vanilla",
       version: template ? template.version : "1.21.1",
-      address: valueOf("create-server-address"),
-      port: valueOf("create-server-port"),
+      address: valueOfBySelector(".js-create-address"),
+      port: valueOfBySelector(".js-create-port"),
       host: host ? host.name : "storage-node",
       runtimeLabel: runtime ? runtime.name : "Default Java",
       runtime: {
@@ -488,9 +558,13 @@
         }
       }
     };
+
     app.data.servers.push(server);
     applySelectedServer(server.id);
-    setText("create-server-status", name + " created in prototype mode and set as the active server.");
+
+    var status = document.querySelector(".js-create-status");
+    if (status) status.textContent = name + " created in prototype mode and set as the active server.";
+
     renderCreateServerPreview();
   }
 
@@ -534,11 +608,22 @@
 
   function initHomePage() {
     syncSelectedServerSummary();
-    bindClick("start-btn", startServer);
-    bindClick("stop-btn", stopServer);
-    bindClick("backup-btn", triggerBackup);
-    bindSubmit("rcon-submit", submitRcon);
-    var logSource = document.getElementById("log-source");
+
+    var startBtn = document.querySelector(".js-action-start");
+    if (startBtn) startBtn.addEventListener("click", startServer);
+
+    var stopBtn = document.querySelector(".js-action-stop");
+    if (stopBtn) stopBtn.addEventListener("click", stopServer);
+
+    var backupBtn = document.querySelector(".js-action-backup");
+    if (backupBtn) backupBtn.addEventListener("click", triggerBackup);
+
+    var rconForm = document.querySelector(".js-rcon-wrap form");
+    if (rconForm) {
+      rconForm.addEventListener("submit", submitRcon);
+    }
+
+    var logSource = document.querySelector(".js-log-source");
     if (logSource) {
       logSource.value = app.currentHomeLogSource;
       logSource.addEventListener("change", function () {
@@ -546,30 +631,39 @@
         renderHomeLog();
       });
     }
+
     renderHome();
+  }
+
+  function setTextBySelector(selector, value) {
+    var node = document.querySelector(selector);
+    if (node) node.textContent = value;
   }
 
   function renderHome() {
     var runtime = app.data.runtime;
     syncSelectedServerSummary();
-    setText("server-time", new Date().toLocaleString());
-    setText("ram-usage", runtime.ramUsage);
-    setText("cpu-per-core", runtime.cpuPerCore.map(function (value, index) {
+
+    setTextBySelector(".js-server-time", new Date().toLocaleString());
+    setTextBySelector(".js-ram-usage", runtime.ramUsage);
+    setTextBySelector(".js-cpu-per-core", runtime.cpuPerCore.map(function (value, index) {
       return "CPU" + index + " " + value + "%";
     }).join(" | "));
-    setText("cpu-frequency", runtime.cpuFrequency);
-    setText("storage-usage", runtime.storageUsage);
-    setText("service-status", runtime.serverStatus);
-    setText("players-online", String(runtime.playersOnline));
-    setText("tick-rate", runtime.tickRate);
-    setText("idle-countdown", formatDuration(runtime.idleCountdownSeconds));
-    setText("backup-status", runtime.backupStatus);
-    setText("last-backup-time", runtime.lastBackupTime);
-    setText("next-backup-time", runtime.nextBackupTime);
-    setText("backups-status", app.data.backups.length + " archives");
+    setTextBySelector(".js-cpu-frequency", runtime.cpuFrequency);
+    setTextBySelector(".js-storage-usage", runtime.storageUsage);
 
-    var prefix = document.getElementById("service-status-duration-prefix");
-    var duration = document.getElementById("session-duration");
+    setTextBySelector(".js-service-status", runtime.serverStatus);
+    setTextBySelector(".js-players-online", String(runtime.playersOnline));
+    setTextBySelector(".js-tick-rate", runtime.tickRate);
+    setTextBySelector(".js-idle-countdown", formatDuration(runtime.idleCountdownSeconds));
+
+    setTextBySelector(".js-backup-status", runtime.backupStatus);
+    setTextBySelector(".js-last-backup-time", runtime.lastBackupTime);
+    setTextBySelector(".js-next-backup-time", runtime.nextBackupTime);
+    setTextBySelector(".js-backups-count", app.data.backups.length + " archives");
+
+    var prefix = document.querySelector(".js-service-duration-prefix");
+    var duration = document.querySelector(".js-session-duration");
     if (runtime.serviceRunning && runtime.sessionStartedAt) {
       if (prefix) prefix.textContent = " for ";
       if (duration) {
@@ -581,11 +675,12 @@
       if (duration) duration.style.display = "none";
     }
 
-    var startBtn = document.getElementById("start-btn");
-    var stopBtn = document.getElementById("stop-btn");
-    var backupBtn = document.getElementById("backup-btn");
-    var rconInput = document.getElementById("rcon-command");
-    var rconSubmit = document.getElementById("rcon-submit");
+    var startBtn = document.querySelector(".js-action-start");
+    var stopBtn = document.querySelector(".js-action-stop");
+    var backupBtn = document.querySelector(".js-action-backup");
+    var rconInput = document.querySelector(".js-rcon-command");
+    var rconSubmit = document.querySelector(".js-rcon-submit");
+
     if (startBtn) startBtn.disabled = runtime.serverStatus !== "Off";
     if (stopBtn) stopBtn.disabled = !runtime.serviceRunning;
     if (backupBtn) backupBtn.disabled = runtime.backupStatus !== "Idle" || runtime.serverStatus === "Starting" || runtime.serverStatus === "Stopping";
@@ -599,7 +694,7 @@
   function renderHomeLog() {
     var source = app.currentHomeLogSource;
     var lines = app.data.logs[source] || [];
-    setText("minecraft-log", lines.slice(-40).join("\n"));
+    setTextBySelector(".js-live-log", lines.slice(-40).join("\n"));
   }
 
   function startServer() {
@@ -689,31 +784,45 @@
 
   function initFilesPage() {
     var isBackups = app.currentPage === "backups";
-    var panelTitle = document.getElementById("file-panel-title");
-    if (panelTitle) panelTitle.textContent = selectedServerLabel() + (isBackups ? " Backup & Restore" : " Log Files");
-    toggleHidden("backup-controls", !isBackups);
-    toggleHidden("log-view-controls", isBackups);
-    if (isBackups) {
-      wireBackupControls();
-    } else {
-      wireLogControls();
+
+    var backupControls = document.querySelector(".backup-controls");
+    if (backupControls) backupControls.hidden = !isBackups;
+
+    var logControls = document.querySelector(".log-view-controls");
+    if (logControls) logControls.hidden = isBackups;
+
+    if (isBackups) wireBackupControls();
+    else wireLogControls();
+
+    var closeBtn = document.querySelector(".js-file-close");
+    if (closeBtn) closeBtn.addEventListener("click", closeViewer);
+
+    var cancelRestore = document.querySelector(".js-backup-restore-cancel");
+    if (cancelRestore) {
+      cancelRestore.addEventListener("click", function () {
+        app.restoreFileId = null;
+        renderFileList();
+        renderViewer();
+      });
     }
-    bindClick("file-viewer-close", closeViewer);
-    bindClick("backup-restore-cancel", function () {
-      app.restoreFileId = null;
-      renderFileList();
-      renderViewer();
-    });
-    bindClick("backup-restore-start", simulateRestore);
-    bindClick("file-viewer-download", function () {
-      showInlineError("Prototype only: no file is actually downloaded.");
-    });
+
+    var startRestore = document.querySelector(".js-backup-restore-start");
+    if (startRestore) startRestore.addEventListener("click", simulateRestore);
+
+    var downloadBtn = document.querySelector(".js-file-download");
+    // NOTE: keep behavior as prototype error
+    if (downloadBtn) {
+      downloadBtn.addEventListener("click", function () {
+        showInlineError("Prototype only: no file is actually downloaded.");
+      });
+    }
+
     renderFileList();
     renderViewer();
   }
 
   function wireBackupControls() {
-    Array.prototype.forEach.call(document.querySelectorAll(".backup-filter"), function (box) {
+    Array.prototype.forEach.call(document.querySelectorAll(".js-backup-filter"), function (box) {
       box.checked = app.backupFilters.has(box.value);
       box.addEventListener("change", function () {
         if (box.checked) app.backupFilters.add(box.value);
@@ -721,7 +830,8 @@
         renderFileList();
       });
     });
-    var sort = document.getElementById("backup-sort");
+
+    var sort = document.querySelector(".js-backup-sort");
     if (sort) {
       sort.value = app.backupSort;
       sort.addEventListener("change", function () {
@@ -741,7 +851,8 @@
         renderViewer();
       });
     });
-    var sort = document.getElementById("file-sort");
+
+    var sort = document.querySelector(".js-log-sort");
     if (sort) {
       sort.value = app.fileSort;
       sort.addEventListener("change", function () {
@@ -752,13 +863,15 @@
   }
 
   function renderFileList() {
-    var list = document.getElementById("file-list");
+    var list = document.querySelector(".js-file-list");
     if (!list) return;
+
     var items = app.currentPage === "backups" ? getFilteredBackups() : getSortedLogFiles();
     if (!items.length) {
       list.innerHTML = "<li class='list-state empty'>No files match the current filters.</li>";
       return;
     }
+
     list.innerHTML = items.map(function (item) {
       var activeClass = item.id === app.selectedFileId ? " file-row-active file-row-active-view" : "";
       if (item.id === app.restoreFileId) activeClass += " file-row-active-restore";
@@ -773,14 +886,17 @@
         "</div>" +
         "</li>";
     }).join("");
+
     Array.prototype.forEach.call(list.querySelectorAll("[data-action]"), function (button) {
       button.addEventListener("click", function () {
         var id = button.getAttribute("data-id");
         var action = button.getAttribute("data-action");
+
         app.selectedFileId = id;
         if (action === "view") app.restoreFileId = null;
         if (action === "restore") app.restoreFileId = id;
         if (action === "download") showInlineError("Prototype only: download is not wired.");
+
         renderFileList();
         renderViewer();
       });
@@ -789,19 +905,24 @@
 
   function renderViewer() {
     var wrap = document.querySelector(".page-panes--files");
-    var viewer = document.getElementById("file-viewer");
-    var contentNode = document.getElementById("file-viewer-content");
-    var title = document.getElementById("pane-title-viewer");
-    var restoreControls = document.getElementById("backup-restore-controls");
+    var viewer = document.querySelector(".file-viewer");
+    var contentNode = document.querySelector(".js-viewer-content");
+    var title = document.querySelector(".js-viewer-title");
+    var restoreControls = document.querySelector(".js-backup-restore-controls");
+
     if (!wrap || !viewer || !contentNode || !title || !restoreControls) return;
+
     var item = findCurrentSelectedFile();
     var open = !!item;
+
     wrap.classList.toggle("viewer-open", open);
     viewer.setAttribute("aria-hidden", open ? "false" : "true");
+
     if (!open) {
       contentNode.textContent = "";
       return;
     }
+
     title.textContent = item.name;
     contentNode.textContent = item.preview || "No preview available.";
     restoreControls.hidden = !(app.currentPage === "backups" && item.id === app.restoreFileId);
@@ -860,63 +981,77 @@
   }
 
   function initMaintenancePage() {
-    bindClick("maint-scope-backups", function () {
+    var scopeBackups = document.querySelector(".js-maint-scope-backups");
+    if (scopeBackups) scopeBackups.addEventListener("click", function () {
       app.maintenanceScope = "backups";
       app.maintenanceSelected.clear();
       renderMaintenance();
     });
-    bindClick("maint-scope-stale", function () {
+
+    var scopeStale = document.querySelector(".js-maint-scope-stale");
+    if (scopeStale) scopeStale.addEventListener("click", function () {
       app.maintenanceScope = "stale_worlds";
       app.maintenanceSelected.clear();
       renderMaintenance();
     });
-    bindClick("maint-open-rules", function () {
+
+    var openRules = document.querySelector(".js-maint-open-rules");
+    if (openRules) openRules.addEventListener("click", function () {
       app.maintenanceView = "rules";
       renderMaintenanceViews();
     });
-    bindClick("maint-open-history", function () {
+
+    var openHistory = document.querySelector(".js-maint-open-history");
+    if (openHistory) openHistory.addEventListener("click", function () {
       app.maintenanceView = "history";
       renderMaintenanceViews();
     });
-    bindClick("maint-open-manual", function () {
+
+    var openManual = document.querySelector(".js-maint-open-manual");
+    if (openManual) openManual.addEventListener("click", function () {
       app.maintenanceView = "manual";
       renderMaintenanceViews();
     });
-    bindClick("run-rule-delete-btn", openMaintenanceDryRun);
-    bindClick("run-manual-delete-btn", openMaintenanceDryRun);
-    bindClick("maintenance-dry-run-ok", closeMaintenanceModals);
-    bindClick("maintenance-complete-ok", closeMaintenanceModals);
-    bindClick("maintenance-dry-run-confirm-run", function () {
-      closeMaintenanceModals();
-      openMaintenanceComplete();
-    });
-    bindClick("ack-non-normal-btn", function () {
+
+    var runRuleDelete = document.querySelector(".js-run-rule-delete-btn");
+    if (runRuleDelete) runRuleDelete.addEventListener("click", openMaintenanceDryRun);
+
+    var runManualDelete = document.querySelector(".js-run-manual-delete-btn");
+    if (runManualDelete) runManualDelete.addEventListener("click", openMaintenanceDryRun);
+
+    var ackMissed = document.querySelector(".js-ack-non-normal-btn");
+    if (ackMissed) ackMissed.addEventListener("click", function () {
       var scope = app.data.maintenance[app.maintenanceScope];
       scope.missedRuns = Math.max(0, scope.missedRuns - 1);
       if (scope.history.missed.length) scope.history.missed.shift();
       renderMaintenance();
     });
+
+    // Modals are currently not strict in the rebuilt fragment; keep old modal bindings if they exist.
     renderMaintenance();
   }
 
   function renderMaintenance() {
     var scope = app.data.maintenance[app.maintenanceScope];
-    setText("maint-storage-remaining", scope.storageRemaining);
-    setText("maint-backup-summary", scope.backupSummary);
-    setText("maint-stale-summary", scope.staleSummary);
-    setText("history-last-run", scope.lastRun);
-    setText("history-last-changed-by", scope.lastChangedBy);
-    setText("maint-schedule-count", String(scope.scheduleCount));
-    setText("maint-next-run", scope.nextRun);
-    setText("history-missed-runs", String(scope.missedRuns));
-    setText("maintenance-action-description", app.maintenanceView === "rules"
-      ? "Review rules for the selected cleanup scope."
-      : app.maintenanceView === "manual"
-        ? "Select individual files from the left pane for manual cleanup."
-        : "Review historical cleanup runs and missed-run records.");
 
-    toggleActive("maint-scope-backups", app.maintenanceScope === "backups");
-    toggleActive("maint-scope-stale", app.maintenanceScope === "stale_worlds");
+    setTextBySelector(".js-maint-storage-remaining", scope.storageRemaining);
+    setTextBySelector(".js-maint-backup-summary", scope.backupSummary);
+    setTextBySelector(".js-maint-stale-summary", scope.staleSummary);
+
+    setTextBySelector(".js-history-last-run", scope.lastRun);
+    setTextBySelector(".js-history-last-changed-by", scope.lastChangedBy);
+
+    setTextBySelector(".js-maint-schedule-count", String(scope.scheduleCount));
+    setTextBySelector(".js-maint-next-run", scope.nextRun);
+    setTextBySelector(".js-history-missed-runs", String(scope.missedRuns));
+
+    setTextBySelector(".js-maint-action-description",
+      app.maintenanceView === "rules"
+        ? "Review rules for the selected cleanup scope."
+        : app.maintenanceView === "manual"
+          ? "Select individual files from the left pane for manual cleanup."
+          : "Review historical cleanup runs and missed-run records."
+    );
 
     renderMaintenanceFileList(scope);
     renderMaintenanceRules(scope);
@@ -925,12 +1060,20 @@
   }
 
   function renderMaintenanceFileList(scope) {
-    var list = document.getElementById("cleanup-file-list");
+    var list = document.querySelector(".js-cleanup-file-list");
     if (!list) return;
+
     list.innerHTML = scope.candidates.map(function (item) {
       var checked = app.maintenanceSelected.has(item.id) ? " checked" : "";
-      return "<li><label class='maintenance-check'><input type='checkbox' data-cleanup-id='" + item.id + "'" + checked + "> <span class='file-name'>" + escapeHtml(item.name) + "</span></label><span class='meta'>" + escapeHtml(item.detail) + "</span></li>";
+      return "<li>" +
+        "<label class='maintenance-check'>" +
+        "<input type='checkbox' data-cleanup-id='" + item.id + "'" + checked + "> " +
+        "<span class='file-name'>" + escapeHtml(item.name) + "</span>" +
+        "</label>" +
+        "<span class='meta'>" + escapeHtml(item.detail) + "</span>" +
+        "</li>";
     }).join("");
+
     Array.prototype.forEach.call(list.querySelectorAll("[data-cleanup-id]"), function (box) {
       box.addEventListener("change", function () {
         var id = box.getAttribute("data-cleanup-id");
@@ -939,11 +1082,12 @@
         updateMaintenanceSelectionCount(scope);
       });
     });
+
     updateMaintenanceSelectionCount(scope);
   }
 
   function updateMaintenanceSelectionCount(scope) {
-    var node = document.getElementById("maintenance-manual-selection-count");
+    var node = document.querySelector(".js-maint-manual-selection-count");
     if (!node) return;
     var total = scope.candidates.length;
     var selected = app.maintenanceSelected.size;
@@ -952,7 +1096,7 @@
   }
 
   function renderMaintenanceRules(scope) {
-    var container = document.getElementById("rules-card-list");
+    var container = document.querySelector("#rules-card-list");
     if (!container) return;
     container.innerHTML = "<div class='maintenance-card'><ul class='maintenance-rule-list'>" +
       scope.rules.map(function (rule) { return "<li>" + escapeHtml(rule) + "</li>"; }).join("") +
@@ -960,37 +1104,47 @@
   }
 
   function renderMaintenanceHistory(scope) {
-    var container = document.getElementById("history-card-list");
+    var container = document.querySelector("#history-card-list");
     if (!container) return;
+
     var items = scope.history[app.maintenanceHistoryView];
     if (!items.length) {
       container.innerHTML = "<div class='history-card'><p class='history-card-meta'>No records in this view.</p></div>";
       return;
     }
+
     container.innerHTML = items.map(function (item) {
       return "<div class='history-card'><h3 class='history-card-title'>" + escapeHtml(item.title) + "</h3><p class='history-card-meta'>" + escapeHtml(item.meta) + "</p></div>";
     }).join("");
   }
 
   function renderMaintenanceViews() {
-    toggleHidden("maintenance-view-rules", app.maintenanceView !== "rules");
-    toggleHidden("maintenance-view-manual", app.maintenanceView !== "manual");
-    toggleHidden("maintenance-view-history", app.maintenanceView !== "history");
-    toggleHidden("history-view-toggle", app.maintenanceView !== "history");
-    toggleActive("maint-open-rules", app.maintenanceView === "rules");
-    toggleActive("maint-open-manual", app.maintenanceView === "manual");
-    toggleActive("maint-open-history", app.maintenanceView === "history");
+    var rulesView = document.querySelector(".js-maint-view-rules");
+    if (rulesView) rulesView.hidden = app.maintenanceView !== "rules";
+
+    var manualView = document.querySelector(".js-maint-view-manual");
+    if (manualView) manualView.hidden = app.maintenanceView !== "manual";
+
+    var historyView = document.querySelector(".js-maint-view-history");
+    if (historyView) historyView.hidden = app.maintenanceView !== "history";
+
+    var historyToggle = document.querySelector(".js-history-view-toggle");
+    if (historyToggle) historyToggle.hidden = app.maintenanceView !== "history";
+
     updateMaintenanceSelectionCount(app.data.maintenance[app.maintenanceScope]);
-    bindClick("history-show-success", function () {
-      app.maintenanceHistoryView = "success";
-      renderMaintenance();
-    });
-    bindClick("history-show-missed", function () {
-      app.maintenanceHistoryView = "missed";
-      renderMaintenance();
-    });
-    toggleActive("history-show-success", app.maintenanceHistoryView === "success");
-    toggleActive("history-show-missed", app.maintenanceHistoryView === "missed");
+
+    // History sub-filters
+    var successBtn = document.querySelector(".js-history-show-success");
+    if (successBtn) {
+      successBtn.onclick = function () { app.maintenanceHistoryView = "success"; renderMaintenance(); };
+      successBtn.classList.toggle("active", app.maintenanceHistoryView === "success");
+    }
+
+    var missedBtn = document.querySelector(".js-history-show-missed");
+    if (missedBtn) {
+      missedBtn.onclick = function () { app.maintenanceHistoryView = "missed"; renderMaintenance(); };
+      missedBtn.classList.toggle("active", app.maintenanceHistoryView === "missed");
+    }
   }
 
   function openMaintenanceDryRun() {
@@ -1021,28 +1175,51 @@
   }
 
   function initSettingsPage() {
+    var statusNode = document.querySelector(".js-panel-status");
+    var setStatus = function (text) {
+      if (statusNode) statusNode.textContent = text;
+    };
+
+    // Device map rendering (keeps prototype behavior)
     renderDeviceMap();
-    bindClick("panel-add-device-row", function () {
-      app.data.settings.deviceMachines.push({
-        id: "d" + Math.random().toString(16).slice(2, 7),
-        machine: "new-device",
-        addresses: "100.64.0.xx",
-        lastSeen: "Just now",
-        owner: "Unassigned"
+
+    var addRowBtn = document.querySelector(".js-panel-add-device-row");
+    if (addRowBtn) {
+      addRowBtn.addEventListener("click", function () {
+        app.data.settings.deviceMachines.push({
+          id: "d" + Math.random().toString(16).slice(2, 7),
+          machine: "new-device",
+          addresses: "100.64.0.xx",
+          lastSeen: "Just now",
+          owner: "Unassigned"
+        });
+        renderDeviceMap();
+        setStatus("Added a new prototype row. This helps evaluate how row editing should work.");
       });
-      renderDeviceMap();
-      setText("panel-settings-status", "Added a new prototype row. This helps evaluate how row editing should work.");
-    });
-    ["panel-save-security", "panel-save-paths", "panel-save-timezone", "panel-upload-device-csv", "panel-refresh-states", "panel-reboot-app"].forEach(function (id) {
-      bindClick(id, function () {
-        setText("panel-settings-status", "Prototype action completed for " + id.replace(/^panel-/, "").replace(/-/g, " ") + ".");
+    }
+
+    var wireButton = function (selector, text) {
+      var btn = document.querySelector(selector);
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        setStatus(text);
       });
-    });
+    };
+
+    wireButton(".js-panel-save-security", "Prototype action completed for save security.");
+    wireButton(".js-panel-save-paths", "Prototype action completed for save paths.");
+    wireButton(".js-panel-save-timezone", "Prototype action completed for save timezone.");
+    wireButton(".js-panel-upload-device-csv", "Prototype action completed for upload device csv.");
+    wireButton(".js-panel-refresh-states", "Prototype action completed for refresh all states.");
+    wireButton(".js-panel-reboot-app", "Prototype action completed for reboot control panel.");
   }
 
   function renderDeviceMap() {
-    var body = document.getElementById("panel-device-map-body");
+    var body = document.querySelector(".js-panel-device-map-body");
     if (!body) return;
+
+    var statusNode = document.querySelector(".js-panel-status");
+
     body.innerHTML = app.data.settings.deviceMachines.map(function (item) {
       return "<div class='device-machine-row'>" +
         "<input class='ui-card-input' value='" + escapeAttr(item.machine) + "'>" +
@@ -1052,30 +1229,35 @@
         "<div class='device-machine-actions'><button class='btn-backup' type='button' data-device-save='" + item.id + "'>Save</button><button class='btn-stop' type='button' data-device-delete='" + item.id + "'>Delete</button></div>" +
         "</div>";
     }).join("");
+
     Array.prototype.forEach.call(body.querySelectorAll("[data-device-delete]"), function (button) {
       button.addEventListener("click", function () {
         var id = button.getAttribute("data-device-delete");
         app.data.settings.deviceMachines = app.data.settings.deviceMachines.filter(function (item) { return item.id !== id; });
         renderDeviceMap();
-        setText("panel-settings-status", "Deleted a prototype device row. This makes it easier to assess destructive UI affordances.");
+        if (statusNode) statusNode.textContent = "Deleted a prototype device row. This makes it easier to assess destructive UI affordances.";
       });
     });
+
     Array.prototype.forEach.call(body.querySelectorAll("[data-device-save]"), function (button) {
       button.addEventListener("click", function () {
-        setText("panel-settings-status", "Saved a prototype device row. Requirement question: should rows save inline or batch?");
+        if (statusNode) statusNode.textContent = "Saved a prototype device row. Requirement question: should rows save inline or batch?";
       });
     });
   }
 
   function initDocsPage() {
-    var article = document.getElementById("content");
-    var toc = document.getElementById("tocSidebarBody");
-    var stickyTitle = document.getElementById("stickyHeaderTitle");
-    var stickyMenu = document.getElementById("stickyMenu");
-    var tocSidebar = document.getElementById("tocSidebar");
+    var article = document.querySelector(".js-doc-content");
+    var toc = document.querySelector(".js-doc-toc-body");
+    var stickyTitle = document.querySelector(".js-doc-sticky-title");
+    var stickyMenu = document.querySelector(".js-doc-toc-toggle");
+    var tocSidebar = document.querySelector(".toc-sidebar");
+
     if (!article || !toc) return;
+
     var headings = article.querySelectorAll("h1, h2, h3");
     toc.innerHTML = "";
+
     Array.prototype.forEach.call(headings, function (heading, index) {
       if (!heading.id) heading.id = "doc-heading-" + index;
       var link = document.createElement("a");
@@ -1084,11 +1266,18 @@
       if (heading.tagName === "H3") link.className = "toc-level-3";
       toc.appendChild(link);
     });
-    if (stickyTitle) stickyTitle.textContent = article.querySelector("h1") ? article.querySelector("h1").textContent : routes.readme.title;
+
+    if (stickyTitle) {
+      var h1 = article.querySelector("h1");
+      stickyTitle.textContent = h1 ? h1.textContent : routes.readme.title;
+    }
+
     if (stickyMenu && tocSidebar) {
-      stickyMenu.addEventListener("click", function () {
+      stickyMenu.onclick = function () {
         tocSidebar.classList.toggle("open");
-      });
+        var expanded = stickyMenu.getAttribute("aria-expanded") === "true";
+        stickyMenu.setAttribute("aria-expanded", expanded ? "false" : "true");
+      };
     }
   }
 
@@ -1138,12 +1327,18 @@
   }
 
   function applyNavAttention() {
-    var home = document.querySelector("[data-page='home']");
+    // Home console link in the left nav
+    var home = document.querySelector(".js-nav-link.nav-link[href='#home']");
     if (!home) return;
     home.classList.remove("nav-attention-yellow", "nav-attention-green");
-    if (app.data.runtime.serverStatus === "Starting" || app.data.runtime.serverStatus === "Stopping" || app.data.runtime.serverStatus === "Queued") {
+    if (
+      app.data.runtime &&
+      (app.data.runtime.serverStatus === "Starting" ||
+        app.data.runtime.serverStatus === "Stopping" ||
+        app.data.runtime.serverStatus === "Queued")
+    ) {
       home.classList.add("nav-attention-yellow");
-    } else if (app.data.runtime.serverStatus === "Running") {
+    } else if (app.data.runtime && app.data.runtime.serverStatus === "Running") {
       home.classList.add("nav-attention-green");
     }
   }

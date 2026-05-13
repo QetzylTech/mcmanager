@@ -1,115 +1,124 @@
-<main id="mcweb-page-root" class="content" data-page-key="home" data-page-title="Minecraft Control">
-<div class="wrap page-panes page-panes--home">
-    <section class="panel page-pane page-pane--header" aria-labelledby="control-panel-title">
-        <div class="pane-head">
-            <div class="pane-head-row">
-                <h1 id="control-panel-title" class="pane-title">Control Panel</h1>
-                <div class="pane-head-actions actions">
-                    <span class="server-time">Server time: <strong id="server-time">--</strong></span>
-                    <div class="action-buttons">
-                        <form class="ajax-form" method="post" action="#">
-                            <button id="start-btn" class="btn-start" type="button">Start</button>
-                        </form>
-                        <form class="ajax-form sudo-form" method="post" action="#">
-                            <input type="hidden" name="sudo_password">
-                            <button id="stop-btn" class="btn-stop" type="button" disabled>Stop</button>
-                        </form>
-                        <form class="ajax-form" method="post" action="#">
-                            <button id="backup-btn" class="btn-backup" type="button">Backup</button>
-                        </form>
-                    </div>
-                </div>
+<!doctype html>
+<main class="mcweb-page content" data-page-key="home">
+  <div class="wrap page-panes page-panes--home">
+    <!-- Header pane -->
+    <section class="panel page-pane page-pane--header" aria-label="Control Panel">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <h1 class="pane-title">Control Panel</h1>
+
+          <div class="pane-head-actions">
+            <span class="server-time">Server time: <strong class="js-server-time">--</strong></span>
+
+            <div class="action-buttons">
+              <button class="btn-start js-action-start" type="button" disabled>Start</button>
+              <button class="btn-stop js-action-stop" type="button" disabled>Stop</button>
+              <button class="btn-backup js-action-backup" type="button" disabled>Backup</button>
+
+              <div class="js-rcon-wrap">
+                <form class="ajax-form" method="post" action="#">
+                  <input type="hidden" name="sudo_password" />
+                  <input class="ui-text-input js-rcon-command" type="text" placeholder="Enter Minecraft server command" autocomplete="off" disabled />
+                  <button class="btn-backup js-rcon-submit" type="submit" disabled>Submit</button>
+                </form>
+              </div>
             </div>
+          </div>
         </div>
-        <div class="pane-content">
-            <div class="stats-groups">
-                <div class="stats-group server-stats">
-                    <p class="group-title">Server Stats</p>
-                    <div class="status-row">
-                        <span>RAM: <strong id="ram-usage">1.9 GB / 16 GB</strong></span>
-                        <span>CPU: <strong id="cpu-per-core">CPU0 4% | CPU1 8% | CPU2 5% | CPU3 11%</strong></span>
-                        <span>CPU freq: <strong id="cpu-frequency">4.2 GHz</strong></span>
-                        <span>Storage: <strong id="storage-usage">61% used, 732 GB free</strong></span>
-                    </div>
-                </div>
-                <div class="stats-group">
-                    <p class="group-title">Minecraft Stats</p>
-                    <div class="status-row">
-                        <span>Server Status: <strong id="service-status">Off</strong><span id="service-status-duration-prefix"></span><strong id="session-duration" style="display:none;">--</strong></span>
-                        <span>Players online: <strong id="players-online">0</strong></span>
-                        <span>Tick time: <strong id="tick-rate">--</strong></span>
-                        <span>Auto-stop in: <strong id="idle-countdown">--:--</strong></span>
-                    </div>
-                </div>
-                <div class="stats-group">
-                    <p class="group-title">Backup Stats</p>
-                    <div class="status-row">
-                        <span>Backup status: <strong id="backup-status">Idle</strong></span>
-                        <span>Last backup: <strong id="last-backup-time">2026-05-09 21:14</strong></span>
-                        <span>Next backup: <strong id="next-backup-time">2026-05-09 22:00</strong></span>
-                        <span>Backups folder: <strong id="backups-status">248 archives</strong></span>
-                    </div>
-                </div>
+      </div>
+
+      <div class="pane-content">
+        <div class="stats-groups">
+          <div class="stats-group">
+            <p class="group-title">Server Stats</p>
+            <div class="status-row">
+              <span>RAM: <strong class="js-ram-usage">--</strong></span>
+              <span>CPU: <strong class="js-cpu-per-core">--</strong></span>
+              <span>CPU freq: <strong class="js-cpu-frequency">--</strong></span>
+              <span>Storage: <strong class="js-storage-usage">--</strong></span>
             </div>
+          </div>
+
+          <div class="stats-group">
+            <p class="group-title">Minecraft Stats</p>
+            <div class="status-row">
+              <span>Server Status: <strong class="js-service-status">Off</strong><span class="js-service-duration-prefix"></span><strong class="js-session-duration" style="display:none;">--</strong></span>
+              <span>Players online: <strong class="js-players-online">0</strong></span>
+              <span>Tick time: <strong class="js-tick-rate">--</strong></span>
+              <span>Auto-stop in: <strong class="js-idle-countdown">--:--</strong></span>
+            </div>
+          </div>
+
+          <div class="stats-group">
+            <p class="group-title">Backup Stats</p>
+            <div class="status-row">
+              <span>Backup status: <strong class="js-backup-status">Idle</strong></span>
+              <span>Last backup: <strong class="js-last-backup-time">--</strong></span>
+              <span>Next backup: <strong class="js-next-backup-time">--</strong></span>
+              <span>Backups folder: <strong class="js-backups-count">0</strong></span>
+            </div>
+          </div>
         </div>
+      </div>
     </section>
 
-    <section class="panel page-pane page-pane--live" aria-label="Live Logs and Command Panel">
-        <div class="pane-head">
-            <div class="pane-head-row home-log-row">
-                <div class="pane-head-actions pane-head-actions-group pane-head-actions-group--live">
-                    <label class="sr-only" for="log-source">Log source</label>
-                    <select id="log-source">
-                        <option value="minecraft">Live Server Console</option>
-                        <option value="backup">Live Backup Activity</option>
-                        <option value="mcweb">Live Control Panel Activity (Actions)</option>
-                        <option value="mcweb_log">Live Control Panel Logs (Errors/System)</option>
-                    </select>
-                    <form class="panel-controls ajax-form sudo-form" action="#">
-                        <input type="hidden" name="sudo_password">
-                        <input id="rcon-command" class="ui-text-input" type="text" placeholder="Enter Minecraft server command" autocomplete="off">
-                        <button id="rcon-submit" type="submit">Submit</button>
-                    </form>
-                </div>
-            </div>
+    <!-- Logs pane -->
+    <section class="panel page-pane page-pane--live" aria-label="Live Logs">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <div class="pane-head-actions actions">
+            <label class="sr-only" for="log-source">Log source</label>
+            <select class="js-log-source" disabled>
+              <option value="minecraft">Live Server Console</option>
+              <option value="backup">Live Backup Activity</option>
+              <option value="mcweb">Live Control Panel Activity (Actions)</option>
+              <option value="mcweb_log">Live Control Panel Errors/System</option>
+            </select>
+          </div>
         </div>
-        <div class="pane-content">
-            <pre id="minecraft-log" class="console-box"></pre>
-        </div>
+      </div>
+
+      <div class="pane-content">
+        <pre class="console-box js-live-log" aria-label="Live log output"></pre>
+      </div>
     </section>
-</div>
-<div id="sudo-modal" class="modal-overlay" aria-hidden="true">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sudo-modal-title">
-        <h3 id="sudo-modal-title" class="modal-title">Password Required</h3>
-        <p id="sudo-modal-text" class="modal-text">Enter sudo password to continue.</p>
-        <img id="sudo-modal-image" class="modal-image" src="https://i.imgflip.com/6k8gqw.jpg" alt="Incorrect password image" hidden>
-        <input id="sudo-modal-input" class="modal-input ui-text-input" type="password" placeholder="Sudo password">
-        <p id="sudo-modal-error" class="modal-text modal-error" hidden></p>
-        <div class="modal-actions">
-            <button id="sudo-modal-cancel" class="btn-secondary" type="button">Cancel</button>
-            <button id="sudo-modal-submit" class="btn-backup" type="button">Continue</button>
-        </div>
+  </div>
+
+  <!-- Modals (kept as structure; ids removed) -->
+  <div class="modal-overlay js-modal-sudo" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Password Required">
+      <h3 class="modal-title">Password Required</h3>
+      <p class="modal-text">Enter sudo password to continue.</p>
+      <input class="modal-input ui-text-input js-sudo-input" type="password" placeholder="Sudo password" />
+      <p class="modal-text modal-error js-sudo-error" hidden></p>
+      <div class="modal-actions">
+        <button class="btn-secondary js-sudo-cancel" type="button">Cancel</button>
+        <button class="btn-backup js-sudo-submit" type="button">Continue</button>
+      </div>
     </div>
-</div>
-<div id="message-modal" class="modal-overlay" aria-hidden="true" hidden></div>
-<div id="success-modal" class="modal-overlay" aria-hidden="true">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="success-modal-title">
-        <h3 id="success-modal-title" class="modal-title">Action Completed</h3>
-        <p id="success-modal-text" class="modal-text"></p>
-        <div class="modal-actions">
-            <button id="success-modal-ok" class="btn-backup" type="button">OK</button>
-        </div>
+  </div>
+
+  <div class="modal-overlay js-modal-message" aria-hidden="true"></div>
+
+  <div class="modal-overlay js-modal-success" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Action Completed">
+      <h3 class="modal-title">Action Completed</h3>
+      <p class="modal-text js-success-text"></p>
+      <div class="modal-actions">
+        <button class="btn-backup js-success-ok" type="button">OK</button>
+      </div>
     </div>
-</div>
-<div id="error-modal" class="modal-overlay" aria-hidden="true">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="error-modal-title">
-        <h3 id="error-modal-title" class="modal-title">Action Failed</h3>
-        <p id="error-modal-text" class="modal-text"></p>
-        <button id="error-modal-more" class="btn-secondary modal-more-btn" type="button">Show more</button>
-        <pre id="error-modal-details" class="modal-details" hidden></pre>
-        <div class="modal-actions">
-            <button id="error-modal-ok" class="btn-backup" type="button">OK</button>
-        </div>
+  </div>
+
+  <div class="modal-overlay js-modal-error" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Action Failed">
+      <h3 class="modal-title">Action Failed</h3>
+      <p class="modal-text js-error-text"></p>
+      <button class="btn-backup js-error-more" type="button">Show more</button>
+      <pre class="modal-details js-error-details" hidden></pre>
+      <div class="modal-actions">
+        <button class="btn-backup js-error-ok" type="button">OK</button>
+      </div>
     </div>
-</div>
+  </div>
 </main>

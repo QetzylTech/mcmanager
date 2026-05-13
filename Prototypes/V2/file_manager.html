@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - File Manager</title>
+    <link rel="stylesheet" href="static/global.css" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- World nav only -->
+      <nav class="shell-nav" aria-label="World navigation">
+        <div class="nav-title">World</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="world_main.html">World Main</a>
+          <a class="nav-link" href="world_backup_restore.html">Backups & Restore</a>
+          <a class="nav-link" href="world_logs.html">World Logs</a>
+          <a class="nav-link active" href="file_manager.html">File Manager</a>
+          <a class="nav-link" href="world_maintenance_retention.html">World Maintenance</a>
+          <a class="nav-link" href="world_setup.html">World Setup</a>
+          <a class="nav-link" href="world_properties.html">World Properties</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Folder access (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>World Folder Access</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Verify</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>
+              Guarded folder access for the current world. Upload, delete, rename, move, copy,
+              and create folders (placeholders).
+            </p>
+
+            <div class="row" style="margin-top: 12px;">
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Current Folder</p>
+                <input class="ui-text-input" type="text" value="./world" aria-label="Current folder" style="width:100%;" />
+              </div>
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">New Folder Name</p>
+                <input class="ui-text-input" type="text" value="new-folder" aria-label="New folder name" style="width:100%;" />
+              </div>
+            </div>
+
+            <div class="row" style="margin-top: 12px;">
+              <button class="btn-action-blue" type="button">Create Folder</button>
+              <button class="btn-action-red" type="button">Delete Selected</button>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Files (file pane placeholder) -->
+        <article class="pane pane-stationary pane-file">
+          <header class="pane-title-area">
+            <h2>Files</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Upload</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <ul class="list" aria-label="Files list" style="margin-top:0;">
+              <li>server.properties</li>
+              <li>logs/latest.log</li>
+              <li>plugins/SomePlugin.jar</li>
+              <li>world/region/r.0.0.mca</li>
+            </ul>
+
+            <div class="row" style="margin-top: 12px;">
+              <button class="btn-action-blue" type="button">Rename</button>
+              <button class="btn-action-blue" type="button">Move</button>
+              <button class="btn-action-blue" type="button">Copy</button>
+              <button class="btn-action-blue" type="button">Download</button>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

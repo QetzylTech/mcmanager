@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - Homepage</title>
+    <link rel="stylesheet" href="static/global.css" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- Manager nav only (no world nav on manager pages) -->
+      <nav class="shell-nav" aria-label="Manager navigation">
+        <div class="nav-title">MC Manager</div>
+        <div class="nav-list">
+          <a class="nav-link active" href="index.html">Homepage</a>
+          <a class="nav-link" href="manager_worlds.html">World Management</a>
+          <a class="nav-link" href="setup.html">Setup / Onboarding</a>
+          <a class="nav-link" href="manager_settings.html">Manager Settings</a>
+          <a class="nav-link" href="user_management.html">User Management</a>
+          <a class="nav-link" href="maintenance_retention.html">Maintenance & Retention</a>
+          <a class="nav-link" href="instructions_documentation.html">Instructions & Docs</a>
+          <a class="nav-link" href="system_logs.html">System Logs</a>
+          <a class="nav-link" href="audit_history.html">Audit / History</a>
+          <a class="nav-link" href="offsite_sync.html">Offsite Sync</a>
+          <a class="nav-link" href="manager_maintenance.html">Manager Maintenance</a>
+          <a class="nav-link" href="world_templates.html">World Templates</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Server stats (metrics pane) -->
+        <article class="pane pane-stationary pane-metrics">
+          <header class="pane-title-area">
+            <h2>Server Stats</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Refresh</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row" style="gap: 12px; align-items: flex-start;">
+              <div style="flex: 1 1 260px; min-width: 240px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">CPU</p>
+                <div class="status-row">
+                  <span><strong>C1:</strong>20.0%</span>
+                  <span><strong>C2:</strong>50.2%</span>
+                </div>
+              </div>
+
+              <div style="flex: 1 1 260px; min-width: 240px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">RAM</p>
+                <div class="status-row">
+                  <span><strong>50gb/64gb</strong></span>
+                </div>
+              </div>
+
+              <div style="flex: 1 1 260px; min-width: 240px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Storage</p>
+                <div class="status-row">
+                  <span><strong>120gb/240gb</strong></span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Running worlds (list pane) -->
+        <article class="pane pane-stationary pane-list">
+          <header class="pane-title-area">
+            <h2>Running Worlds</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Manage</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <!-- When there are no running worlds -->
+            <p>No worlds currently running</p>
+
+            <!-- Example running worlds (placeholder) -->
+            <!--
+            <ul class="list" aria-label="Running worlds list" style="margin-top: 12px;">
+              <li>
+                Example World A
+                <div style="margin-top: 8px; display:flex; gap:12px; flex-wrap:wrap;">
+                  <button class="btn-action-teal" type="button">Start</button>
+                  <button class="btn-action-red" type="button">Stop</button>
+                  <a class="btn-action-blue" href="world_main.html?world=Example%20World%20A" aria-label="Manage Example World A">Manage</a>
+                </div>
+              </li>
+            </ul>
+            -->
+          </section>
+        </article>
+
+        <!-- Pane: Recently run worlds (list pane) -->
+        <article class="pane pane-stationary pane-list">
+          <header class="pane-title-area">
+            <h2>Recently Run Worlds</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">View History</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <ul class="list" aria-label="Recently run worlds list" style="margin-top: 0;">
+              <li>
+                World X
+                <div style="margin-top: 8px; display:flex; gap:12px; flex-wrap:wrap;">
+                  <button class="btn-action-teal" type="button">Start</button>
+                  <a class="btn-action-blue" href="world_main.html?world=World%20X" aria-label="Manage World X">Manage</a>
+                  <button class="btn-action-red" type="button">Stop</button>
+                </div>
+              </li>
+              <li>
+                World Y
+                <div style="margin-top: 8px; display:flex; gap:12px; flex-wrap:wrap;">
+                  <button class="btn-action-teal" type="button">Start</button>
+                  <a class="btn-action-blue" href="world_main.html?world=World%20Y" aria-label="Manage World Y">Manage</a>
+                  <button class="btn-action-red" type="button">Stop</button>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

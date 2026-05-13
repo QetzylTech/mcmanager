@@ -1,7 +1,7 @@
 Document 3: Next-Generation Minecraft Manager Architecture
 
 Purpose
-- Define the target architecture for the next-generation manager described in `newDesign.txt`.
+- Define the target architecture for the next-generation manager described in `Document 2 - more specific requirements.txt`.
 - Translate the end-goal design, prior project requirements, useful legacy patterns, and ISO/IEC 25010 quality concerns into a build-guiding architecture.
 - Describe architectural structure, boundaries, data ownership, runtime flows, and quality decisions without overcommitting to one web framework or one deployment style.
 - This document is the proposed architecture based on document 2
@@ -9,8 +9,8 @@ Purpose
 
 Architecture sequencing
 - Product design should come before architecture because the architecture exists to serve the product behavior, quality goals, and constraints.
-- In this project, the end-goal design already exists in `newDesign.txt`, so architecture work should now proceed.
-- This document therefore treats `newDesign.txt` as the primary source of truth for required behavior, and treats this architecture as the way the system should be organized to deliver that behavior.
+- In this project, the end-goal design already exists in `Document 2 - more specific requirements.txt`, so architecture work should now proceed.
+- This document therefore treats `Document 2 - more specific requirements.txt` as the primary source of truth for required behavior, and treats this architecture as the way the system should be organized to deliver that behavior.
 
 1. Architectural stance
 

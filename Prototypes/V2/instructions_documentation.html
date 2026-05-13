@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - Instructions & Docs</title>
+    <link rel="stylesheet" href="static/global.css" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- Manager nav only -->
+      <nav class="shell-nav" aria-label="Manager navigation">
+        <div class="nav-title">MC Manager</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="manager_worlds.html">World Management</a>
+          <a class="nav-link" href="setup.html">Setup / Onboarding</a>
+          <a class="nav-link" href="manager_settings.html">Manager Settings</a>
+          <a class="nav-link" href="user_management.html">User Management</a>
+          <a class="nav-link" href="maintenance_retention.html">Maintenance & Retention</a>
+          <a class="nav-link active" href="instructions_documentation.html">Instructions & Docs</a>
+          <a class="nav-link" href="system_logs.html">System Logs</a>
+          <a class="nav-link" href="audit_history.html">Audit / History</a>
+          <a class="nav-link" href="offsite_sync.html">Offsite Sync</a>
+          <a class="nav-link" href="manager_maintenance.html">Manager Maintenance</a>
+          <a class="nav-link" href="world_templates.html">World Templates</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Dev notes and server manual (docs pane placeholder) -->
+        <article class="pane pane-stationary pane-docs">
+          <header class="pane-title-area">
+            <h2>Dev Notes & Server Manual</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Refresh</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>
+              Dev notes and operator manual content (server manual, operational guidance, and troubleshooting notes).
+            </p>
+
+            <ul class="list" aria-label="Documentation sections" style="margin-top: 12px;">
+              <li>Getting started (operator quick steps)</li>
+              <li>World lifecycle (create / start / stop / backup)</li>
+              <li>Troubleshooting (common failures)</li>
+              <li>Upgrade notes (version changes)</li>
+            </ul>
+          </section>
+        </article>
+
+        <!-- Pane: Admin manual (docs pane placeholder) -->
+        <article class="pane pane-stationary pane-docs">
+          <header class="pane-title-area">
+            <h2>Admin Manual</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Open Index</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>
+              Admin-focused documentation: permissions, retention/cleanup policies, and audit procedures.
+            </p>
+
+            <div class="row" style="margin-top: 12px;">
+              <button class="btn-action-blue" type="button">User & Privileges</button>
+              <button class="btn-action-blue" type="button">Maintenance Policies</button>
+              <button class="btn-action-blue" type="button">Audit & History</button>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - Manager Settings</title>
+    <link rel="stylesheet" href="static/global.css" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- Manager nav only -->
+      <nav class="shell-nav" aria-label="Manager navigation">
+        <div class="nav-title">MC Manager</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="manager_worlds.html">World Management</a>
+          <a class="nav-link" href="setup.html">Setup / Onboarding</a>
+          <a class="nav-link active" href="manager_settings.html">Manager Settings</a>
+          <a class="nav-link" href="user_management.html">User Management</a>
+          <a class="nav-link" href="maintenance_retention.html">Maintenance & Retention</a>
+          <a class="nav-link" href="instructions_documentation.html">Instructions & Docs</a>
+          <a class="nav-link" href="system_logs.html">System Logs</a>
+          <a class="nav-link" href="audit_history.html">Audit / History</a>
+          <a class="nav-link" href="offsite_sync.html">Offsite Sync</a>
+          <a class="nav-link" href="manager_maintenance.html">Manager Maintenance</a>
+          <a class="nav-link" href="world_templates.html">World Templates</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Date / Time / Timezone (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Date, Time & Timezone</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>Manager-wide date/time and timezone settings.</p>
+
+            <div class="row" style="margin-top: 12px;">
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Date</p>
+                <input class="ui-text-input" type="text" value="YYYY-MM-DD" aria-label="Date" />
+              </div>
+
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Timezone</p>
+                <input class="ui-text-input" type="text" value="UTC" aria-label="Timezone" />
+              </div>
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Time</p>
+              <input class="ui-text-input" type="text" value="HH:MM" aria-label="Time" style="width:100%;" />
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Idle countdown settings (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Idle Countdown</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Apply</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>When the manager is idle, define the countdown and the action taken.</p>
+
+            <div class="row" style="margin-top: 12px;">
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Idle timeout (sec)</p>
+                <input class="ui-text-input" type="text" value="0" aria-label="Idle timeout" />
+              </div>
+
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Action</p>
+                <input class="ui-text-input" type="text" value="None" aria-label="Idle action" />
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Notification settings (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Notification Settings</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>Notification sounds/messages and repetition behavior.</p>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Custom Alert Sounds</p>
+              <input class="ui-text-input" type="text" value="Default" aria-label="Alert sounds" style="width:100%;" />
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Custom Alert Messages</p>
+              <input class="ui-text-input" type="text" value="Default" aria-label="Alert messages" style="width:100%;" />
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Alert Repetition Rules</p>
+              <input class="ui-text-input" type="text" value="Once" aria-label="Alert repetition rules" style="width:100%;" />
+            </div>
+
+            <div class="row" style="margin-top: 12px;">
+              <button class="btn-action-blue" type="button">Test Notification</button>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Path settings (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Path Settings</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>Directories for worlds, backups, and logs.</p>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Minecraft world directories</p>
+              <input class="ui-text-input" type="text" value="/path/to/worlds" aria-label="World directories" style="width:100%;" />
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Backup directories</p>
+              <input class="ui-text-input" type="text" value="/path/to/backups" aria-label="Backup directories" style="width:100%;" />
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Log file directories</p>
+              <input class="ui-text-input" type="text" value="/path/to/logs" aria-label="Log directories" style="width:100%;" />
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

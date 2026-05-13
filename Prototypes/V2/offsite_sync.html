@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - Offsite Sync</title>
+    <link rel="stylesheet" href="static/global.css" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- Manager nav only -->
+      <nav class="shell-nav" aria-label="Manager navigation">
+        <div class="nav-title">MC Manager</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="manager_worlds.html">World Management</a>
+          <a class="nav-link" href="setup.html">Setup / Onboarding</a>
+          <a class="nav-link" href="manager_settings.html">Manager Settings</a>
+          <a class="nav-link" href="user_management.html">User Management</a>
+          <a class="nav-link" href="maintenance_retention.html">Maintenance & Retention</a>
+          <a class="nav-link" href="instructions_documentation.html">Instructions & Docs</a>
+          <a class="nav-link" href="system_logs.html">System Logs</a>
+          <a class="nav-link" href="audit_history.html">Audit / History</a>
+          <a class="nav-link active" href="offsite_sync.html">Offsite Sync</a>
+          <a class="nav-link" href="manager_maintenance.html">Manager Maintenance</a>
+          <a class="nav-link" href="world_templates.html">World Templates</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Sync method selection (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Sync Method</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>Select the global offsite sync method for backups/logs.</p>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Available Methods</p>
+              <div class="row">
+                <button class="btn-action-blue" type="button">Google Drive</button>
+                <button class="btn-action-blue" type="button">Built-in Sync</button>
+                <button class="btn-action-blue" type="button">NAS / Network Storage</button>
+                <button class="btn-action-blue" type="button">Other</button>
+              </div>
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Key / Credential Requirements</p>
+              <input class="ui-text-input" type="text" value="(depends on method)" aria-label="Credentials placeholder" style="width:100%;" />
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Global sync defaults (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Global Sync Defaults</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Apply</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>Global defaults used unless a selected world overrides them.</p>
+
+            <div class="row" style="margin-top: 12px;">
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Sync backups</p>
+                <input class="ui-text-input" type="text" value="Enabled" aria-label="Sync backups enabled" style="width:100%;" />
+              </div>
+
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">Sync logs</p>
+                <input class="ui-text-input" type="text" value="Enabled" aria-label="Sync logs enabled" style="width:100%;" />
+              </div>
+            </div>
+
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Default schedule</p>
+              <input class="ui-text-input" type="text" value="Daily" aria-label="Default schedule" style="width:100%;" />
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Per-world overrides (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Per-World Overrides</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <p>Control whether each world inherits or overrides the global sync settings.</p>
+
+            <ul class="list" aria-label="World override list" style="margin-top: 12px;">
+              <li><strong>Example World 1</strong> — Inherit Global</li>
+              <li><strong>Example World 2</strong> — Override Schedule</li>
+              <li><strong>Example World 3</strong> — Override Credentials</li>
+            </ul>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

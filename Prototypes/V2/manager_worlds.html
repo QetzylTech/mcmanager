@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - World Management</title>
+    <link rel="stylesheet" href="static/global.css" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- Manager nav only (no world nav on manager pages) -->
+      <nav class="shell-nav" aria-label="Manager navigation">
+        <div class="nav-title">MC Manager</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link active" href="manager_worlds.html">World Management</a>
+          <a class="nav-link" href="setup.html">Setup / Onboarding</a>
+          <a class="nav-link" href="manager_settings.html">Manager Settings</a>
+          <a class="nav-link" href="user_management.html">User Management</a>
+          <a class="nav-link" href="maintenance_retention.html">Maintenance & Retention</a>
+          <a class="nav-link" href="instructions_documentation.html">Instructions & Docs</a>
+          <a class="nav-link" href="system_logs.html">System Logs</a>
+          <a class="nav-link" href="audit_history.html">Audit / History</a>
+          <a class="nav-link" href="offsite_sync.html">Offsite Sync</a>
+          <a class="nav-link" href="manager_maintenance.html">Manager Maintenance</a>
+          <a class="nav-link" href="world_templates.html">World Templates</a>
+        </div>
+      </nav>
+
+      <!-- Sliding trigger (CSS-only) -->
+      <input id="create-world-toggle" type="checkbox" class="hidden" />
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Worlds list pane (top, stationary) -->
+        <article class="pane pane-stationary pane-list">
+          <header class="pane-title-area">
+            <h2>Worlds</h2>
+            <div class="pane-head-actions">
+              <label class="btn-action-blue" for="create-world-toggle" style="cursor:pointer;">Create New</label>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <ul class="list" aria-label="Worlds list" style="margin-top: 0;">
+              <li>
+                <strong>Example World 1</strong> — Vanilla — Java 17
+                <div style="margin-top: 8px; display:flex; gap:12px; flex-wrap:wrap;">
+                  <button class="btn-action-teal" type="button">Start</button>
+                  <button class="btn-action-red" type="button">Stop</button>
+                  <button class="btn-action-blue" type="button">Backup</button>
+                  <a class="btn-action-blue" href="world_main.html?world=Example%20World%201" aria-label="Manage Example World 1">Manage</a>
+                </div>
+              </li>
+
+              <li>
+                <strong>Example World 2</strong> — Fabric — Java 21
+                <div style="margin-top: 8px; display:flex; gap:12px; flex-wrap:wrap;">
+                  <button class="btn-action-teal" type="button">Start</button>
+                  <button class="btn-action-red" type="button">Stop</button>
+                  <button class="btn-action-blue" type="button">Backup</button>
+                  <a class="btn-action-blue" href="world_main.html?world=Example%20World%202" aria-label="Manage Example World 2">Manage</a>
+                </div>
+              </li>
+
+              <li>
+                <strong>Example World 3</strong> — Paper — Java 21
+                <div style="margin-top: 8px; display:flex; gap:12px; flex-wrap:wrap;">
+                  <button class="btn-action-teal" type="button">Start</button>
+                  <button class="btn-action-red" type="button">Stop</button>
+                  <button class="btn-action-blue" type="button">Backup</button>
+                  <a class="btn-action-blue" href="world_main.html?world=Example%20World%203" aria-label="Manage Example World 3">Manage</a>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </article>
+
+        <!-- Pane: Create New Worlds (sliding, hidden until trigger) -->
+        <article class="pane pane-sliding pane-form" aria-label="Create new worlds form">
+          <header class="pane-title-area">
+            <h2>Create New Worlds</h2>
+            <div class="pane-head-actions">
+              <label class="btn-action-blue" for="create-world-toggle" style="cursor:pointer;">Close</label>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <!-- World name -->
+            <div class="row" style="margin-top: 0;">
+              <div style="flex: 1 1 260px; min-width: 80px;">
+                <p style="font-weight:700; margin:0 0 8px 0;">World name</p>
+                <input class="ui-text-input" type="text" value="" aria-label="World name" style="width:100%;" />
+              </div>
+            </div>
+
+            <!-- World Template dropdown -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">World Template</p>
+              <select class="ui-text-input" aria-label="World template dropdown" style="width:100%;">
+                <option selected>Vanilla</option>
+                <option>Forge</option>
+                <option>Fabric</option>
+                <option>Paper</option>
+                <option>None</option>
+              </select>
+            </div>
+
+            <!-- Version dropdown per platform (kept as placeholder, disabled/enabled logic can be wired later) -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Version</p>
+              <select class="ui-text-input" aria-label="Version dropdown" style="width:100%;">
+                <option>Java 17 (Vanilla)</option>
+                <option disabled>Java 21 (Forge)</option>
+                <option disabled>Java 21 (Fabric)</option>
+                <option disabled>Java 21 (Paper)</option>
+              </select>
+            </div>
+
+            <!-- World Seed -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">World Seed (optional)</p>
+              <input class="ui-text-input" type="text" value="" aria-label="World seed" style="width:100%;" />
+            </div>
+
+            <!-- World tagline -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">World tagline (optional)</p>
+              <input class="ui-text-input" type="text" value="" aria-label="World tagline" style="width:100%;" />
+            </div>
+
+            <!-- Port -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Port (optional)</p>
+              <input class="ui-text-input" type="text" value="" aria-label="Port optional" style="width:100%;" />
+              <p style="margin-top: 8px;">If blank, manager chooses a random valid port.</p>
+            </div>
+
+            <!-- Gamemode -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Gamemode</p>
+              <select class="ui-text-input" aria-label="Gamemode dropdown" style="width:100%;">
+                <option>creative</option>
+                <option>survival</option>
+                <option>adventure</option>
+                <option>spectator</option>
+              </select>
+            </div>
+
+            <!-- Difficulty -->
+            <div style="margin-top: 12px;">
+              <p style="font-weight:700; margin:0 0 8px 0;">Game difficulty</p>
+              <select class="ui-text-input" aria-label="Game difficulty dropdown" style="width:100%;">
+                <option>peaceful</option>
+                <option>easy</option>
+                <option selected>normal</option>
+                <option>hard</option>
+              </select>
+            </div>
+
+            <!-- Cancel / Create -->
+            <div class="row" style="margin-top: 12px;">
+              <label class="btn-general-normal" for="create-world-toggle" style="cursor:pointer;">Cancel</label>
+              <button class="btn-action-teal" type="button">Create</button>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+
+    <style>
+      /* CSS-only slide-in for this page:
+         - hidden until checkbox is checked
+         - desktop: right; mobile: bottom */
+      #create-world-toggle:not(:checked) ~ main article.pane-sliding {
+        display: none;
+      }
+      #create-world-toggle:checked ~ main article.pane-sliding {
+        display: block;
+        animation: pane-slide-in-right 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      @media (max-width: 700px) {
+        #create-world-toggle:checked ~ main article.pane-sliding {
+          animation-name: pane-slide-in-bottom;
+        }
+      }
+    </style>
+  </body>
+</html>

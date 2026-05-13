@@ -1,0 +1,586 @@
+/* MC Manager - V2 shared CSS (single visual system for entire site) */
+
+/* ============ Tokens ============ */
+:root {
+  --btn-height: 40px;
+  --control-min-width: 80px;
+  --gap: 12px;
+
+  /* Light mode baseline (per style guide) */
+  --canvas-bg: #eef2ff;
+  --body-bg: #eef2ff;
+  --pane-surface: #ffffff;
+  --border: #d8dee6;
+  --text: #1f2a37;
+  --muted: #5a6878;
+
+  /* Dark mode baseline (per style guide) */
+  --canvas-bg-dark: #161b22;
+  --body-bg-dark: #161b22;
+  --pane-surface-dark: #0d1117;
+  --border-dark: #334155;
+  --text-dark: #e6edf3;
+  --muted-dark: #9fb0c6;
+
+  --pane-radius: 12px;
+  --pane-content-radius: 10px;
+  --pane-padding: 12px;
+  --pane-shadow: 0 2px 5px rgba(15, 23, 42, 0.04);
+
+  --font: Arial, Helvetica, Roboto, sans-serif;
+
+  /* Button colors (Action buttons) */
+  --ui-blue: #1e3a8a;
+  --ui-blue-hover: #1e40af;
+
+  --ui-teal: #0f766e;
+  --ui-teal-hover: #0d9488;
+
+  --ui-red: #b91c1c;
+  --ui-red-hover: #991b1b;
+
+  /* Disabled variants (light) */
+  --ui-blue-disabled: #94a3b8;
+  --ui-blue-disabled-hover: #8193ab;
+
+  --ui-teal-disabled: #7aa9a3;
+  --ui-teal-disabled-hover: #6a9892;
+
+  --ui-red-disabled: #c59a9a;
+  --ui-red-disabled-hover: #b78888;
+
+  /* Purple highlighted general buttons (style guide mentions purple) */
+  --ui-highlight: #6d28d9;
+  --ui-highlight-hover: #5b21b6;
+  --ui-highlight-disabled: #c4b5fd;
+  --ui-highlight-disabled-hover: #a78bfa;
+
+  /* Inputs */
+  --ui-input-bg: var(--body-bg);
+  --ui-title-input-bg: var(--body-bg);
+  --ui-text-input-bg: var(--body-bg);
+
+  /* Misc */
+  --dropdown-shadow: 0 2px 5px rgba(15, 23, 42, 0.04);
+  --focus-ring: 0 0 0 2px rgba(30, 64, 175, 0.15);
+}
+
+/* Dark mode switch: html.theme-dark */
+html.theme-dark {
+  --canvas-bg: var(--canvas-bg-dark);
+  --body-bg: var(--body-bg-dark);
+  --pane-surface: var(--pane-surface-dark);
+  --border: var(--border-dark);
+  --text: var(--text-dark);
+  --muted: var(--muted-dark);
+
+  --ui-input-bg: var(--body-bg-dark);
+  --ui-title-input-bg: var(--body-bg-dark);
+  --ui-text-input-bg: var(--body-bg-dark);
+}
+
+html,
+body,
+button,
+input,
+textarea,
+select {
+  font-family: var(--font);
+}
+
+html {
+  background: var(--canvas-bg);
+  color-scheme: light;
+}
+
+html.theme-dark {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+/* ============ Typography ============ */
+h1,
+h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  line-height: 1.2;
+}
+
+h1 {
+  /* Page title when present */
+}
+
+h2 {
+  /* Default pane title */
+}
+
+p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+/* ============ Layout landmarks ============ */
+body.mcweb {
+  padding: 12px;
+}
+
+main {
+  display: block;
+}
+
+nav {
+  /* Visual rules come from shared pane system */
+}
+
+/* ============ Panes & cards ============ */
+main.panes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+/* Panes are implemented as article elements */
+article.pane {
+  background: var(--pane-surface);
+  border: 0;
+  border-radius: var(--pane-radius);
+  box-shadow: var(--pane-shadow);
+  padding: 14px;
+  min-width: 0;
+}
+
+.pane-title-area {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: var(--btn-height);
+  margin-bottom: var(--gap);
+}
+
+/* Title area: first card only; no separate background chrome */
+.pane-content-area {
+  background: var(--body-bg);
+  border-radius: var(--pane-content-radius);
+  padding: var(--pane-padding);
+  min-width: 0;
+}
+
+/* ============ Lists (shared surface) ============ */
+ul.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--ui-input-bg);
+  border-radius: var(--pane-content-radius);
+  overflow: hidden;
+}
+
+ul.list li {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+ul.list li:first-child {
+  border-top: 0;
+}
+
+/* ============ Inputs (only two kinds) ============ */
+/* Same input geometry as buttons: 40px tall, 80px min width. No borders. */
+input.ui-title-input,
+input.ui-text-input,
+textarea.ui-title-input,
+textarea.ui-text-input,
+select.ui-title-input,
+select.ui-text-input {
+  height: var(--btn-height);
+  min-width: var(--control-min-width);
+  border: 0;
+  border-radius: 10px;
+
+  padding: 0 12px;
+  font-size: 0.95rem;
+  font-weight: 700;
+
+  /* If select is NOT inside a content-area, default to body background */
+  background: var(--body-bg);
+  color: inherit;
+  box-shadow: none;
+
+  /* Never overflow the card; keep 12px inner spacing rule */
+  max-width: calc(100% - 24px);
+
+  /* Prevent default native styling overlap */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+/* If input is inside a pane content area, use pane color */
+.pane-content-area input.ui-title-input,
+.pane-content-area input.ui-text-input,
+.pane-content-area textarea.ui-title-input,
+.pane-content-area textarea.ui-text-input,
+.pane-content-area select.ui-title-input,
+.pane-content-area select.ui-text-input {
+  background: var(--pane-surface);
+}
+
+/* Title vs text input background nuance (still pane-color baseline in content area) */
+.pane-content-area input.ui-title-input,
+.pane-content-area textarea.ui-title-input,
+.pane-content-area select.ui-title-input {
+  background: var(--pane-surface);
+}
+
+input.ui-title-input:focus,
+input.ui-text-input:focus,
+textarea.ui-title-input:focus,
+textarea.ui-text-input:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* (Background handled above by pane/content-area context) */
+
+/* focus handled above */
+
+input:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ============ Unified buttons system ============ */
+/* Geometry shared for all buttons */
+button,
+a.button-like,
+a.btn-action-blue,
+a.btn-action-teal,
+a.btn-action-red,
+label.btn-action-blue,
+label.btn-action-teal,
+label.btn-action-red,
+label.btn-general-normal,
+label.btn-general-highlighted {
+  height: var(--btn-height);
+  min-width: var(--control-min-width);
+  border-radius: 10px;
+  border: 0;
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: var(--btn-height);
+  padding: 0 14px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.06s ease, opacity 0.16s ease, background-color 0.16s ease, filter 0.16s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+/* Action buttons */
+.btn-action-blue {
+  background: var(--ui-blue);
+  color: #ffffff;
+}
+
+.btn-action-blue:hover {
+  background: var(--ui-blue-hover);
+}
+
+.btn-action-blue:active {
+  transform: translateY(1px);
+}
+
+.btn-action-blue:disabled {
+  background: var(--ui-blue-disabled);
+  color: #ffffff;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.btn-action-blue:disabled:hover {
+  background: var(--ui-blue-disabled-hover);
+  filter: none;
+}
+
+/* Teal action buttons */
+.btn-action-teal {
+  background: var(--ui-teal);
+  color: #ffffff;
+}
+
+.btn-action-teal:hover {
+  background: var(--ui-teal-hover);
+}
+
+.btn-action-teal:active {
+  transform: translateY(1px);
+}
+
+.btn-action-teal:disabled {
+  background: var(--ui-teal-disabled);
+  color: #ffffff;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.btn-action-teal:disabled:hover {
+  background: var(--ui-teal-disabled-hover);
+  filter: none;
+}
+
+/* Red action buttons */
+.btn-action-red {
+  background: var(--ui-red);
+  color: #ffffff;
+}
+
+.btn-action-red:hover {
+  background: var(--ui-red-hover);
+}
+
+.btn-action-red:active {
+  transform: translateY(1px);
+}
+
+.btn-action-red:disabled {
+  background: var(--ui-red-disabled);
+  color: #ffffff;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.btn-action-red:disabled:hover {
+  background: var(--ui-red-disabled-hover);
+  filter: none;
+}
+
+/* General buttons */
+.btn-general-normal {
+  background: var(--body-bg);
+  color: var(--text);
+  box-shadow: none;
+  border: 1px solid transparent;
+}
+
+.btn-general-normal:hover {
+  background: rgba(30, 64, 175, 0.08);
+}
+
+.btn-general-normal:active {
+  transform: translateY(1px);
+}
+
+.btn-general-normal:disabled {
+  background: rgba(30, 64, 175, 0.06);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.btn-general-normal:disabled:hover {
+  background: rgba(30, 64, 175, 0.06);
+}
+
+/* Highlighted general button (purple) */
+.btn-general-highlighted {
+  background: var(--ui-highlight);
+  color: #ffffff;
+}
+
+.btn-general-highlighted:hover {
+  background: var(--ui-highlight-hover);
+}
+
+.btn-general-highlighted:active {
+  transform: translateY(1px);
+}
+
+.btn-general-highlighted:disabled {
+  background: var(--ui-highlight-disabled);
+  color: #ffffff;
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.btn-general-highlighted:disabled:hover {
+  background: var(--ui-highlight-disabled-hover);
+}
+
+/* Dropdown trigger must use general button style.
+   We don’t implement full dropdown JS here; CSS is ready for later. */
+
+/* ============ Shared max-width rule (12px spacing each side) ============ */
+/* Keep interactive controls inside their parent card width. */
+button,
+a.button-like,
+input.ui-title-input,
+input.ui-text-input,
+textarea.ui-title-input,
+textarea.ui-text-input,
+select,
+ul.list {
+  max-width: calc(100% - 24px);
+}
+
+/* ============ Pane classes (stationary/sliding + use type) ============ */
+/* Movement */
+.pane-stationary {
+  position: relative;
+}
+
+.pane-sliding {
+  position: relative;
+}
+
+/* Sliding direction:
+   - desktop: right
+   - mobile: bottom (vertical) */
+@keyframes pane-slide-in-right {
+  from { transform: translateX(calc(100% + var(--gap))); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes pane-slide-out-right {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(calc(100% + var(--gap))); opacity: 0; }
+}
+@keyframes pane-slide-in-bottom {
+  from { transform: translateY(calc(100% + var(--gap))); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes pane-slide-out-bottom {
+  from { transform: translateY(0); opacity: 1; }
+  to { transform: translateY(calc(100% + var(--gap))); opacity: 0; }
+}
+
+/* Default slide is desktop/right; mobile overrides below */
+.pane-slide-in-right {
+  animation: pane-slide-in-right 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.pane-slide-out-right {
+  animation: pane-slide-out-right 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.pane-slide-in-bottom {
+  animation: pane-slide-in-bottom 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.pane-slide-out-bottom {
+  animation: pane-slide-out-bottom 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (max-width: 700px) {
+  .pane-slide-in-right { animation-name: pane-slide-in-bottom; }
+  .pane-slide-out-right { animation-name: pane-slide-out-bottom; }
+}
+
+/* Use-type classes (for future per-type layout chrome; no visual redesign beyond movement tokens) */
+.pane-metrics { }
+.pane-list { }
+.pane-form { }
+.pane-viewer { }
+.pane-action { }
+.pane-file { }
+.pane-docs { }
+.pane-form-list { }
+
+/* ============ Nav (shared global nav button behavior) ============ */
+.shell {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: var(--gap);
+  align-items: start;
+}
+
+nav.shell-nav {
+  position: sticky;
+  top: 12px;
+  align-self: start;
+  height: calc(100vh - 24px);
+  overflow: auto;
+
+  background: var(--pane-surface);
+  border-radius: var(--pane-radius);
+  box-shadow: var(--pane-shadow);
+  padding: 14px 12px;
+}
+
+nav .nav-title {
+  margin: 4px 6px 10px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+nav .nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-item {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* Active nav item should use highlighted general button style */
+.nav-link.active {
+  background: var(--ui-highlight);
+  color: #ffffff;
+}
+
+/* Nav links should look like general buttons (no special pulses/alerts) */
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+
+  text-decoration: none;
+  background: var(--body-bg);
+  color: var(--text);
+  border: 1px solid transparent;
+  box-shadow: none;
+
+  height: var(--btn-height);
+  border-radius: 10px;
+  padding: 0 14px;
+
+  font-weight: 700;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.nav-link:hover {
+  background: rgba(30, 64, 175, 0.08);
+}
+
+@media (max-width: 1100px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  nav.shell-nav {
+    position: relative;
+    height: auto;
+    top: auto;
+  }
+}
+
+/* ============ Small helpers ============ */
+.row {
+  display: flex;
+  gap: var(--gap);
+  flex-wrap: wrap;
+}
+
+.hidden {
+  display: none !important;
+}
