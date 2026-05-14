@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - Manager Maintenance</title>
+    <link rel="stylesheet" href="static/global.css" />
+    <link rel="icon" type="image/svg+xml" href="https://static.wikia.nocookie.net/logopedia/images/e/e3/Minecraft_Launcher.svg/revision/latest/scale-to-width-down/250?cb=20230616222246" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- Manager nav only -->
+      <nav class="shell-nav" aria-label="Manager navigation">
+        <div class="nav-title">MC Manager</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="manager_worlds.html">World Management</a>
+          <a class="nav-link" href="setup.html">Setup / Onboarding</a>
+          <a class="nav-link" href="manager_settings.html">Manager Settings</a>
+          <a class="nav-link" href="user_management.html">User Management</a>
+          <a class="nav-link" href="maintenance_retention.html">Maintenance & Retention</a>
+          <a class="nav-link" href="instructions_documentation.html">Instructions & Docs</a>
+          <a class="nav-link" href="system_logs.html">System Logs</a>
+          <a class="nav-link" href="audit_history.html">Audit / History</a>
+          <a class="nav-link" href="offsite_sync.html">Offsite Sync</a>
+          <a class="nav-link active" href="manager_maintenance.html">Manager Maintenance</a>
+          <a class="nav-link" href="world_templates.html">World Templates</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Version update / rollback (action pane) -->
+        <article class="pane pane-stationary pane-action">
+          <header class="pane-title-area">
+            <h2>Version Update & Rollback</h2>
+            <div class="pane-head-actions">
+              <!-- Update button should only show up if updates found; CSS-only placeholder -->
+              <button class="btn-action-blue" type="button">Check for updates</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <button class="btn-action-blue" type="button">Update Manager (conditional)</button>
+              <button class="btn-action-red" type="button">Rollback Manager (conditional)</button>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Server restart (action pane) -->
+        <article class="pane pane-stationary pane-action">
+          <header class="pane-title-area">
+            <h2>Server Restart</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-red" type="button">Restart Server</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <button class="btn-action-blue" type="button">Pre-check</button>
+              <button class="btn-action-red" type="button">Restart Now</button>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

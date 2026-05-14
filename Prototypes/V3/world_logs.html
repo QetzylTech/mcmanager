@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - World Logs</title>
+    <link rel="stylesheet" href="static/global.css" />
+    <link rel="icon" type="image/svg+xml" href="https://static.wikia.nocookie.net/logopedia/images/e/e3/Minecraft_Launcher.svg/revision/latest/scale-to-width-down/250?cb=20230616222246" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- World nav only -->
+      <nav class="shell-nav" aria-label="World navigation">
+        <div class="nav-title">World</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="world_main.html">World Main</a>
+          <a class="nav-link" href="world_backup_restore.html">Backups & Restore</a>
+          <a class="nav-link active" href="world_logs.html">World Logs</a>
+          <a class="nav-link" href="file_manager.html">File Manager</a>
+          <a class="nav-link" href="world_maintenance_retention.html">World Maintenance</a>
+          <a class="nav-link" href="world_setup.html">World Setup</a>
+          <a class="nav-link" href="world_properties.html">World Properties</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Log source (form pane) -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Log Source</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Refresh</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <div class="ui-flex-field">
+                <p>Log Type</p>
+                <input class="ui-text-input" type="text" value="Minecraft Logs" aria-label="Log type" />
+              </div>
+
+              <div class="ui-flex-field">
+                <p>Sort</p>
+                <input class="ui-text-input" type="text" value="Newest First" aria-label="Log sort" />
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Log file list (list pane) -->
+        <article class="pane pane-stationary pane-list">
+          <header class="pane-title-area">
+            <h2>Log File List</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Open</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <ul class="list" aria-label="Log files list">
+              <li>latest.log</li>
+              <li>debug.log</li>
+              <li>crash-reports/crash-2026-05-12.txt</li>
+              <li>backup-logs/backup-2026-05-12.log</li>
+            </ul>
+          </section>
+        </article>
+
+        <!-- Pane: Live log / viewer (viewer pane) -->
+        <article class="pane pane-stationary pane-viewer">
+          <header class="pane-title-area">
+            <h2>Live Log / Viewer</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Download</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="log-console">
+              <div class="log-console-subtitle">tail -f (simulated)</div>
+              <div>
+                [Server thread/INFO]: Starting Minecraft server on 25565<br />
+                [Server thread/INFO]: Done (2.35s)! For help, type “help”<br />
+                [Server thread/WARN]: Example warning message
+              </div>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

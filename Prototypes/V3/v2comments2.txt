@@ -1,0 +1,36 @@
+Prototype comments:
+Prototype v2 is inside the prototypes/v2 folder and is copied to the current v3 folder
+Before reading these comments, read first the files inside docs folder.
+Implement the comment in the current v3.
+
+General:
+12px rule: Buttons and text inside lists in cards still have excessive spacing, clearly not 12px expecially at the left side and at the bottom of the last list item, and at the top of the first item
+Highlighted buttons: Currently, when i hover on highlighted items, like in nav, the highlight color correct but upon hover, it turns into the unhighlighted hover color. I want a style guide edit where if a button is highlighted purple, ignore the other color schemes and follow the purple button scheme. I don't think css rule edit is necessary since i think this is a class or selector issue but I could be wrong so css edit is still allowed. Please stick closely to the rules in the docs - css must be global, html elements must use global css, no unique, local, or hero styling, only position, height, and width shall be allowed as local styling.
+Mobile layout: When in mobile layout (screen width too small), do not make the nav take up the entire screen and have every other pane stack below it. Instead, nav bar retains its width on any screen size and it just slides out of view when screen width is too small. Just add an arrow on the left side to show the nav. Treat this as a global css rule and a style guide edit also.
+Warning and indicator colors: While currently no elements use them, I want to add a color scheme with attached meanings for future use in indicators - teal (color for good status, copy the normal teal button color), amber (color for warnings), emergency red (errors and dangerous values - copy the normal red button color)
+Fonts: I want a single font for the entire site. Arial as primary, helvetica and roboto as backup. Bold is reserved for button texts form labels, and pane titles. Button texts and form labels have the same font size. Pane titles may have a larger font size than buttons. Pane titles must have a constant font size throughout the site. Pane titles are either h1 or h2 (h1 and h2 follow the same visual style). 
+Dark mode: only body background and pane background colors, and texts have dark mode. Buttons do not have variations for dark or light mode.
+Multi card pane: When there are multiple cards inside a pane, keep them on the same row. When screen width is insufficient, wrap them
+Body BG color buttons: change the sytle guide and global css so the hover color is more obvious. darker for light mode and lighter for dark mode. You can take inspiration from the hover color on the legacy prototype nav bar.
+
+For prototyping purposes:
+I want you to add buttons at the bottom of the nav bar for toggling light and dark mode, toggling status for server on and off, backup running or not.
+I want a js script that simulates dummy data and dummy actions to make buttons look like they are working. This can just be a simple prototype.js. The only logic I need there is to make the pages look alive.
+
+Manager Context:
+Retain the current contents unless edits are specified
+
+
+World Context:
+I want you to study prototypes/legacy. Specifically, study the layout and content of the pages. These are already proven to be acceptable to the clients.
+After studying it, I want you to implement the same layout but now adapted to our prototype.
+Legacy home page - retain the contents and data and implement in world context homepage but witht he new css and style guide
+Legacy backup and restore - retain the contents but remove the buttons for the logs and use the new style guide and css
+Legacy cleanup page - i want this implemented in both Maintenance & Retention page of manager context, and World maintenance page of world context. Keep the missed job handling and old log cleanup from the v2 prototype on both contexts. For the world context, retain the maintenance mode buttons so there is still a toggle if the world follows global settings from manager context or local world settings
+Legacy panel settings - do not carry over to v3.
+Legacy instructions page - do not carry over to v3.
+Legacy log files page - use the legacy log file viewer and log file list card.
+
+World logs folder:
+Log type should be a dropdown of the types of logs
+Sort should also be a dropdown

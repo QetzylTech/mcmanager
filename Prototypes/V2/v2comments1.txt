@@ -1,0 +1,79 @@
+Now, I want to turn the prototype into something served by a prototype.py flask app. 
+
+Don't add dummy js yet. 
+
+Also some comments and modifications:
+General:
+I want to edit the style guide and the css to add the following classes for panes since there are different kinds of panes:
+Pane classes based on movement: stationary and sliding
+- stationary does not move around in the page 
+- sliding does not appear until a trigger is pressed which causes the pane to slide into view either from the right or from the bottom of the page. sliding causes the panes already rendered in the page to adjust their height or width to make way for the sliding pane. sliding direction depends on device - desktop slides in and out at the right side, mobile device slides vertically from the bottom
+
+Text input boxes - same size rules as buttons - 40 height, 80 min width. If text input box is inside content area, its color should be = pane color, else it's body background color. They should also never overlap and overflow the card that contains them. always maintain the 12px spacing. Text input boxes also should not have borders
+
+For all elements (panes, cards, buttons, dropdowns, inputs, etc.) max width should be = their parent element -24px (12px space on each side)
+
+Pane classes based on use: 
+Metrics pane - shows stats and metrics
+list pane - shows lists of something eg files, worlds, etc. 
+Form pane - contains forms like settings and configs. 
+Viewer pane - shows text from either a live log sse stream source or a text or log file. 
+Action pane - contains controls or buttons corresponding to actions and functions or operations; similar to form pane but it's for doing things instead of saving stuff. 
+File pane - contains file explorer like capability; like list pane in list view but can be toggled to icon grid view; supports file operations like copy, move, delete, upload, create new folder, rename. 
+Docs pane - shows documents parsed from a markdown file - similar in use to a file pane in file read mode but has extra support for markdown specific parsing and interpretation. 
+Form list pane - like a fusion between list pane and form pane where there is a list of data like an address-name map and the data is editable appendable.
+
+Per page comments:
+----------------------------
+Homepage
+Server stats pane (metrics pane) - Cpu data should be per core utilization in percentage only. No peak or average. I want it displayed as CPU: C1:20.0% C2 50.2%. Remove world stats - running and recently run. Ram: remove free. I want it displayed as RAM: 50gb/64gb. Storage is shown the same way as ram. 
+Running worlds (list pane): when there are no running worlds, the content area shows the message: no worlds currently running
+Recently run worlds (list pane) list should show the quick actions - start, stop, manage
+
+---------------------------
+World management page:
+worlds (list pane) should be at the top. Create new worlds pane should be a slide in pane.. Worlds list: add the backup button.
+Create new worlds (form pane) : should be a sliding pane shown only when the create new button from the worlds list is pressed. It slides in. 
+Remove the browse catalog button.
+The content of the create new worlds pane should be this:
+World name: <required>
+World Template: Vanilla, Forge, Fabric, Paper, None - if none, gray out the remaining options starting from the version dropdown
+Version: Dropdown selection of versions for each platform
+World Seed: <optional>
+World tagline: <optional>
+Port: <optional - if blank, manager chooses a random valid port>
+Gamemode dropdown <creative, survival, adventure, spectator>
+Game difficulty
+Cancel Button, Create Button
+
+--------------------------------
+Setup/ Onboarding page:
+First run setup (form pane)
+Delete: Alert sounds
+Delete: Alert messages
+Delete: Delete repetition rules
+Path settings: all of these should be text inputs
+
+Imports & requirements pane - delete this
+
+-------------------------------------
+Manager settings page:
+See general comment about the text input boxes
+
+----------------------------------
+User Management:
+See general comment about the text input boxes
+
+--------------------------------
+Manager Maintenance:
+Version update and rollback: The button should say check for updates. If updates found, only then should the update button show up. Rollback button should only be shown if a previous update has been made.
+Remove the check status from manager restart pane
+
+Nav:
+Don't show all items in the nave bar. I want 2 navs: manager nav and world nav
+Manager nav is used to navigate accross the entire manager
+World nav is shown only when managing a world (The manage button for that world is pressed)
+
+Only show 1 nav at a time
+
+These comments are incomplete for now but I guess you can still make proper interpretations.

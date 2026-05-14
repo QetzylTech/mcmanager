@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - World Maintenance</title>
+    <link rel="stylesheet" href="static/global.css" />
+    <link rel="icon" type="image/svg+xml" href="https://static.wikia.nocookie.net/logopedia/images/e/e3/Minecraft_Launcher.svg/revision/latest/scale-to-width-down/250?cb=20230616222246" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- World nav only -->
+      <nav class="shell-nav" aria-label="World navigation">
+        <div class="nav-title">World</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="world_main.html">World Main</a>
+          <a class="nav-link" href="world_backup_restore.html">Backups & Restore</a>
+          <a class="nav-link" href="world_logs.html">World Logs</a>
+          <a class="nav-link" href="file_manager.html">File Manager</a>
+          <a class="nav-link active" href="world_maintenance_retention.html">World Maintenance</a>
+          <a class="nav-link" href="world_setup.html">World Setup</a>
+          <a class="nav-link" href="world_properties.html">World Properties</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Inherit vs override -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Maintenance Mode</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+            <div class="row mt-0">
+              <button class="btn-action-teal" type="button">Inherit Global Settings</button>
+              <button class="btn-action-blue" type="button">Override Locally</button>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Backup retention overrides -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Backup Retention (Local)</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Apply</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <div class="ui-flex-field">
+                <p>Keep latest backups</p>
+                <input class="ui-text-input" type="text" value="5" aria-label="Keep latest backups (local)" />
+              </div>
+
+              <div class="ui-flex-field">
+                <p>Keep for days</p>
+                <input class="ui-text-input" type="text" value="30" aria-label="Keep for days (local)" />
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Stale cleanup -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Stale World Cleanup</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Apply</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="mt-0">
+              <div class="row mt-0">
+                <button class="btn-action-blue" type="button">Run Dry Run</button>
+                <button class="btn-action-red" type="button">Run Wet Run</button>
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Log cleanup -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>Old Log Cleanup</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <div class="ui-flex-field">
+                <p>Keep logs for days</p>
+                <input class="ui-text-input" type="text" value="14" aria-label="Keep logs for days (local)" />
+              </div>
+
+              <div class="ui-flex-field">
+                <p>Schedule</p>
+                <input class="ui-text-input" type="text" value="Daily" aria-label="Log cleanup schedule (local)" />
+              </div>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

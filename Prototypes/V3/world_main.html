@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - World Main</title>
+    <link rel="stylesheet" href="static/global.css" />
+    <link rel="icon" type="image/svg+xml" href="https://static.wikia.nocookie.net/logopedia/images/e/e3/Minecraft_Launcher.svg/revision/latest/scale-to-width-down/250?cb=20230616222246" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- World nav only (includes Homepage link in local context) -->
+      <nav class="shell-nav" aria-label="World navigation">
+        <div class="nav-title">World</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link active" href="world_main.html">World Main</a>
+          <a class="nav-link" href="world_backup_restore.html">Backups & Restore</a>
+          <a class="nav-link" href="world_logs.html">World Logs</a>
+          <a class="nav-link" href="file_manager.html">File Manager</a>
+          <a class="nav-link" href="world_maintenance_retention.html">World Maintenance</a>
+          <a class="nav-link" href="world_setup.html">World Setup</a>
+          <a class="nav-link" href="world_properties.html">World Properties</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: Selected World summary (stationary) -->
+        <article class="pane pane-stationary pane-metrics">
+          <header class="pane-title-area">
+            <h2>Selected World</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Change World</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="mt-0">
+              <p class="stat-label">Name</p>
+              <div class="status-row">
+                <span><strong>Example World</strong></span>
+              </div>
+            </div>
+
+            <div class="mt-12">
+              <p class="stat-label">Current Port / Status</p>
+              <div class="status-row">
+                <span><strong>25565</strong> — Running</span>
+                <span><strong>Last Started:</strong> 2026-05-13 00:00</span>
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: World controls -->
+        <article class="pane pane-stationary pane-action">
+          <header class="pane-title-area">
+            <h2>World Controls</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Start</button>
+              <button class="btn-action-red" type="button">Stop</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <button class="btn-action-blue" type="button">Backup Now</button>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

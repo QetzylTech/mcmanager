@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC Manager - World Properties</title>
+    <link rel="stylesheet" href="static/global.css" />
+    <link rel="icon" type="image/svg+xml" href="https://static.wikia.nocookie.net/logopedia/images/e/e3/Minecraft_Launcher.svg/revision/latest/scale-to-width-down/250?cb=20230616222246" />
+  </head>
+  <body class="mcweb">
+    <div class="shell">
+      <!-- World nav only -->
+      <nav class="shell-nav" aria-label="World navigation">
+        <div class="nav-title">World</div>
+        <div class="nav-list">
+          <a class="nav-link" href="index.html">Homepage</a>
+          <a class="nav-link" href="world_main.html">World Main</a>
+          <a class="nav-link" href="world_backup_restore.html">Backups & Restore</a>
+          <a class="nav-link" href="world_logs.html">World Logs</a>
+          <a class="nav-link" href="file_manager.html">File Manager</a>
+          <a class="nav-link" href="world_maintenance_retention.html">World Maintenance</a>
+          <a class="nav-link" href="world_setup.html">World Setup</a>
+          <a class="nav-link active" href="world_properties.html">World Properties</a>
+        </div>
+      </nav>
+
+      <main class="panes" aria-label="Page content">
+        <!-- Pane: server.properties editor -->
+        <article class="pane pane-stationary pane-form">
+          <header class="pane-title-area">
+            <h2>server.properties Editor</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-blue" type="button">Validate</button>
+              <button class="btn-action-teal" type="button">Save</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="mt-0">
+              <textarea
+                class="ui-text-input ui-props-textarea"
+                aria-label="server.properties content"
+              ># server.properties (placeholder)
+online-mode=true
+difficulty=normal
+motd=Example World</textarea>
+            </div>
+
+            <div class="row mt-12">
+              <button class="btn-action-blue" type="button">Show Validation Errors</button>
+              <button class="btn-action-blue" type="button">Show Parsed Keys</button>
+            </div>
+          </section>
+        </article>
+
+        <!-- Pane: Apply behavior -->
+        <article class="pane pane-stationary pane-action">
+          <header class="pane-title-area">
+            <h2>Apply Behavior</h2>
+            <div class="pane-head-actions">
+              <button class="btn-action-teal" type="button">Apply</button>
+            </div>
+          </header>
+
+          <section class="pane-content-area">
+            <div class="row mt-0">
+              <button class="btn-action-teal" type="button">Apply Immediately (Safe)</button>
+              <button class="btn-action-blue" type="button">Stage for Next Restart</button>
+            </div>
+
+            <div class="mt-12">
+              <p class="stat-label">Validation Summary</p>
+              <div class="status-row">
+                <span><strong>Status:</strong> OK (placeholder)</span>
+                <span><strong>Warnings:</strong> 0</span>
+              </div>
+            </div>
+          </section>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>
