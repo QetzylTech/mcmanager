@@ -1,0 +1,109 @@
+Document 7: Database Schema & Persistence Design
+
+Purpose - Define the persistent storage model for the manager. - Specify
+what information is stored permanently. - Define relationships between
+persisted entities. - Remain independent of ORM or database
+implementation details. - Serve as the reference for future database
+migrations.
+
+1.  Design Goals
+
+-   Lightweight SQLite database.
+-   Portable across operating systems.
+-   Human-inspectable.
+-   Safe under unexpected shutdown.
+-   Easy schema migration.
+-   Preserve audit history.
+-   Minimize duplicate data.
+-   Separate persistent state from runtime state.
+
+2.  Persistence Philosophy
+
+Persist: - World definitions - Templates - Java runtimes - Users -
+Roles - Permissions - Devices - Global settings - World settings -
+Scheduled jobs - Backup inventory - Cleanup policies - Notification
+history - Audit history - Operation history - Restore history - Secret
+metadata
+
+Do NOT Persist: - Running processes - Process handles - Live CPU/RAM
+metrics - Live player count - Live RCON sessions - Current log stream -
+Temporary job state
+
+These belong to the runtime model and are reconstructed when the manager
+starts.
+
+3.  Database Overview
+
+Manager └── WorldInstance ├── BackupArtifact ├── Operation ├── Schedule
+├── CleanupPolicy ├── Secret ├── RestoreHistory └── WorldSettings
+
+Manager also owns: - Users - Roles - Permissions - Devices - Templates -
+JavaRuntimes - GlobalSettings - AuditRecords - Notifications
+
+4.  Tables
+
+Each table definition should document: - Purpose - Responsibilities -
+Columns - Relationships - Constraints - Indexes - Lifecycle
+
+Initial tables: - world_instances - templates - java_runtimes -
+world_settings - global_settings - operations - backup_artifacts -
+restore_history - cleanup_policies - schedules - notifications -
+audit_records - users - roles - permissions - devices -
+client_sessions - secrets
+
+5.  Relationships
+
+One Manager owns many WorldInstances. One WorldInstance owns many
+Operations. One WorldInstance owns many BackupArtifacts. One
+WorldInstance owns many RuntimeSessions (history only). One User
+performs many Operations. One Role contains many Permissions. One User
+may have multiple Roles. One Device may create multiple ClientSessions.
+
+6.  Constraints
+
+-   World IDs are immutable.
+-   Display names should be unique.
+-   Network ports must be unique.
+-   One active RuntimeSession per WorldInstance.
+-   Backup artifacts cannot exist without a WorldInstance.
+-   Audit records are append-only.
+-   Operations are immutable except status progression.
+-   Secrets are never readable by clients.
+
+7.  Transactions
+
+The following should execute atomically: - World creation - World
+deletion - Backup registration - Restore - Cleanup - Permission
+changes - User creation - Secret rotation
+
+8.  Migration Strategy
+
+-   Schema version table.
+-   Sequential migrations.
+-   Automatic migration at startup.
+-   Rollback support where practical.
+-   Never silently destroy user data.
+
+9.  Data Retention
+
+Never automatically delete: - Audit records - Required recovery
+artifacts
+
+Retention policies may remove: - Old backups - Old logs - Temporary
+restore artifacts - Expired notifications - Expired sessions
+
+10. Future Expansion
+
+Reserve schema flexibility for: - Multi-host clustering - Google Drive
+sync - NAS sync - Plugin registry - Historical metrics - Additional
+server types
+
+Design Note
+
+The database is the source of truth for configuration and historical
+records. The in-memory runtime registry is the source of truth for live
+execution state.
+
+On manager startup: 1. Load persistent configuration. 2. Discover
+running processes. 3. Reconcile persisted and live state. 4. Rebuild
+runtime registry.

@@ -1,0 +1,62 @@
+Document 4: Domain Model
+
+Purpose - Define the core business objects of the next-generation
+Minecraft Manager independently of Flask, SQLite, or platform-specific
+implementation.
+
+Core entities
+
+Manager - Owns global configuration, scheduling, world registry,
+security, event bus and system services.
+
+WorldInstance - Represents one independently managed Minecraft server. -
+Owns identity, paths, ports, configuration, runtime selection, logs,
+backups, secrets and policies. - Relationships: - Has many
+BackupArtifacts. - Has many Operations. - Has many RuntimeSessions over
+time. - Has one active RuntimeSession when running.
+
+RuntimeSession - Represents one continuous execution of a
+WorldInstance. - Starts when the server launches successfully. - Ends
+when the server fully stops. - Owns session-specific metadata including
+unique RCON credentials.
+
+JavaRuntime - Registered Java installation usable by one or more
+WorldInstances.
+
+Template - Describes a reusable server baseline (Vanilla, Paper, Fabric,
+Forge, etc.).
+
+Operation - Durable record for every state-changing action. - Types
+include Start, Stop, Kill, Backup, Restore, Cleanup, Sync, ConfigEdit. -
+Contains status, checkpoints, timestamps, actor and idempotency key.
+
+BackupArtifact - Immutable backup produced by the manager. - Belongs to
+one WorldInstance.
+
+CleanupPolicy - Defines retention rules for backups, logs and artifacts.
+
+Schedule - Defines recurring execution for backups, cleanup and
+maintenance.
+
+Notification - User-visible event generated from Operations or system
+events.
+
+AuditRecord - Immutable history of security and operational events.
+
+ClientSession - Authenticated browser session with permissions and trust
+context.
+
+Device - Known client device used for policy evaluation.
+
+Role - Permission grouping.
+
+Permission - Grants an action globally or for a specific WorldInstance.
+
+Suggested aggregate roots - Manager - WorldInstance - Template - Device
+
+Key invariants - World IDs are immutable. - Every RuntimeSession belongs
+to exactly one WorldInstance. - Every BackupArtifact belongs to exactly
+one WorldInstance. - Only one active RuntimeSession may exist per
+WorldInstance. - Operations are immutable except for status
+progression. - Audit records are append-only. - Secrets never leave the
+server.

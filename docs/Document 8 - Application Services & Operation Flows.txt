@@ -1,0 +1,120 @@
+Document 8: Application Services & Operation Flows
+
+Purpose - Define the application service layer. - Specify how business
+operations are orchestrated. - Describe workflows independently of Flask
+routes or UI implementation.
+
+1.  Design Principles
+
+-   All state-changing actions execute as Operations.
+-   Operations are durable and restart-safe.
+-   Services coordinate domain objects but do not own business data.
+-   Services should be stateless where practical.
+-   Long-running tasks report progress through checkpoints.
+
+2.  Application Services
+
+Core Services - WorldService - RuntimeService - OperationService -
+BackupService - RestoreService - CleanupService - SchedulerService -
+AuthenticationService - AuthorizationService - NotificationService -
+AuditService - FileManagerService - TemplateService -
+JavaRuntimeService - ConfigurationService - MetricsService
+
+3.  Operation Lifecycle
+
+Created → Queued → Validating → Running → Completed
+
+Alternative outcomes: - Failed - Cancelled - Timed Out
+
+Every operation records: - ID - Actor - World - Type - Status -
+Progress - Checkpoints - Start time - Finish time - Result - Failure
+reason
+
+4.  Standard Operation Flow
+
+5.  User requests an action.
+
+6.  Authorization is verified.
+
+7.  Preconditions are validated.
+
+8.  Operation record is created.
+
+9.  Operation enters queue.
+
+10. Scheduler dispatches operation.
+
+11. Service performs work.
+
+12. Progress events are emitted.
+
+13. Audit record is written.
+
+14. Notifications are generated.
+
+15. Operation completes.
+
+16. Core Workflows
+
+Start World - Validate world. - Verify runtime. - Allocate ports. -
+Launch process. - Wait for readiness. - Register RuntimeSession. -
+Publish WorldStarted event.
+
+Stop World - Verify running state. - Send graceful stop. - Wait for
+shutdown. - Escalate if timeout. - Record shutdown result.
+
+Backup - Validate world. - Flush pending saves. - Pause writes where
+supported. - Create archive. - Calculate metadata. - Register
+BackupArtifact. - Resume writes. - Publish BackupCompleted event.
+
+Restore - Validate backup. - Stop world if required. - Verify
+integrity. - Restore files. - Register RestoreHistory. - Publish
+RestoreCompleted event.
+
+Cleanup - Evaluate retention policy. - Dry-run if requested. - Delete
+expired artifacts. - Produce cleanup summary. - Publish CleanupCompleted
+event.
+
+World Creation - Select template. - Allocate identifiers. - Prepare
+directories. - Copy template files. - Apply configuration. - Register
+WorldInstance.
+
+World Deletion - Verify permissions. - Confirm operation. - Stop runtime
+if active. - Archive if configured. - Remove files. - Remove registry
+entries.
+
+6.  Scheduler Responsibilities
+
+-   Execute scheduled jobs.
+-   Retry failed jobs when allowed.
+-   Handle missed jobs.
+-   Prevent duplicate execution.
+-   Respect concurrency limits.
+
+7.  Notifications
+
+Generated for: - Operation completion - Operation failure - Maintenance
+events - Security events - World crashes - Startup failures
+
+8.  Audit
+
+Every state-changing action produces: - Audit record - Timestamp -
+User - Device - IP address - Operation reference
+
+9.  Failure Recovery
+
+Manager restart: - Load incomplete operations. - Determine resumable
+operations. - Mark unrecoverable operations. - Reconcile runtime
+state. - Resume scheduler.
+
+10. Extension Points
+
+Future services may include: - Cluster management - Plugin hosting -
+Cloud synchronization - Metrics history - Additional game server support
+
+Summary
+
+The application service layer coordinates domain objects without
+containing business rules. Every significant action is represented as a
+durable operation that can be audited, monitored, resumed where
+appropriate, and communicated to the user through notifications.
