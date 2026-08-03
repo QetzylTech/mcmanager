@@ -7,10 +7,20 @@ assistants working on the project.
 
 ## General Rules
 
--   Read **Documents 2--9** before making any architectural decisions.
+-   Read **Documents 2--10** before making any architectural decisions.
 -   Treat the design documents as the source of truth.
 -   If implementation conflicts with the documents, follow the
     documents.
+-   If two documents conflict with each other, **Document 10
+    (Precedence & Conflict Resolution) governs.** Check it before
+    assuming a lower-numbered document is still accurate — several
+    points in Documents 1 and 3 have been explicitly superseded there
+    (nav-bar alert behavior, secrets storage location, among others).
+-   Each numbered document exists as exactly one file in the project.
+    If you ever find two files claiming to be the same document
+    number, stop and flag it rather than guessing which one is
+    current — do not assume the one with a higher revision suffix
+    automatically wins.
 
 ## Architecture
 
@@ -26,6 +36,15 @@ assistants working on the project.
 -   Do not invent new domain concepts unless explicitly required.
 -   Preserve aggregate boundaries and ownership rules.
 -   Follow the documented business invariants.
+-   Every state-changing action executes as a durable Operation
+    (Document 6/8) — including world creation and deletion
+    (`CreateWorld`/`DeleteWorld`), not just the more obviously
+    stateful actions like start/stop/backup/restore.
+-   Follow the Global Deletion & Retention Model (Document 6): Tier 1
+    entities are never deleted by anything; Tier 2 entities are
+    soft-deleted (`deleted_at`) by normal actions and physically
+    removed only by the Cleanup subsystem, never by any other route,
+    command handler, or service.
 
 ## Persistence
 
@@ -53,7 +72,9 @@ assistants working on the project.
 -   Follow the CSS Style Guide (Document 4).
 -   Follow the Navigation & Workflow Blueprint (Document 5).
 -   Do not introduce page-specific styling systems.
--   Reuse shared UI components whenever possible.
+-   Reuse shared UI components whenever possible — including the
+    Status Indicator component (Document 4 §17) for any state display,
+    rather than inventing a one-off badge/label treatment.
 
 ## Coding Standards
 
@@ -66,7 +87,7 @@ assistants working on the project.
 
 Verify that:
 
--   The implementation aligns with Documents 2--9.
+-   The implementation aligns with Documents 2--10.
 -   No architectural rules were violated.
 -   Naming remains consistent.
 -   Existing abstractions are reused instead of duplicated.
