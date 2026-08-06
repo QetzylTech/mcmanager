@@ -1,7 +1,9 @@
-Document 5: MC Manager Proposed Site Map (Revision 2 — Sync Status/Retry History Added)
+Document 5: MC Manager Proposed Site Map (Revision 3 — Notification Dropdown, World Search/Filter, ManagerBackup UI)
 
 Revision note
-- This is a full, standalone replacement for the original Document 5, not a delta layered on top of it. Everything below the "Amendment" markers is the verified original document, unchanged. The amendments close one gap found during the full-project consistency recheck: Doc 2 §4.4 requires "sync logs and sync failures must be stored and surfaced in the UI," and Documents 6/7/8 now define a real `sync_records`/`sync_attempts` retry-history model to surface — but the original Document 5 only had a settings page for *configuring* sync targets, nothing for *viewing* sync outcomes.
+- This is a full, standalone replacement for the original Document 5, not a delta layered on top of it. Everything not marked "Amendment"/"added this revision" is the verified original document, unchanged.
+- Revision 2 closed a sync-visibility gap: Doc 2 §4.4 requires "sync logs and sync failures must be stored and surfaced in the UI," and Documents 6/7/8 define a real `sync_records`/`sync_attempts` retry-history model to surface, but the original only had a settings page for *configuring* sync targets.
+- Revision 3 (this revision) addresses the product-behavior review: a proper notification dropdown (was previously just a bare "notifications" bullet with no defined UI), search/filter for world lists at scale, a ManagerBackup UI entry point, and the Client/Admin/Superadmin role renaming.
 
 Purpose
 - Define a proposed site structure and navigation model for the next-generation manager.
@@ -20,7 +22,7 @@ Navigation model
   - current page
   - selected world
   - alerts
-  - notifications
+  - **notifications — a persistent bell/dropdown element in the shell (Facebook/YouTube-style), added this revision per your explicit product decision.** Shows recent notifications sorted with `critical`/`high` severity surfaced above `normal`/`informational` (Doc 6 §2.8, Doc 8 `NotificationService`), an unread-count badge (using the Status Indicator component, Doc 4 §17), "mark all read," and a link to the full permanent history on the Audit/History page. Items can be marked read or dismissed from the dropdown (per-user, per Doc 7 `notification_reads.dismissed_at`) but this never deletes the underlying notification — the Audit/History page always shows the complete permanent record regardless of any user's dropdown-dismiss state.
   - theme
   - client/session state
   - reconnect/offline status
@@ -36,7 +38,8 @@ Manager Context
   --- Each world on the list has quick actions: Start, Stop, Manage button
   - World management page
   -- List of worlds (With info: Minecraft version, mod launcher version, world name, current port used if running)
-  --- Create new worlds based on curated list of worlds (vanilla, forge, paper, fabric, etc)
+  -- **Search/filter/grouping (added this revision)**: search-by-name, filter by state/server-type/version. Original list-only assumption was sized for dozens of worlds; once a deployment approaches hundreds, an unfiltered flat list stops being usable at a glance (Doc 7 §2.4's `display_name` index backs this).
+  --- Create new worlds based on curated list of worlds (vanilla, forge, paper, fabric, etc — plus any custom `Template` an admin has added, since server type is data-driven, not a fixed code list, per Doc 7 §2.6)
   --- Manage world (go to world context)
   -- Global world backup schedules and triggers
   - Setup / Onboarding page
@@ -60,7 +63,7 @@ Manager Context
   -- Blacklist and Whitelist
   -- Client Rulesets page
   -- User account passwords and username setup
-  -- User account privileges (viewer/operator, admin, superadmin)
+  -- User account privileges (**Client / Admin / Superadmin** — renamed this revision per your explicit product decision, supersedes the earlier "viewer/operator, admin, superadmin" draft naming). Superadmin-only: grant individual `permissions` to a specific Client or Admin account (e.g. a Client granted cleanup/maintenance access without a full Admin promotion) — Doc 6 §2.16 delegation invariant.
   - Maintenance and Retention page - global settings, treated as default settings unless local settings exist per world.
   -- Backup retention settings
   -- Stale world cleanup settings - cleanup stale worlds created from restore operations
@@ -88,6 +91,7 @@ Manager Context
   -- Server restart
   -- Manager version update
   -- Manager version rollback
+  -- **Manager backup / restore (added this revision, closes the disaster-recovery gap from review)**: trigger a ManagerBackup on demand (backs up the manager's own database/settings/templates/permissions, independent of any world's content — Doc 6 §2.5, Doc 8 `BackupService`), view manager backup history, restore the manager's own configuration from a prior ManagerBackup.
   - World template catalog page
   -- World template list
   -- World template management (adding, editing, deleting templates) - can edit versions, server type, Java runtime

@@ -1,4 +1,4 @@
-Document 8: Application Services & Operation Flows (Revision 2 — Full Expansion)
+Document 8: Application Services & Operation Flows (Revision 3 — Product Design Review: Roles Renamed, ManagerBackup, Generalized Optimistic Locking, Concurrency Model Superseded by Document 11)
 
 Purpose
 - Turns Document 6 (Revision 6) and Document 7 (Revision 2) into concrete service behavior: who does what, in what order, with what retry/timeout/cancellation/concurrency rules.
@@ -9,7 +9,8 @@ Purpose
 Each service is described as: what it owns, what it explicitly does not do, and which Doc 7 tables it touches.
 
 **WorldService**
-- Owns: world registry CRUD, template-based world creation orchestration (under a `CreateWorld` Operation), world listing/detail queries, tombstoning (under a `DeleteWorld` Operation).
+- Owns: world registry CRUD, template-based world creation orchestration (under a `CreateWorld` Operation), world listing/detail queries, tombstoning (under a `DeleteWorld` Operation), and `RenameWorld` (a lightweight `ConfigEdit`-type Operation editing `display_name` only — allowed concurrently with Backup/Restore/Cleanup on the same world, per Document 11 §3.1).
+- Enforces the runtime-configuration change rule (Doc 6 §4): `java_runtime_id`/`launch_args`/`port` edits are rejected unless the world is `off`; the write is immediate, the effect deferred to next boot by construction (Document 11 §5).
 - Does not: manage the live process, perform backup/restore/cleanup work itself — it delegates to RuntimeService/BackupService/RestoreService/CleanupService and only owns the `world_instances`/`world_settings` rows.
 - Touches: `world_instances`, `world_settings`, `templates` (read), `java_runtimes` (read).
 
@@ -24,7 +25,7 @@ Each service is described as: what it owns, what it explicitly does not do, and 
 - Touches: `operations`.
 
 **BackupService**
-- Owns: backup capture (validate storage guard, pause autosave, flush/save, zip or snapshot, register `backup_artifacts`, resume autosave), RCON player notifications about backup start/end/failure, and triggering a `Sync` Operation immediately after a successful capture when a `SyncTarget` resolves for the world (world override or global default, per Doc 6 §2.17).
+- Owns: backup capture (validate storage guard, pause autosave, flush/save, zip or snapshot, register `backup_artifacts`, resume autosave), RCON player notifications about backup start/end/failure, and triggering a `Sync` Operation immediately after a successful capture when a `SyncTarget` resolves for the world (world override or global default, per Doc 6 §2.17). Also executes **ManagerBackup** — a `Backup` Operation with `world_id = NULL`, capturing the manager's own database/settings/templates/permissions rather than any world's content (Doc 6 §2.5, closes the disaster-recovery gap from review) — using the same capture mechanics, just against the manager's own SQLite file and config directories instead of a world directory.
 - Does not: decide *when* a backup should run (that's SchedulerService or a direct user request) — it only executes one, given an Operation. Also does not perform the sync transfer itself (SyncService's job) — it only dispatches the follow-on Operation.
 - Touches: `backup_artifacts`, `operations` (checkpoints), `runtime_sessions` (read, to know if the world is live).
 
@@ -56,13 +57,13 @@ Each service is described as: what it owns, what it explicitly does not do, and 
 - Touches: `users`, `secrets` (password verification), `client_sessions`, `devices` (context capture).
 
 **AuthorizationService**
-- Owns: policy evaluation for every privileged action — actor, role, direct permission, world scope, and current system safety state (e.g. storage guard) all factor in.
+- Owns: policy evaluation for every privileged action — actor, role, direct permission, world scope, and current system safety state (e.g. storage guard) all factor in. Enforces the three-role model (`Client`/`Admin`/`Superadmin`, Doc 6 §2.15, renamed this revision) and the delegation restriction: only a `Superadmin` may create or revoke a `permissions` row for another User — an `Admin` has full world authority but cannot grant permissions to others.
 - Does not: perform authentication itself; assumes a valid, non-expired ClientSession is already established.
 - Touches: `roles`, `role_assignments`, `permissions` (read-heavy).
 
 **NotificationService**
-- Owns: publishing `notifications` from Operation outcomes and system events, and lazily creating `notification_reads` rows as each user actually reads one.
-- Does not: decide business logic about *whether* something warrants a notification beyond the fixed trigger list in §9 — that list is owned by product requirements (Doc 2 §7.3), not by this service's discretion.
+- Owns: publishing `notifications` from Operation outcomes and system events with one of four severities (`critical`/`high`/`normal`/`informational`, Doc 6 §2.8), and lazily creating/updating `notification_reads` rows (`read_at`, `dismissed_at`) as each user actually reads or dismisses one. Serves the persistent notification-dropdown shell element (Doc 5) sorted with `critical`/`high` surfaced above `normal`/`informational` rather than pure chronological order.
+- Does not: decide business logic about *whether* something warrants a notification beyond the fixed trigger list in §9 — that list is owned by product requirements (Doc 2 §7.3), not by this service's discretion. Does not ever delete a `notifications` row — dismissal is per-user and reversible-in-effect (it only hides from that user's active dropdown), never a deletion (Doc 6 §2.8, your explicit instruction).
 - Touches: `notifications`, `notification_reads`.
 
 **AuditService**
@@ -75,13 +76,13 @@ Each service is described as: what it owns, what it explicitly does not do, and 
 - Touches: world filesystem directly (via platform adapter), `audit_records` (write).
 
 **TemplateService** / **JavaRuntimeService**
-- Own: CRUD and soft-deprecation of `templates` / `java_runtimes` respectively.
+- Own: CRUD and soft-deprecation of `templates` / `java_runtimes` respectively. `templates.category` is free-text (Doc 7 §2.6) — adding a new server type (Quilt, Purpur, NeoForge, Sponge, etc.) is a new Template row with a valid generic launch-command definition in `config_defaults`, never a code change, provided the platform adapter's launch mechanism reads that definition generically rather than switching on category (closes the plugin-architecture question from review).
 - Touch: `templates`, `java_runtimes`.
 
 **ConfigurationService**
-- Owns: guarded `server.properties` editing, and orchestrating `ConfigEdit` Operations for Schedule/CleanupPolicy/Role/Permission/SyncTarget edits and soft-deletes (per Doc 6's corrected deletion model — every edit or soft-delete of these entities is a `ConfigEdit` Operation, not a direct silent write).
-- Enforces optimistic concurrency on Schedule/CleanupPolicy edits (decided in Doc 6 §2.6/§2.7): an edit submitted against a stale `version` is rejected with a conflict error rather than silently overwriting a concurrent change.
-- Touches: `world_settings`, `global_settings`, `schedules`, `cleanup_policies`, `roles`, `permissions`, `role_assignments`, `sync_targets` (write, always via a logged `ConfigEdit`).
+- Owns: guarded `server.properties` editing, and orchestrating `ConfigEdit` Operations for Schedule/CleanupPolicy/Role/Permission/SyncTarget edits and soft-deletes (per Doc 6's corrected deletion model — every edit or soft-delete of these entities is a `ConfigEdit` Operation, not a direct silent write), plus `world_instances.display_name` (RenameWorld) and `world_settings`/`global_settings` edits including the per-world idle-countdown override added this revision.
+- Enforces optimistic concurrency on **every** multi-admin-editable table — generalized this revision from just Schedule/CleanupPolicy to also cover `global_settings`, `world_settings`, `templates`, `roles`, `sync_targets`, and `world_instances` metadata fields (Document 11 §4, full table there): an edit submitted against a stale `version` is rejected with a conflict error rather than silently overwriting a concurrent change.
+- Touches: `world_instances` (metadata only), `world_settings`, `global_settings`, `schedules`, `cleanup_policies`, `roles`, `permissions`, `role_assignments`, `sync_targets`, `templates` (write, always via a logged `ConfigEdit`).
 
 **MetricsService**
 - Owns: the cadence rules from Doc 1 §1 (paused when off + 0 clients, slow cadence when on + 0 clients, 1Hz broadcast when >=1 client), snapshot caching for instant first paint.
@@ -111,11 +112,11 @@ All flows follow the same shape from the original Doc 8 §4 ("Standard Operation
 
 3. Query Responsibilities (not every read needs a full service — this maps read to owner)
 
-- World list / detail -> WorldService (composes RuntimeService's live state + BackupService's last-backup summary).
+- World list / detail -> WorldService (composes RuntimeService's live state + BackupService's last-backup summary). Supports search-by-name and state/version filtering at the query layer (backed by the `world_instances (display_name)` index, Doc 7 §2.4) once world counts grow past a glance-able list — see Document 11's scalability note and Doc 5's search/filter UI addition.
 - Live metrics -> MetricsService.
 - Operation history / status -> OperationService.
 - Backup/restore inventory -> BackupService / RestoreService.
-- Notifications (unread count, list) -> NotificationService, joined against `notification_reads` for the requesting user.
+- Notifications (unread count, prioritized list) -> NotificationService, joined against `notification_reads` for the requesting user, sorted by severity then recency (Doc 6 §2.8).
 - Audit/history views -> AuditService.
 - Missed-run list -> SchedulerService.
 - Device/user/role management views -> AuthenticationService / AuthorizationService.
@@ -274,7 +275,7 @@ sequenceDiagram
 
 7. Concurrency and Conflict Matrix
 
-Formalizes the previously-scattered rules from Doc 1 §14 and Doc 3 §7.3 into one table.
+Formalizes the previously-scattered rules from Doc 1 §14 and Doc 3 §7.3 into one table. **Superseded by Document 11** where they differ — Document 11 is now the single authoritative source for lock taxonomy, the full mutual-exclusion matrix (including previously-unresolved pairs like RenameWorld+Backup and runtime-config-edit-while-running), generalized optimistic concurrency, and queue/reject/preempt semantics. This section is retained for the pairs it already covered correctly.
 
 | | Backup (same world) | Restore (same world) | Cleanup (same world/global scope) | Start/Stop (same world) |
 |---|---|---|---|---|

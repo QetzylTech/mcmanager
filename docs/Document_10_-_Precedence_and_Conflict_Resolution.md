@@ -39,6 +39,16 @@ This document does not introduce new product requirements. It arbitrates between
 - Unchanged: Doc 3 §8.3/§8.4's rules (secrets never leave the server, per-world/per-session RCON isolation, rotation requirements) still apply — this resolution only changes *where* the bytes live, not the access rules around them.
 - Confirmed: amendment applies to Doc 1 and Doc 3 only. Doc 4 has no secrets-related content and is unaffected.
 
+2.3 Concurrency model was scattered, not authoritative
+- Conflict: Doc 8 §7 had a conflict matrix, but no document defined lock taxonomy, generalized optimistic concurrency, or answered several concrete pairs (RenameWorld+Backup, Java runtime change while running, Schedule edit during scheduler evaluation) — identified as the single biggest design gap during a full product-behavior review.
+- Resolution: new Document 11 (Concurrency, Locking & Conflict Resolution Model) is authoritative on all of this. Doc 8 §7 is explicitly marked superseded where they differ, not deleted (it's still correct for the pairs it already covered).
+- Amends: Doc 8 §7 now points to Document 11. Doc 6 gained the runtime-config-change invariant, Template-independence invariant, and generalized `version` optimistic locking as a direct consequence.
+
+2.4 Baseline role naming was tentative
+- Conflict: Doc 2 §8.1 used "viewer/operator, admin, superadmin" as placeholder-feeling naming; a real product decision was needed for a workable home-server permission model.
+- Resolution: baseline roles are **Client / Admin / Superadmin**, per your explicit decision. Admin has full world authority but not control-panel/user-management authority. Superadmin has both, plus exclusive ability to delegate individual `permissions` to a Client or Admin account.
+- Amends: Doc 2 §8.1's naming is superseded. Doc 6 §2.15/§2.16, Doc 5 User Management page, Doc 7 `roles` table all updated to match.
+
 3. Clarified Non-Conflicts
 
 These looked like conflicts on a first pass but are not. Recorded here so they aren't reopened.

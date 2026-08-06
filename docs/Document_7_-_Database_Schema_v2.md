@@ -1,4 +1,4 @@
-Document 7: Database Schema & Persistence Design (Revision 2 — Full Expansion)
+Document 7: Database Schema & Persistence Design (Revision 3 — Product Design Review: ManagerBackup, Generalized Optimistic Locking, Per-World Idle Countdown)
 
 Purpose
 - Turns Document 6 (Revision 6)'s domain model into an actual buildable SQLite schema: every table, column, type, key, index, and constraint.
@@ -51,6 +51,7 @@ Identity/security: `users`, `roles`, `role_assignments`, `permissions`, `devices
 | backup_root_path | TEXT | |
 | log_root_path | TEXT | |
 | offsite_sync_defaults | TEXT (JSON) | method + non-secret config; credentials live in `secrets` |
+| version | INTEGER | optimistic concurrency, generalized per Document 11 §4 |
 | updated_at | INTEGER | |
 | updated_by | TEXT | FK -> users.user_id, RESTRICT |
 
@@ -76,13 +77,14 @@ Identity/security: `users`, `roles`, `role_assignments`, `permissions`, `devices
 | state | TEXT | off/queued/starting/running/stopping/restoring/backing_up/crashed/error, per Doc 6 §2.3 |
 | pre_backup_state | TEXT NULL | set only while `state = backing_up`, per Doc 6 §2.3 resume-state rule |
 | current_operation_id | TEXT NULL | FK -> operations.op_id, RESTRICT — the Operation currently driving a state transition, if any. Cleared to `NULL` by OperationService the moment that Operation reaches a terminal status (Doc 6/Doc 8, decided) — never left pointing at a finished Operation. |
-| launch_args | TEXT (JSON) | default startup args for this world |
+| launch_args | TEXT (JSON) | default startup args for this world. Editable only while `state = off` (Doc 6 §4, Document 11 §5) |
+| metadata_version | INTEGER | optimistic concurrency for `display_name`/metadata edits only (`ConfigEdit`/RenameWorld), per Document 11 §4 — distinct from the operational `state` machine, which is never subject to a version check |
 | deleted_at | INTEGER NULL | tombstone marker |
 | deleted_by | TEXT NULL | |
 | created_at | INTEGER | |
 | updated_at | INTEGER | |
 
-Indexes: `(state)` for the "list running worlds" homepage query (Doc 5); `(deleted_at)` partial index for "active worlds only" filtering.
+Indexes: `(state)` for the "list running worlds" homepage query (Doc 5); `(deleted_at)` partial index for "active worlds only" filtering; `(display_name)` to support search/filter once world counts grow beyond a glance-able list (Doc 2 §11.2 "modest home-lab hardware" doesn't preclude dozens-to-hundreds of worlds — see Doc 5's search/filter addition).
 
 2.5 world_settings (per-world override of global_settings; 1:1 with world_instances, only present when a world overrides a default)
 | Column | Type | Notes |
@@ -92,19 +94,24 @@ Indexes: `(state)` for the "list running worlds" homepage query (Doc 5); `(delet
 | backup_root_override | TEXT NULL | |
 | log_root_override | TEXT NULL | |
 | offsite_sync_override | TEXT (JSON) NULL | |
+| idle_countdown_override | INTEGER NULL | seconds; added this revision — closes the one setting that previously had no per-world override despite Schedule/CleanupPolicy/SyncTarget all supporting it (Doc 6 §2.10 three-tier inheritance model) |
+| version | INTEGER | optimistic concurrency, generalized per Document 11 §4 |
 | updated_at | INTEGER | |
 | updated_by | TEXT | FK -> users.user_id, RESTRICT |
+
+Note: `notification_defaults` is deliberately **not** given a per-world override column — this is a considered exclusion (Doc 6 §2.10), not an oversight.
 
 2.6 templates (Tier 2 — soft-deleted/deprecated only, per Doc 6 §2.12)
 | Column | Type | Notes |
 |---|---|---|
 | template_id | TEXT | PK |
 | name | TEXT | unique where `deleted_at IS NULL` |
-| category | TEXT | vanilla/forge/fabric/paper/custom |
+| category | TEXT | free-text, not a closed enum — `vanilla`/`forge`/`fabric`/`paper` are example seed values, not a hardcoded set (closes the "plugin architecture" question from review: adding Quilt/Purpur/NeoForge/Sponge is a new row here, never a code change, provided `config_defaults` below carries enough to launch it — see note) |
 | default_version | TEXT | |
-| config_defaults | TEXT (JSON) | |
+| config_defaults | TEXT (JSON) | must include a generic launch-command template (executable pattern, jar/args placeholders) generic enough for the platform adapter to launch *any* category from data alone — this is the actual mechanism that makes new server types data-driven rather than requiring per-type code in the platform adapter layer |
 | source | TEXT | built_in / imported |
 | deprecated | INTEGER | distinct from `deleted_at` — a deprecated template is hidden from "create new world" but still referenced historically |
+| version | INTEGER | optimistic concurrency, generalized per Document 11 §4 |
 | deleted_at | INTEGER NULL | |
 | deleted_by | TEXT NULL | |
 | created_at | INTEGER | |
@@ -167,8 +174,8 @@ Indexes: `(world_id, status)` for "current world state" queries; `(idempotency_k
 | Column | Type | Notes |
 |---|---|---|
 | artifact_id | TEXT | PK |
-| world_id | TEXT | FK -> world_instances.world_id, RESTRICT |
-| category | TEXT | session_end/manual/scheduled/pre_restore/emergency |
+| world_id | TEXT NULL | FK -> world_instances.world_id, RESTRICT — **NULL means a ManagerBackup** (manager DB/settings/templates/permissions, not any single world's content), added this revision to close the disaster-recovery gap from review |
+| category | TEXT | session_end/manual/scheduled/pre_restore/emergency/manager_config |
 | storage_path | TEXT | |
 | size_bytes | INTEGER | |
 | checksum | TEXT | |
@@ -247,7 +254,7 @@ Indexes: `(world_id, category, created_at)` — the exact shape retention rules 
 |---|---|---|
 | notification_id | TEXT | PK |
 | category | TEXT | |
-| severity | TEXT | info/warning/error |
+| severity | TEXT | critical/high/normal/informational — expanded from a 3-level draft this revision, per your explicit product decision; drives notification-dropdown prioritization (Doc 5) |
 | message | TEXT | |
 | related_operation_id | TEXT NULL | FK -> operations.op_id, RESTRICT |
 | related_world_id | TEXT NULL | FK -> world_instances.world_id, RESTRICT |
@@ -260,7 +267,8 @@ Indexes: `(world_id, category, created_at)` — the exact shape retention rules 
 |---|---|---|
 | notification_id | TEXT | PK (composite), FK -> notifications.notification_id, RESTRICT |
 | user_id | TEXT | PK (composite), FK -> users.user_id, RESTRICT |
-| read_at | INTEGER | |
+| read_at | INTEGER NULL | |
+| dismissed_at | INTEGER NULL | added this revision — clears the notification from *this user's* active dropdown view (Doc 5) only; correctly per-user like `read_at`, since a single user dismissing a broadcast notification must not hide it from every other user. The notification row itself is never affected. |
 
 2.17 audit_records (Tier 1 — permanent, append-only, per Doc 6 §2.9)
 | Column | Type | Notes |
@@ -302,7 +310,8 @@ Indexes: `(created_at)`, `(actor_user_id)`, `(world_id)` — audit views need to
 | role_id | TEXT | PK |
 | name | TEXT | unique where `deleted_at IS NULL` |
 | description | TEXT NULL | |
-| is_system_role | INTEGER | true for viewer/operator, admin, superadmin |
+| is_system_role | INTEGER | true for `Client`, `Admin`, `Superadmin` — renamed this revision per your explicit product decision, supersedes Doc 2 §8.1's tentative "viewer/operator, admin, superadmin" naming |
+| version | INTEGER | optimistic concurrency, generalized per Document 11 §4 |
 | deleted_at | INTEGER NULL | |
 | deleted_by | TEXT NULL | |
 | created_at | INTEGER | |
@@ -386,6 +395,7 @@ Constraint (application-enforced, not expressible as a plain SQLite CHECK across
 | config | TEXT (JSON) | non-secret connection details (host, path, etc.) |
 | secret_id | TEXT | FK -> secrets.secret_id, RESTRICT — credential reference, never the raw credential |
 | enabled | INTEGER | |
+| version | INTEGER | optimistic concurrency, generalized per Document 11 §4 |
 | deleted_at | INTEGER NULL | |
 | deleted_by | TEXT NULL | |
 | created_at | INTEGER | |
@@ -550,3 +560,5 @@ Remaining before Document 7 can be marked fully `[x]` in Document 9:
 Addition note: `sync_targets` (§2.25), `sync_records` (§2.26), and `sync_attempts` (§2.27) are added in this pass alongside Document 6 and Document 8, closing the SyncService gap consistently across all three documents in one pass rather than defining the service without its backing schema. `sync_attempts` was split out from `sync_records` per explicit instruction so retry history is a queryable, ordered set of immutable rows rather than a single incrementing counter.
 
 Recheck-pass note: `CreateWorld`/`DeleteWorld` added to `op_type` (§2.9), the `current_operation_id` clearing rule made explicit (§2.4), and the circular-FK and version-optimistic-lock behaviors documented explicitly (§4) — all identified during a full cross-document consistency recheck rather than at original authoring time.
+
+Product-review-pass note (this revision): `backup_artifacts.world_id` made nullable for ManagerBackup; `version` added to `global_settings`, `world_settings`, `templates`, `roles`, `sync_targets`, and `world_instances` (metadata fields only) generalizing optimistic concurrency beyond just `schedules`/`cleanup_policies`; `world_settings.idle_countdown_override` added to complete the three-tier inheritance model (Doc 6 §2.10); `notifications.severity` expanded to four levels; `notification_reads.dismissed_at` added, correctly scoped per-user like `read_at`; `templates.category` documented as free-text/data-driven rather than a closed enum, closing the plugin-architecture question from review. Full context for all of these: Document 6 Revision 7 and Document 11 (new).
