@@ -1,9 +1,8 @@
 Document 2: Next-Generation Minecraft Manager Requirements
 
 Purpose
-- Define a polished requirements baseline for a new manager that preserves the useful parts of the legacy single-world dashboard while expanding it into a multi-world, multi-version, OS-agnostic platform.
-- This document describes product requirements and behavior goals first. It does not lock in architecture, framework, or deployment details yet.
-- This document is based document 1
+- Define the product requirements baseline for the next-generation multi-world, multi-version, OS-agnostic manager, preserving the useful parts of the legacy single-world dashboard.
+- Describes product requirements and behavior goals; does not lock in architecture, framework, or deployment details.
 
 Guiding goals
 - Manage multiple independent Minecraft worlds concurrently on one machine.
@@ -89,8 +88,9 @@ Scope
   - backing up
   - crashed
   - error
-- Runtime status must be derived from a combination of process state, startup signals, logs, and health checks rather than a single fragile trigger.
+- Runtime status must be derived from a combination of process state, startup signals, logs, and health checks rather than a single fragile trigger. Log strings such as "Dedicated server took x seconds to load" are advisory signals only and must never be the sole determinant of the running state — status must still resolve correctly if a mod or version change alters the log format.
 - If the manager boots while worlds are already running, it must discover and reconcile their actual state.
+- On boot (or client reconnect), the UI must be rehydrated immediately from the reconciled durable snapshot — world list, states, operations, backup inventory, schedules, notifications. Live-only fields (player counts, tick time, live metrics) are served from the last known cached snapshot with visible freshness metadata and converge once the first live broadcast completes. The UI must never present a blank or unknown state during the warm-up window between boot and the first reconciliation cycle.
 
 2.3 Runtime metrics
 - For each world instance, the manager must track at minimum:
@@ -148,8 +148,8 @@ Scope
 
 4.1 Backup model
 - Each world instance must support independent backups.
-- The backup subsystem must no longer require a `.sh` implementation, even if script-based adapters remain possible.
-- The product should prefer a native, portable backup engine implemented in the manager stack.
+- The backup subsystem must no longer require a `.sh` implementation. Script-based adapters are permitted only as a transitional compatibility layer for migrations, and must be retired before the first stable release — the native, portable backup engine implemented in the manager stack is the sole supported path in production.
+- The product must therefore require a native, portable backup engine implemented in the manager stack, not merely "prefer" one.
 - Supported backup triggers must include at minimum:
   - manual backup
   - scheduled backup
@@ -244,7 +244,7 @@ Scope
 - The UI should retain the strong shell-based behavior of the legacy app.
 - Shared data streams, notifications, alert state, theme state, and client identity should remain shell-owned.
 - Page state should be preserved reliably when navigating away and back.
-- Multi-tab behavior should continue to behave like a single logical client where practical.
+- Multi-tab behavior should continue to behave like a single logical client where practical: each tab maintains its own independent server connection and receives the same shared server-pushed streams. The shell must not implement primary/secondary tab election, heartbeats, or tab-to-tab forwarding — a failing or closed tab must never orphan or disrupt other tabs.
 
 7.2 Core pages
 - The manager UI must include at minimum:
@@ -279,11 +279,10 @@ Scope
 
 8.1 Access model
 - The primary deployment assumption is a trusted private network, such as Tailscale with MagicDNS.
-- Trusted network placement reduces exposure but does not replace authentication, authorization, audit logging, or server-side validation.
-- The system must support multiple privilege levels at minimum:
-  - viewer/operator
-  - admin
-  - superadmin
+- The security posture is Zero-Trust: a trusted network placement is treated as reducing *exposure* only, never as an access-control mechanism. Network placement must never be the primary factor in authorization — every request is authenticated with a server-issued session and authorized server-side against role/world/action policy regardless of which network it arrives from, so a compromised VPN, Wi-Fi, or host does not grant access on its own.
+- Trusted network placement therefore reduces exposure but does not replace authentication, authorization, audit logging, or server-side validation.
+- The system must support three baseline privilege levels: **Client** (read-only by default, plus individually granted permissions), **Admin** (full world authority, no control-panel/user management), **Superadmin** (everything Admin has, plus control-panel authority and permission delegation) — supersedes the earlier draft "viewer/operator, admin, superadmin" naming (Document 10 §2.4).
+- Optional custom roles beyond the baseline three (Doc 6 §2.15).
 - Read-only access and allowed low-risk actions may be granted to approved clients without repeated password prompts, subject to administrator policy.
 - Protected actions such as stop, restore, cleanup, file edits, config edits, credential rotation, and security changes must require explicit authorization and server-side permission checks.
 - The permission model must be capable of granting permissions per client, per user, per world, and per action category.
@@ -293,6 +292,7 @@ Scope
 - Each client session must be bound to a server-issued authenticated session token with expiration, revocation, and integrity protections.
 - The system must support administrator-approved device registration so known local devices can be recognized and assigned default access policies.
 - Sensitive actions must support step-up authentication, such as password re-entry or equivalent privileged confirmation, even for already recognized devices.
+- Step-up verification is session-scoped and time-bounded (default 10 minutes, configurable): one successful verification grants a window during which subsequent sensitive actions in the same session proceed without re-typing the password. Re-verification is required when the window expires or the session context changes. The password field is never pre-filled, never persisted, and is always cleared after the step-up request completes (accepted or rejected), so users are not forced to retype for every single action.
 - Passwords must be hashed and salted using a modern password hashing algorithm with configurable work factors.
 - CSRF protection or equivalent request forgery protections must be enabled for state-changing requests.
 - Per-device or per-user rulesets from the old roadmap should be supported.
@@ -376,6 +376,7 @@ Scope
   - background jobs
   - backup/sync/cleanup activity
 - Simultaneous jobs must follow explicit conflict rules.
+- Where the conflict matrix permits queueing (backup, restore, cleanup), duplicate or conflicting client requests are queued single-flight and auto-dispatch when the in-flight job reaches a terminal state; clients receive the queue position and completion via the live stream and are never required to poll. Priority between waiting jobs is contextual — user-initiated (manual) operations outrank scheduled/automatic ones, and safety-critical operations (emergency cleanup, emergency stop) outrank routine ones — rather than a fixed static hierarchy.
 - World-local operations should not serialize unrelated worlds unnecessarily.
 
 12. Portability and deployment

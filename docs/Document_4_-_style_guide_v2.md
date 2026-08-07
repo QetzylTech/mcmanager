@@ -1,19 +1,10 @@
-Document 4: MC Manager CSS Style Guide (Revision 2 — Status Indicator Component Added)
+Document 4: MC Manager CSS Style Guide
 
-Revision note
-- This is a full, standalone replacement for the original Document 4, not a delta layered on top of it. Everything below section 17 is the original document, unchanged. Section 17 is new, added during the full-project consistency recheck to close a gap: Doc 1 §8 (stat boxes) and Doc 5 (sync status badges) both assume a non-interactive status-display component exists, and Document 10 §2.1 explicitly says status colors "are used freely elsewhere — stat boxes, status fields, notification entries," but no such component was ever formally defined here.
-
-Purpose
-- This file is the single CSS reference for the entire site.
-- It is based on the legacy prototype styling.
-- All pages must follow this guide.
-- Do not create local styling systems for individual pages, panes, nav sections, or one-off elements.
-- This is the specifications for the user interface based on the legacy interface
-- Supports the other documents and front end implementation
+Scope
+- Single CSS reference for the entire site. All pages follow this guide; no local styling systems for pages, panes, nav sections, or one-off elements.
 
 Primary source
-- `Prototypes/Legacy/static/global.css`
-- Legacy page CSS should be used only to identify reusable patterns that belong in the shared site system.
+- `Prototypes/Legacy/static/global.css` — used only to identify reusable patterns for the shared system.
 
 Core rules
 - One shared visual system for the whole site.
@@ -23,25 +14,26 @@ Core rules
 - No pane-specific control styling.
 - If a pattern is needed in more than one place, it belongs in shared global CSS.
 
+0. Functional Appropriateness Exception (amends the no-local-styling rule)
+
+- IF a page's layout is unreachable via shared classes/tokens (checked first, per §13 workflow) AND generalizing it into the shared system would bloat it with one-page exceptions, THEN a layout-only page-scoped class is permitted.
+- Conditions (all must hold):
+  1. Structural layout only (column/grid geometry, density, arrangement); never re-skins shared components (buttons, panes, dropdowns, inputs, modals, status indicators).
+  2. Consumes only shared tokens in §2 — no new color/radius/spacing/typography token locally.
+  3. Registered in the style guide's shared-pattern inventory, prefixed as page-scoped, promoted into the shared system when a second page needs it.
+- Permitted example pages: World Maintenance (dense per-rule editors), File Manager (multi-pane browser + viewer), Restore (staged workflow with live progress). Everything interactive reuses the shared component system; only page-level arrangement may differ.
+
 1. Design direction
 
 The site should remain:
-- compact
-- operational
-- pane-based
-- lightweight
-- easy to scan
-- consistent in light and dark mode
+- compact, operational, pane-based, lightweight, easy to scan, consistent in light and dark mode
 
 The site should not become:
-- decorative
-- marketing-like
-- overly animated
-- full of page-specific control styles
+- decorative, marketing-like, overly animated, full of page-specific control styles
 
 2. Global tokens
 
-These values should stay the baseline unless the entire site design changes.
+These values stay the baseline unless the entire site design changes.
 
 Base colors
 - Canvas background: `#eef2ff`
@@ -68,540 +60,134 @@ Spacing and shape
 - Light shadow: `0 2px 5px rgba(15, 23, 42, 0.04)`
 
 Typography
-- Use `Arial, Helvetica, Roboto, sans-serif` for:
-  - `html`
-  - `body`
-  - `button`
-  - `input`
-  - `textarea`
-  - `select`
+- Font stack for `html`, `body`, `button`, `input`, `textarea`, `select`: `Arial, Helvetica, Roboto, sans-serif`
 
 Headings
-- `h1` and `h2` must use the same styling.
-- `h1` is the page title when present.
-- `h2` is the default pane title.
+- `h1` and `h2` share identical styling. `h1` = page title, `h2` = default pane title.
 
 3. Layout system
 
 3.1 Standard page structure terms
 
-Body
-- The body is the actual page.
-- It is the top-level page container.
-
-Landmarks
-- Landmarks are children of the body.
-- The only top-level elements used in the app are:
-  - `nav`
-  - `main`
-- Semantically, they are top-level page structure.
-- Visually:
-  - `nav` reuses pane CSS and helps glue the entire web app together
-  - `main` is a container and has no styling on its own
-
-Panes
-- Panes are children of `main`.
-- Panes are implemented as `article` elements.
-- They are the main pane units used inside `main`.
-
-Cards
-- Cards are children of panes.
-- The first card in a pane is the Pane Title Area.
-- Any remaining cards in the same pane are Pane Content Areas.
-
-Div groups
-- Div groups are children of cards.
-- They are used only when needed.
+- Body: the actual page / top-level container.
+- Landmarks: children of body; the only top-level elements are `nav` and `main`.
+  - `nav` reuses pane CSS.
+  - `main` is a container with no styling of its own.
+- Panes: children of `main`, implemented as `article` elements.
+- Cards: children of panes. First card = Pane Title Area; remaining cards = Pane Content Areas.
+- Div groups: children of cards, used only when needed.
 
 Nav
-- Contains primarily buttons and site logo
-- Can contain sections and divs for grouping buttons
-- Nav must be sticky.
-- Nav must not create its own scrollable area.
-- Nav must span the full available screen height.
+- Contains primarily buttons and site logo; may contain sections/divs for grouping.
+- Sticky; no internal scroll area; spans full available screen height.
 
 3.2 Structural rules
 
-Navigation position
-- `nav` is always a child of `body`.
-- `nav` is always a sibling of `main`.
-
-Pane structure
-- Every pane starts with exactly one Pane Title Area.
-- Any remaining sibling cards in the pane are Pane Content Areas.
-
-Pane Title Area
-- The Pane Title Area is a `header`.
-- It contains the pane title using `h1` or `h2`.
-- It may contain optional buttons for that pane.
-- It may contain Pane Title Area inputs.
-
-Pane Content Area
-- The Pane Content Area is a `div`.
-- It is any card after the first Pane Title Area card.
-
-Card usage rules
-- The first card at the top of the pane is always the Pane Title Area.
-- All remaining cards in that pane are Pane Content Areas.
-- Cards may contain grouped child divs when necessary.
-- Grouped divs inside cards should be used sparingly and only as a last resort.
-- Cards exist only for the visual distinction between title and content.
-- Pane Title Area has no background color by default.
-- Pane Content Area uses the body background color.
-
-Div group usage rules
-- Grouped divs are used only for:
-  - lists of items
-  - grouping of form items
-  - custom log output DOM
-- Grouped divs have no default background color.
-- Grouped divs have no default styling.
-- Do not introduce deeper wrapper chains unless the pattern genuinely requires it.
+- `nav` is always a child of `body`, always a sibling of `main`.
+- Every pane starts with exactly one Pane Title Area; remaining sibling cards are Pane Content Areas.
+- Pane Title Area: a `header` containing the pane title (`h1`/`h2`) and optionally pane buttons/inputs.
+- Pane Content Area: a `div`; any card after the first Pane Title Area card.
+- Card usage: first card = Pane Title Area; remaining = Pane Content Areas; grouped child divs only when necessary and sparingly (lists of items, form-item groups, custom log output DOM). No deeper wrapper chains unless genuinely required. No default background/styling on grouped divs.
+- Pane Title Area has no background color by default; Pane Content Area uses the body background color.
 
 App shell
-- Keep the persistent shell.
-- Desktop layout uses:
-  - left sidebar
-  - right content area
-- The left sidebar is `nav`.
-- The right content area lives inside `main`.
-- `nav` should reuse shared pane CSS.
-- `main` should remain an unstylized container.
-
-Default shell rhythm
-- Outer page padding: `12px`
-- Internal gap between major blocks: `12px`
-- Use pane-based grouping throughout
-
-Panes
-- All standard panes use the same shared pane styling.
-- Panes should use:
-  - shared pane background
-  - shared radius
-  - shared shadow
-  - shared padding approach
-
-Pane Title Area and Pane Content Area
-- `.pane-title-area` and `.pane-content-area` should follow one shared pattern.
-- Do not visually redesign Pane Title Areas for individual pages.
-- Pane titles should use the shared `h1`/`h2` heading styling.
+- Persistent shell: left sidebar (`nav`) + right content area (`main`).
+- Default rhythm: outer padding `12px`; internal gap between major blocks `12px`; pane-based grouping throughout.
+- All standard panes share pane background, radius, shadow, and padding approach.
+- `.pane-title-area` / `.pane-content-area` follow one shared pattern; pane titles use shared `h1`/`h2` styling.
 
 4. Navigation
 
-Navigation styling
-- Nav items follow one shared global style.
-- Nav links should visually behave like general buttons.
-- Active nav item should use the highlighted general button style.
-- Navigation must use sticky positioning; it should remain visible while the page scrolls.
-- Navigation must not be scrollable inside itself; the page can scroll as a whole when content is taller than the viewport.
-- Navigation must span the full viewport height while respecting the shared outer page padding.
-- Navigation spacing must come from the shared global rhythm and inherited control styling.
+- Nav items follow one shared global style, visually like general buttons.
+- Active nav item = highlighted general button style.
+- Sticky positioning; no internal scrolling; spans full viewport height respecting outer padding; spacing from shared rhythm/controls.
 
 Forbidden nav styling
-- No alert pulse
-- No running-state green nav
-- No warning-state yellow nav
-- No red flashing nav
-- No page-specific nav treatments
+- Alert pulse, running-state green, warning-state yellow, red flashing, or any page-specific nav treatment.
 
-5. Unified button system
+5. Component Property Table (compresses former §5–§10: button system, button states, dropdowns, inputs, content surfaces, lists)
 
-There are only two button families:
-
-Action Buttons
-- Red
-- Teal
-- Blue
-
-General Buttons
-- Normal
-  - uses body background color styling
-- Highlighted
-  - uses purple highlighted styling
-
-No other button families are allowed.
-
-5.1 Shared button geometry
-
-All buttons must use:
-- Height: `40px`
-- Minimum width: `80px`
-- Border radius: `10px`
-- Font weight: `700`
-- No page-specific sizing changes
-
-5.2 Action button roles
-
-Blue action button
-- Meaning: neutral
-- Use for default primary actions that are not explicitly dangerous or explicitly safe
-- Example uses:
-  - save
-  - backup
-  - confirm default action
-
-Teal action button
-- Meaning: safe to do
-- Use for safe forward actions
-- Example uses:
-  - start
-  - create
-  - continue
-  - open/view when treated as a positive action
-
-Red action button
-- Meaning: dangerous
-- Use for destructive or dangerous actions
-- Example uses:
-  - stop
-  - restore
-  - delete
-  - force action
-
-5.3 General button roles
-
-Normal general button
-- Meaning: neutral
-- Background should match body background color styling
-- Use for neutral controls
-- Example uses:
-  - close
-  - cancel
-  - secondary navigation within a page
-  - non-destructive utility actions
-
-Highlighted general button
-- Uses purple highlighted styling
-- Meaning: neutral
-- Use when a general button needs emphasis but is still part of the general button family
-
-Purple highlighted variations
-- The highlighted general button must support its own purple variations for:
-  - Normal
-  - On Hover
-  - Onclick
-  - Disabled Normal
-  - Disabled On Hover
-  - Disabled Onclick
-
-Button Color Order When Colors are Side by Side: Teal > Red > Blue > BG Color
-
-6. Required button states
-
-Every button type must support these states:
-- Normal
-- On Hover
-- Onclick
-- Disabled Normal
-- Disabled On Hover
-- Disabled Onclick
-
-These states must exist globally, not per page.
-
-State behavior guidance
-
-Normal
-- Stable and readable
-- Must clearly communicate button family
-
-On Hover
-- Slight change only
-- Usually a darker or stronger version of the same family color
-
-Onclick
-- Slight pressed feedback
-- May use subtle transform or darker shade
-
-Disabled Normal
-- Lower contrast
-- Clear non-interactive state
-
-Disabled On Hover
-- Must remain visibly disabled
-- Hover must not make it look active
-
-Disabled Onclick
-- Must remain visibly disabled
-- Click must not produce an active-looking state
-
-7. Dropdown system
-
-Dropdown button
-- Dropdown trigger button must use the general button style.
-- It should not use its own separate visual system.
-
-Dropdown list
-- Dropdown list background should use the body background color.
-- Keep list items visually consistent with the site background and border system.
-
-Dropdown rules
-- Same height as buttons: `40px`
-- Same min width logic as shared controls where applicable
-- Same radius family as buttons and inputs
-- No page-specific dropdown themes
-
-8. Inputs and text fields
-
-There are only two global input kinds:
-- Pane Title Area input
-- Pane Content Area input
-
-They are the same input system.
-
-The only difference between them is where they are placed.
-
-Shared rules for both input kinds
-- Height: `40px`
-- Shared border/radius logic
-- Shared padding
-- Shared text styling
-- Shared disabled behavior
-- Shared focus behavior
-- No page-specific visual overrides
-- Text inputs, dropdowns, and toggles must sit beside their label when the available row width permits.
-- Labels and controls may wrap only when the available width cannot fit both the label and the control.
-- Controls keep the shared `80px` minimum width when wrapping.
-- Form label/control placement must come from shared CSS, not inline page styles.
-
-Pane Title Area input
-- Used in Pane Title Area rows and Pane Title Area action rows
-- Uses body background color styling
-
-Pane Content Area input
-- Used inside pane contents
-- Uses body background color styling
-
-Approved reusable classes
-- `.ui-title-input`
-  - use for Pane Title Area input
-- `.ui-text-input`
-  - use for Pane Content Area input
-
-Do not do this
-- invent a third input look
-- change size, shape, or behavior between the two input kinds
-- create pane-specific input themes
-- create page-specific input themes
-
-9. Shared content surfaces
-
-These surfaces should all come from the same shared design language:
-- panes
-- Pane Content Areas
-- lists
-- console outputs
-- dialogs
-
-Allowed shared surface behavior
-- rounded
-- low-shadow
-- compact padding
-- shared border/background tokens
-
-Surface inheritance rules
-- Body uses the shared body background color.
-- Panes use the shared pane background color.
-- Pane Title Areas have no default background color.
-- Pane Content Areas use the body background color.
-- Div groups inside cards have no default background color or default styling.
-
-Not allowed
-- one-off gradients
-- decorative hero surfaces
-- page-specific Pane Content Area chrome
-- unique nav or pane skins
-
-10. Lists and selection rows
-
-Lists
-- Use one shared list surface style.
-- Shared background should be based on the body/input background system.
-- Shared item spacing and separators should be reused throughout the site.
-- List item padding must stay at `12px`.
-- List row action spacing must use the shared `12px` gap.
-
-Selection highlighting
-- Keep selection affordances consistent.
-- If a selected state exists, its treatment should be defined globally.
-- Do not redefine selected row color behavior page by page.
+| Component | Geometry | Roles / Kinds | States | Bans |
+|---|---|---|---|---|
+| Buttons | height `40px`; min-width `80px`; radius `10px`; font weight `700`; no page-specific sizing | Action — Blue (neutral default primary: save/backup/confirm), Teal (safe forward: start/create/continue/open), Red (dangerous: stop/restore/delete/force). General — Normal (body-bg, neutral: close/cancel/secondary nav), Highlighted (purple emphasis). Side-by-side order: Teal > Red > Blue > BG | Normal, On Hover (darker family color), Onclick (subtle pressed), Disabled Normal/Hover/Onclick (lower contrast, never looks active). Same set for every family, globally, not per page | No third family; no page variants |
+| Dropdowns | Trigger = general button style; list = body background; same `40px` height / min-width / radius family as buttons & inputs | — | — | No page/pane-specific dropdown themes |
+| Inputs | height `40px`; shared border/radius/padding/text/disabled/focus | Exactly two kinds: `.ui-title-input` (Pane Title Area), `.ui-text-input` (Pane Content Area). Same system; only placement differs | Shared disabled/focus behavior | No third input look; no size/shape variation between kinds; no pane/page themes |
+| Content surfaces | Rounded; low shadow; compact padding; shared border/background tokens | Inheritance: body = body bg; pane = pane bg; Pane Title Area = no bg; Pane Content Area = body bg; div groups = no default styling | — | No one-off gradients, decorative heroes, or page-specific pane chrome/skins |
+| Lists & selection rows | Item padding `12px`; row-action gap = shared `12px`; shared item spacing/separators; background from body/input system | One shared list surface | Selection affordances defined globally, never per page | No page-specific list styling |
 
 11. Modal system
 
-There are only four modal kinds:
-- Confirmation modal
-- Password modal
-- Notification modal
-- Action prompt modal
-
-No other modal families are allowed.
-
-11.1 Shared modal styling
-
-All modal kinds must use one shared modal system.
-
-Modal element
-- Modals must use the semantic `dialog` element.
-- Do not build standard site modals as custom `div` overlays.
-- Modals inherit pane styling and pane structure.
-
-Modal overlay
-- dark translucent overlay
-
-Modal structure
-- the `dialog` element itself is styled as a pane
-- modals use the same pane structure as the rest of the site
-- the first card in the dialog is the Pane Title Area
-- any remaining cards in the dialog are Pane Content Areas
-- shared surface styling
-- shared radius
-- compact padding
-- stronger shadow than standard panes because it is a modal layer
-
-Modal actions
-- must use the same global button families and states
-- must not introduce modal-specific button styling
+Four modal kinds only: Confirmation, Password, Notification, Action Prompt. No other modal families.
+- Modals use the semantic `dialog` element (no custom `div` overlays), styled as a pane with the shared pane structure: first card = Pane Title Area, remaining = Pane Content Areas.
+- Overlay: dark translucent.
+- Stronger shadow than standard panes (modal layer).
+- Modal actions use the global button families/states — no modal-specific styling.
 
 11.2 Allowed modal kinds
-
-Confirmation modal
-- Contains a summary of the actions to be taken
-- Asks the user to proceed or cancel
-
-Password modal
-- Contains a password input
-- Asks the user to proceed or cancel
-
-Notification modal
-- Used to inform the user about something
-- Contains a `Show more info` button and an `OK` button
-
-Action prompt modal
-- Prompts the user to do a certain action
-- Examples:
-  - navigate to a page
-  - deny access
-  - scheduled maintenance
-  - proceed with missed actions
-  - software updates
-- Asks the user to cancel, proceed, or defer to a later time
+- Confirmation: summary of actions to take; proceed or cancel.
+- Password: password input; proceed or cancel.
+- Notification: informs the user; `Show more info` + `OK` buttons.
+- Action Prompt: prompts an action (navigate, deny access, scheduled maintenance, proceed with missed actions, software updates); cancel / proceed / defer.
 
 12. Responsive rules
 
-Keep the legacy breakpoints unless the whole site changes.
-
-Primary breakpoints
-- `1100px`
-- `900px`
-- `700px` when needed
-
-Responsive behavior
-- sidebar becomes overlay/off-canvas on smaller screens
-- multi-column page layouts collapse cleanly
-- buttons may wrap or stack, but visual styling does not change
-- controls must remain `40px` tall
+Breakpoints: `1100px`, `900px`, `700px` (when needed).
+- Sidebar becomes overlay/off-canvas at smaller sizes.
+- Multi-column layouts collapse cleanly.
+- Buttons may wrap/stack; styling does not change.
+- Controls remain `40px` tall.
 
 13. Reuse rules
 
-Required CSS workflow
-1. Check if the style already exists globally.
-2. Reuse the existing global class or token.
+Required CSS workflow:
+1. Check if the style exists globally.
+2. Reuse the existing global class/token.
 3. If missing, add it to the shared global system.
 4. Then reuse it everywhere.
+5. IF a page needs a layout the shared system cannot express AND generalizing would bloat it with one-page exceptions, THEN apply the §0 Functional Appropriateness Exception.
 
-Do not do this
-- create a new button look for one page
-- style dropdowns differently in one pane
-- style nav differently from the rest of the control system
-- create a custom pane appearance for one page
-- add local alert styling to nav or pane headers
-- use forced CSS overrides for shared component geometry or spacing
+Do not: create a new button look for one page; style dropdowns differently in one pane; style nav differently from the rest of the control system; create a custom pane appearance for one page; add local alert styling to nav or pane headers; force CSS overrides for shared component geometry/spacing.
 
 14. Explicit bans
 
-The following are not allowed:
-- nav alerts
-- nav pulses
-- nav severity colors
-- page-only button colors
-- pane-only control styles
-- page-only dropdown themes
-- page-specific Pane Content Area chrome
-- page-specific pane skins
-- decorative hero styling that breaks the operational look
-- local styles for common elements when a shared style should exist
+- Nav alerts, nav pulses, nav severity colors.
+- Page-only button colors, pane-only control styles, page-only dropdown themes.
+- Page-specific Pane Content Area chrome, page-specific pane skins.
+- Decorative hero styling that breaks the operational look.
+- Local styles for common elements when a shared style should exist.
+- Page-scoped re-skinning of shared components (button, input, dropdown, pane, or status-indicator theme changes) — the only permitted page-scoped CSS is layout-only, under §0.
 
 15. Short reference matrix
 
-Buttons
-- Action Red
-- Action Teal
-- Action Blue
-- General Normal
-- General Highlighted
-
-Each supports
-- Normal
-- On Hover
-- Onclick
-- Disabled Normal
-- Disabled On Hover
-- Disabled Onclick
-
-Geometry
-- Height: `40px`
-- Min width: `80px`
-
-Dropdowns
-- Trigger: general button style
-- List: body background color
-
-Navigation
-- Shared general-button-like styling only
-- No nav alerts
-
-Panes
-- Shared styling only
-- No local visual overrides
-
-Status Indicators
-- Shared styling only, per §17
-- Four meanings only: positive / negative / neutral / transitional
-- Never interactive, never animated
+- Buttons: Action Red / Action Teal / Action Blue / General Normal / General Highlighted; each supports Normal, On Hover, Onclick, Disabled Normal, Disabled On Hover, Disabled Onclick. Geometry: height `40px`, min width `80px`.
+- Dropdowns: trigger = general button style; list = body background color.
+- Navigation: shared general-button-like styling only; no nav alerts.
+- Panes: shared styling only; no local visual overrides.
+- Status Indicators: shared styling only, per §17; four meanings only (positive/negative/neutral/transitional); never interactive, never animated.
 
 16. Final summary
 
-This site should use one global CSS language.
+One global CSS language: one nav system, one pane system, one button system, one dropdown system, one token set, one status indicator system; page-scoped layout classes only under §0. If a control looks different because it lives on a different page, the styling is wrong unless formally added to the global system first.
 
-That means:
-- one nav style system
-- one pane style system
-- one button system
-- one dropdown system
-- one shared set of tokens
-- one status indicator system
-
-If a control looks different because it lives on a different page, the styling is wrong unless the difference has been formally added to the global system first.
-
-17. Status Indicators (new — Revision 2)
+17. Status Indicators
 
 Purpose
-- A Status Indicator (also referred to as a badge or pill) communicates the current state of something at a glance — a world's run state, a backup's status, a sync job's outcome — without being clickable and without introducing a new visual language.
-- Status Indicators are informational only. They are never buttons, never take onclick behavior, and never gain their own hover/pressed states, because they do not represent an action.
+- A Status Indicator (badge/pill) communicates state at a glance — a world's run state, a backup's status, a sync job's outcome — without being clickable or introducing a new visual language. Informational only: never buttons, never onclick, never hover/pressed states.
 
-17.1 Where Status Indicators are used
-- Stat boxes (Server Status, Backup Stats — Doc 1 §8)
-- Backup list rows (sync status per backup — Doc 5)
-- Any other place a discrete state needs to be shown as a compact label rather than as running prose
+17.1 Where used
+- Stat boxes (Server Status, Backup Stats — Doc 1 §8).
+- Backup list rows (sync status per backup — Doc 5).
+- Any place a discrete state needs a compact label rather than prose.
 
 17.2 Shared geometry
-- Height: `24px` (distinct from the `40px` shared control height — a Status Indicator is not a control)
-- Width: auto, sized to content plus horizontal padding
-- Border radius: fully rounded (pill shape) — visually distinct from the `10px` rounded-rectangle radius used by buttons, dropdowns, and inputs, so a Status Indicator is never mistaken for a clickable element
-- Padding: compact, using the shared `12px` rhythm horizontally, tighter vertically
-- Font weight: `600` — readable but visually lighter than the `700` weight used for buttons, reinforcing that it is not interactive
+- Height `24px` (distinct from the `40px` control height — not a control).
+- Width auto (content + horizontal padding).
+- Border radius fully rounded (pill) — distinct from the `10px` control radius, so it's never mistaken for clickable.
+- Padding: shared `12px` rhythm horizontally, tighter vertically.
+- Font weight `600` (lighter than button `700`, reinforcing non-interactivity).
 
 17.3 Color mapping
-Status Indicators reuse the exact same color tokens already defined for the button system (§5) — no new colors are introduced, per §13's reuse rule. Mapping is by *meaning*, not by page:
+Status Indicators reuse the exact button color tokens (§5) — no new colors. Mapping by meaning, not by page:
 
 | Meaning | Color token | Example states |
 |---|---|---|
@@ -610,13 +196,13 @@ Status Indicators reuse the exact same color tokens already defined for the butt
 | Neutral / inactive / not applicable | Body background + muted text (same token as General Normal button) | off, idle, not configured |
 | Transitional / in progress | Blue (same token as Blue action button) | queued, starting, stopping, pending, backing_up, restoring |
 
-- This mapping is exhaustive and closed — a fifth color family for status is not permitted, mirroring the existing rule that only two button families exist (§5).
-- Because these are the same tokens already used for action buttons, dark-mode and light-mode behavior is inherited automatically; no separate dark-mode token set is needed for this component.
+- Mapping is exhaustive and closed — no fifth status color family (mirrors the two-button-family rule in §5).
+- Same tokens as action buttons, so dark/light mode is inherited; no separate dark-mode token set.
 
 17.4 Explicit bans (extends §14)
-- No flashing, pulsing, or animated status indicators anywhere in the product — this is the same ban already applied to the nav bar (§4, §14) and is extended here to every other surface. State changes are communicated by the indicator's static color and text updating, not by motion.
-- No page-specific or pane-specific status indicator variants. One shared component, reused everywhere, per §13's required CSS workflow.
-- No third visual treatment beyond the four meanings in §17.3 (e.g., no separate "warning/yellow" status color — a state that isn't clearly positive, negative, neutral, or transitional should be re-evaluated against these four rather than inventing a fifth).
+- No flashing, pulsing, or animated status indicators anywhere — state change is communicated by static color/text update, not motion.
+- No page-specific or pane-specific status indicator variants.
+- No third visual treatment beyond the four meanings in §17.3 (e.g., no separate "warning/yellow" color — re-evaluate against the four).
 
 17.5 Reference class
-- `.status-indicator` — base class, takes a `data-tone` (or equivalent) value of `positive` / `negative` / `neutral` / `transitional` to select the color mapping in §17.3.
+- `.status-indicator` — base class; takes `data-tone` (or equivalent) of `positive` / `negative` / `neutral` / `transitional` to select the §17.3 mapping.

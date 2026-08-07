@@ -6,7 +6,7 @@
 
 - `doc/project requirements.txt` defines what the product must do.
 - `ARCHITECTURE.md` defines how the codebase should be structured while implementing those requirements.
-- PR review and CI should check both documents together; neither should silently drift from the other.
+- PR review and CI check both together; neither should silently drift from the other.
 
 ## Layer Dependency Rules
 
@@ -28,9 +28,9 @@ Disallowed:
 ## Frontend Runtime Rules
 
 - Shared shell behavior (theme, nav shell wiring, persistent client identity, shared metrics SSE ownership) must live in shared shell/bootstrap modules, not duplicated per page.
-- Page scripts should own page-specific mount/unmount and presentation logic only. Shared metrics, shared logs, shared connection ownership, and multi-tab coordination remain shell-owned; page-specific SSE subscriptions are acceptable only for page-local data that has no shared shell owner.
-- Live dissemination should prefer one shared client runtime owner per page shell, not duplicated SSE or polling owners for the same topic.
-- Client-driven polling must not be used for live dashboard/file/maintenance/restore state that is available from server broadcasts; prefer SSE streams with one-off HTTP reads only for explicit user-triggered content loads or compatibility fallback.
+- Page scripts own page-specific mount/unmount and presentation logic only. Shared metrics, shared logs, shared connection ownership, and multi-tab coordination remain shell-owned; page-specific SSE subscriptions are acceptable only for page-local data with no shared shell owner.
+- Live dissemination prefers one shared client runtime owner per page shell, not duplicated SSE or polling owners for the same topic.
+- Client-driven polling must not be used for live dashboard/file/maintenance/restore state available from server broadcasts; prefer SSE streams with one-off HTTP reads only for explicit user-triggered content loads or compatibility fallback.
 - Shell-first hydration is the current contract: full page loads render `app_shell.html`, shell navigation fetches fragment responses, and page modules mount/unmount inside the persistent shell.
 - Theme/nav boot, metrics SSE ownership, and other cross-page runtime concerns stay in the shell; page modules must not duplicate them.
 

@@ -11,14 +11,14 @@ This document does not introduce new product requirements. It arbitrates between
 1. Precedence Rule
 
 - Documents are ordered by number. A higher-numbered document supersedes a lower-numbered document wherever they conflict.
-- Order of authority (highest to lowest): Doc 10 > Doc 9 > Doc 8 > Doc 7 > Doc 6 > Doc 5 > Doc 4 > Doc 3 > Doc 2 > Doc 1.
+- Order of authority (highest to lowest): Doc 11 > Doc 10 > Doc 9 > Doc 8 > Doc 7 > Doc 6 > Doc 5 > Doc 4 > Doc 3 > Doc 2 > Doc 1.
+  - **Doc 11 (Concurrency, Locking & Conflict Resolution Model) is the final word on all operational locking, mutual exclusion, queue/reject/preempt semantics, and optimistic concurrency** — it supersedes Doc 8 §7's conflict matrix wherever they differ (e.g. cleanup requests are queued single-flight, not rejected outright; priority is contextual, not the fixed "Backup > Restore > Cleanup" rule).
+  - Doc 10 governs all *other* disagreements between documents (styling, secrets storage, naming, etc.).
   - In practice, Doc 9 is a checklist/tracker, not a source of behavior, so it does not itself override anything; it only tracks completion status of the others.
   - Docs 6, 7, and 8 are now substantially complete (see Document 9's updated status) with specific, named remaining items rather than being wholesale in-progress. Where Doc 9 still shows an item open for one of them, treat the lower-numbered docs as authoritative on that specific point only, per the numbering rule.
 - **One canonical file per document number.** Each numbered document must exist as exactly one file in the project at any time. If a document is revised, the new file replaces the old one (same or updated filename, old file removed) rather than the two coexisting — this project previously had both an original and a `_v2` file for Documents 5, 6, 7, and 8 simultaneously, with no rule for which one governed. That ambiguity is now resolved by deletion, not by a "the higher revision wins" rule, because a standing rule of that kind would require every reader to check file metadata instead of just reading the document — removing the stale copy is simpler and safer.
-- Reference-only materials are outside the precedence chain entirely and never supersede a numbered document:
-  - `ISO/IEC 25010` (external standard, informs quality goals, not a requirements source)
-  - `legacyARCHITECTURE.md` and `legacyImplementation.txt` (historical record of the old system, not a spec for the new one)
-  - `ARCHITECTURE.md` sits alongside the numbered docs as the standing instruction to AI coding assistants; where it references "Documents 2-10" it means them as governed by this precedence rule.
+- Reference-only material outside the precedence chain, never superseding a numbered document:
+  - `ARCHITECTURE.md` sits alongside the numbered docs as the standing instruction to AI coding assistants; where it references "Documents 2-11" (including Document 11's concurrency authority) it means them as governed by this precedence rule.
 - Doc 1 is retained as historical/legacy-requirements reference. Where a later document has addressed a topic, Doc 1's version is superseded. Where a later document is silent on something Doc 1 covered, Doc 1 still applies until explicitly amended.
 
 2. Resolved Conflicts
@@ -27,7 +27,7 @@ This document does not introduce new product requirements. It arbitrates between
 - Conflict: Doc 1 §7 and §13 require the nav bar to flash orange/red and go solid teal based on server and job state. Doc 4 §4 and §14 explicitly ban all nav alerts, pulses, and severity coloring.
 - Resolution: Doc 4 wins. The nav bar carries no status or notification indication of any kind — no flashing, no pulsing, and no static/solid state coloring either (e.g. no solid-teal-when-running). Nav is purely navigational.
 - Clarification: this is a ban on *where* state indication appears (nav), not a ban on the colors themselves. Teal/red/orange/blue remain part of the shared button and status-color system and are used freely elsewhere — stat boxes, status fields, notification entries, etc. Nothing about the color system itself changes; only the nav area is off-limits for it.
-- Replacement behavior: server/job state changes that previously drove nav flashing (starting, shutting down, crashed/emergency, restore-pane-open, missed cleanup) are surfaced through a dedicated notification section/dropdown in the shell, and through the existing per-page status displays (e.g. the Minecraft Status stat box already shows server state per Doc 1 §8 / Doc 5 homepage), per the alert-history model in Doc 2 §7.3 and Doc 8 §7 (Notifications).
+- Replacement behavior: server/job state changes that previously drove nav flashing (starting, shutting down, crashed/emergency, restore-pane-open, missed cleanup) are surfaced through a dedicated notification section/dropdown in the shell, and through the existing per-page status displays (e.g. the Minecraft Status stat box already shows server state per Doc 1 §8 / Doc 5 homepage), per the alert-history model in Doc 2 §7.3 and Doc 8 §9 (Notification Pipeline).
 - Amends: Doc 1 §7 ("Alerts" subsection) and §13 ("Notification system" nav-bar bullets) are marked superseded. Doc 4 requires no change; it already specifies the desired state.
 
 2.2 Secrets storage mechanism
@@ -83,4 +83,4 @@ These are gaps, not conflicts, and belong in the Doc 6 expansion work already tr
 
 - Any new conflict discovered during Doc 6/7/8 completion or during implementation gets added to Section 2 of this document before it is resolved in code.
 - Each new entry follows the format used above: Conflict / Resolution / Amends / Open items (if any).
-- This document itself follows the precedence rule: as the highest-numbered document once complete, it has final say over any Doc 1-9 disagreement it explicitly addresses.
+- This document itself follows the precedence rule set out in §1. With Document 11 now in place, Doc 11 has final say over concurrency/locking disagreements, and this document has final say over any other Doc 1-10 disagreement it explicitly addresses.

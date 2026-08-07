@@ -1,39 +1,14 @@
 Document 3: Next-Generation Minecraft Manager Architecture
 
 Purpose
-- Define the target architecture for the next-generation manager described in `Document 2 - more specific requirements.txt`.
-- Translate the end-goal design, prior project requirements, useful legacy patterns, and ISO/IEC 25010 quality concerns into a build-guiding architecture.
-- Describe architectural structure, boundaries, data ownership, runtime flows, and quality decisions without overcommitting to one web framework or one deployment style.
-- This document is the proposed architecture based on document 2
-
-
-Architecture sequencing
-- Product design should come before architecture because the architecture exists to serve the product behavior, quality goals, and constraints.
-- In this project, the end-goal design already exists in `Document 2 - more specific requirements.txt`, so architecture work should now proceed.
-- This document therefore treats `Document 2 - more specific requirements.txt` as the primary source of truth for required behavior, and treats this architecture as the way the system should be organized to deliver that behavior.
+- Define the target architecture for the next-generation manager described in `Document 2 - more specific requirements.txt`: structure, boundaries, data ownership, runtime flows, and quality decisions, without overcommitting to one web framework or deployment style.
+- Treats Document 2 as the primary source of truth for required behavior.
 
 1. Architectural stance
 
-1.1 Chosen style
-- The manager should be built as a modular monolith with strong internal boundaries, not as a distributed microservice system.
-- The modular monolith should use ports-and-adapters boundaries so operating-system-specific behavior, Minecraft-server-specific behavior, and storage-specific behavior remain replaceable.
-- Realtime updates and background work should be event-driven internally even when deployed as one process.
-- World instances must be isolated as managed runtime contexts inside one manager, not as one giant shared single-world state model.
-
-1.2 Why this style fits
-- It preserves low idle overhead better than a microservice architecture.
-- It is easier to deploy on modest home-lab hardware.
-- It keeps data consistency, auditability, and conflict enforcement inside one authoritative control plane.
-- It still allows strong separation of concerns through modules, adapters, and background workers.
-- It fits the legacy shell-owned UI strengths while removing the old Linux-specific control assumptions.
-
-1.3 Architectural goals
-- Multi-world isolation without cross-world interference.
-- Portable process control without `systemd` or `journalctl` being architectural dependencies.
-- Realtime observability without high-frequency client polling.
-- Strong auditability, defensive controls, and safe destructive-action handling.
-- Very low idle resource use on modest hardware.
-- Clear maintainability and testability in line with ISO/IEC 25010 quality concerns.
+- Style: modular monolith, ports-and-adapters boundaries (OS / Minecraft-server / storage replaceable), event-driven internally, multi-world as isolated runtime contexts — never one shared single-world model. Rationale: low idle overhead, fits modest hardware, one authoritative control plane for consistency/audit/conflict enforcement, preserves legacy shell-owned UI strengths while dropping Linux-specific control assumptions.
+- Goals: multi-world isolation; portable process control with no `systemd`/`journalctl` dependency; realtime observability without client polling; strong audit + defensive/safe destructive-action handling; very low idle resource use; maintainability/testability per ISO/IEC 25010.
+- (These constraints are also enforced operationally by ARCHITECTURE.md — the local summary above is the authoritative statement; see §4–§15 for the supporting detail.)
 
 2. System context
 
@@ -66,7 +41,7 @@ Architecture sequencing
 - Presentation plane:
   - persistent web shell
   - page fragments or equivalent routed UI modules
-  - realtime client hydration and multi-tab coordination
+  - realtime client hydration (each tab holds its own independent connection to the shared server-side streams; no tab election, primary/secondary heartbeats, or client-side forwarding)
 - Control plane:
   - API/session gateway
   - authorization and policy enforcement
@@ -129,7 +104,7 @@ Architecture sequencing
 4.3 Event-driven shared state
 - Shared live state should be produced once per event source and then broadcast to all relevant clients.
 - The architecture must avoid per-client recomputation and unnecessary client polling.
-- The shell should remain the owner of shared client state, notifications, and multi-tab coordination.
+- The shell should remain the owner of shared client state and notifications. Multi-tab behavior is achieved by each tab consuming the same manager-level and world-specific streams directly over its own connection — the server computes once and fans out; the browser never elects a "primary" tab, never forwards data between tabs, and never coordinates tab ownership.
 
 4.4 Durable intent and durable history
 - Commands must create durable operation records before or as they begin execution.
@@ -151,8 +126,8 @@ Architecture sequencing
   - render the persistent shell
   - own shared client state
   - manage navigation and page-state persistence
-  - manage multi-tab primary ownership
-  - consume live streams and rebroadcast within the browser
+  - open one independent connection per tab to the shared server-side streams
+  - consume live streams directly (each tab renders from the same pushed data; no tab-to-tab rebroadcast, no primary/secondary election)
   - surface notifications, alerts, offline state, and reconnection behavior
 - Notes:
   - Preserve the legacy shell-owned state model.
@@ -235,8 +210,8 @@ Architecture sequencing
   - manage offsite sync targets
   - evaluate retention and cleanup rules
 - Notes:
-  - Prefer native manager-controlled backup workflows over shell-script-led workflows.
-  - Script-based adapters may still exist, but the architecture must not depend on them.
+  - Prefer native manager-controlled backup workflows over shell-script-led workflows; the native engine is the only supported production path.
+  - Script-based adapters may exist only as a transitional compatibility layer for migrations and must be retired before the first stable release — the architecture must not depend on them, and no new platform-specific script logic may be added.
   - Restore must be modeled as a first-class operation with checkpoints and immutable history.
 
 5.9 File and configuration management subsystem
@@ -317,20 +292,8 @@ Architecture sequencing
   - transient caches
 
 6.2 Relational state store
-- Recommended contents:
-  - world registry
-  - runtime session records
-  - operation records
-  - schedules and policies
-  - device/client registry
-  - template catalog metadata
-  - settings
-  - job checkpoints
-  - file inventories and artifact indexes where useful
-- Notes:
-  - SQLite is a reasonable initial and possibly long-term fit because the deployment target is one host with limited hardware.
-  - The schema must be multi-world from the start.
-  - World-scoped tables should carry world IDs explicitly.
+- Table list, columns, keys, indexes, and constraints: see Document 7 (the authoritative schema) — do not enumerate here.
+- Standing notes only: SQLite is the initial and likely long-term fit (single host, limited hardware); the schema must be multi-world from the start; world-scoped tables carry `world_id` explicitly.
 
 6.3 Append-only audit and event store
 - Recommended contents:
@@ -369,7 +332,7 @@ Architecture sequencing
   - future external integration secrets
 - Notes:
   - Secrets must not be stored in client-visible state or logs.
-  - Secret storage may initially live on disk if protected appropriately, but the subsystem boundary should allow stronger backends later.
+  - The SQLite `secrets` table is the storage backend (Document 10 §2.2 — this supersedes any earlier "may initially live on disk" framing). The subsystem boundary (§5.10/§8.4) remains the access-control layer in front of it.
 
 6.6 Caching model
 - Cache only for performance, never as the sole source of truth.
@@ -397,7 +360,7 @@ Architecture sequencing
   - crashed
   - error
 - Notes:
-  - State must not depend on one single log line.
+  - State must not depend on one single log line. Log strings (e.g. "Dedicated server took x seconds to load") are advisory startup signals only and must never be the sole determinant of the running state — a mod or version change to the log format must not break state resolution.
   - The state resolver should combine:
     - desired operation intent
     - observed process state
@@ -441,6 +404,7 @@ Architecture sequencing
 - Notes:
   - Reconciliation is a first-class subsystem concern.
   - The manager must not assume that a restart means all worlds are off.
+  - Clients connecting during the reconciliation window must be rehydrated immediately from the persisted durable snapshot (world list, states, operations, backup inventory, schedules, notifications) plus the last cached live snapshot. Live-only fields (player counts, tick time, metrics) are served from that cached snapshot with visible freshness metadata and converge as soon as live broadcasting begins — presenting a blank or unknown state during warm-up is not acceptable.
 
 8. Security architecture
 

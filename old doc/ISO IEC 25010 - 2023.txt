@@ -1,0 +1,85 @@
+ISO/IEC 25010:2023 — Product Quality Model
+(For reference and requirements/quality mapping. External standard, outside the numbered-document precedence chain.)
+
+Prepared by ISO/IEC JTC 1 / SC 7. Second edition; together with ISO/IEC 25002 (quality models overview and usage) and ISO/IEC 25019 (quality-in-use model), it cancels and replaces ISO/IEC 25010:2011.
+Key changes vs 2011: product quality model revised; other parts moved to 25002/25019. Target extended to include various types of ICT product and information system. Safety added (operational constraint, risk identification, fail safe, hazard warning, safe integration). Usability→interaction capability; portability→flexibility. Inclusivity/self-descriptiveness, resistance, scalability added as subcharacteristics of interaction capability, security, flexibility. User interface aesthetics→user engagement; maturity→faultlessness. Accessibility split into inclusivity and user assistance.
+
+Scope
+- Defines a product quality model, applicable to ICT products and software products.
+- Composed of nine characteristics, further subdivided into subcharacteristics, forming a reference model for the quality of products to be specified, measured, and evaluated.
+- "Product" = ICT product that is part of an information system (subsystems, software, firmware, hardware, data, communication infrastructure, other elements).
+- Used throughout the lifecycle by developers, acquirers, QA/control staff, independent evaluators for: eliciting/defining requirements; validating comprehensiveness of requirements; identifying design and testing objectives; quality-control and acceptance criteria; establishing quality measures.
+- No normative references.
+
+SQuaRE family (ISO/IEC 25000–25099 divisions)
+- 2500n quality management: common models, terms, definitions; requirements/spec/evaluation guidance. Includes 25000 (Guide), 25001 (Planning and management), 25002 (Quality models overview and usage).
+- 2501n quality model: 25010 (Product quality model), TS 25011 (Service quality models), 25012 (Data quality model), 25019 (Quality-in-use model).
+- 2502n quality measurement: measurement framework, mathematical definitions, guidance, quality measure elements (QME).
+- 2503n quality requirements: specifying quality requirements from models/measures (e.g. 25030).
+- 2504n quality evaluation: requirements/recommendations/guidelines for evaluation (e.g. 25040); guideline for documenting a measure as an evaluation module.
+- 25050–25099 extension: ready-to-use software product (RUSP) quality, Common Industry Format (CIF) usability reports, quality models/measures for new technologies (cloud, AI).
+- Used with ISO/IEC/IEEE 12207/15288 (specification and evaluation of quality requirements), ISO 9001 (quality assurance), ISO/IEC 33000 family (process assessment).
+
+DEFINITIONS — 9 characteristics
+
+3.1 functional suitability — capability to provide functions that meet stated and implied needs of intended users under specified conditions. Concerned with stated/implied needs AND the functional specification.
+- 3.1.1 functional completeness — provides a set of functions covering all specified tasks and intended users' objectives.
+- 3.1.2 functional correctness — provides accurate results when used by intended users. Precision is one attribute of correctness (e.g. scientific software may need both precise and accurate results).
+- 3.1.3 functional appropriateness — provides functions facilitating accomplishment of specified tasks/objectives (necessary and sufficient steps, excluding unnecessary ones). Corresponds to suitability for the task in ISO 9241-110.
+
+3.2 performance efficiency — performs functions within specified time and throughput parameters and is efficient in resource use under specified conditions. Resources: CPU, memory, storage, network; also energy and materials.
+- 3.2.1 time behaviour — response time and throughput rates meet requirements under specified conditions.
+- 3.2.2 resource utilization — uses no more than the specified amount of resources to perform its function.
+- 3.2.3 capacity — meets requirements for maximum limits of a product parameter (items stored, concurrent users, bandwidth, throughput, database size).
+
+3.3 compatibility — exchanges information with other products and/or performs required functions while sharing the same common environment and resources.
+- 3.3.1 co-existence — performs required functions efficiently while sharing a common environment/resources with other products, without detrimental impact on any other product.
+- 3.3.2 interoperability — exchanges information with other products and mutually uses the exchanged information. Information = meaningful data; exchange includes transformation for exchange.
+
+3.4 interaction capability — interacted with by specified users to exchange information between user and system via the user interface to complete the intended task. Focuses on attributes enabling interaction across contexts of use; usability (quality-in-use) instead focuses on outcomes of use (effectiveness, efficiency, satisfaction). Prerequisite for usability.
+- 3.4.1 appropriateness recognizability — recognized by users as appropriate for their needs (from initial impressions, demonstrations, tutorials, documentation, home page).
+- 3.4.2 learnability — specified users learn to use specified functions within a specified time.
+- 3.4.3 operability — functions/attributes make it easy to operate and control; related to controllability, user error robustness, conformity with user expectations (ISO 9241-110), effectiveness/efficiency of physical interface devices.
+- 3.4.4 user error protection — prevents operation errors.
+- 3.4.5 user engagement — presents functions/information in an inviting, motivating manner encouraging continued interaction (harmonious color, intuitive UI, friendly voice guidance).
+- 3.4.6 inclusivity — utilised by people of various backgrounds (ages, abilities, cultures, ethnicities, languages, genders, economic situations, education, geographical locations, life situations).
+- 3.4.7 user assistance — used by people with the widest range of characteristics/capabilities to achieve specified goals in a specified context of use. Covers language differences and disabilities (age, sight, hearing, use of hands/arms/legs). May use multiple input/output methods (voice, gaze, touch) plus visual display. Context differences (driving, emergency use, beginner users, changing capabilities) resolved by iterative quality improvement. Adaptability/flexibility can collaborate.
+- 3.4.8 self-descriptiveness — presents appropriate information where needed to make capabilities and use immediately obvious without excessive interaction or other resources (docs, help desks); e.g. step-by-step interactive instructions at the helpful moment.
+
+3.5 reliability — performs specified functions under specified conditions for a specified period of time without interruptions and failures. Software does not wear; limitations arise from faults in requirements/design/implementation or contextual changes. Dependability is a broader synonym (adds security, performance efficiency, continuing support).
+- 3.5.1 faultlessness — performs specified functions without fault under normal operation; concept applies to other characteristics to indicate degree of meeting needs under normal operation.
+- 3.5.2 availability — operational and accessible when required for use. Externally assessed by proportion of up-time; combines faultlessness (failure frequency), fault tolerance and recoverability (downtime length). Failover/duplication can support.
+- 3.5.3 fault tolerance — operates as intended despite hardware or software faults.
+- 3.5.4 recoverability — in the event of interruption or failure, recovers the directly affected data and re-establishes the desired system state. Length of unavailable period determined by recoverability (of the product and/or the computer system it runs on).
+
+3.6 security — protects information and data so persons/other products have data access appropriate to their types/levels of authorization, and defends against attack patterns by malicious actors. Applies to data stored AND in transmission.
+- 3.6.1 confidentiality — data accessible only to those authorized.
+- 3.6.2 integrity — state of system and data protected from unauthorized modification or deletion (malicious action or computer error).
+- 3.6.3 non-repudiation — proves that actions/events have taken place so they cannot be repudiated later.
+- 3.6.4 accountability — actions of an entity traceable uniquely to the entity.
+- 3.6.5 authenticity — identity of a subject or resource proven to be the one claimed.
+- 3.6.6 resistance — sustains operations while under attack (DoS, ransomware, other). Improved by: continuous protection against well-known attacks (removing flaws/weaknesses; security diagnostic tools, vulnerability scanners, static analysis); secure coding and security-enhancement functions/mechanisms; maintaining updates over the product's life.
+
+3.7 maintainability — modified by intended maintainers with effectiveness and efficiency. Modifications include corrections, improvements, adaptation to changed environment/requirements; includes installing updates and upgrades. Interpretable as inherent capability or as quality-in-use experienced by maintainers.
+- 3.7.1 modularity — limits changes to one component from affecting other components; composed of discrete modules with cohesive content and minimal coupling.
+- 3.7.2 reusability — used as an asset in more than one system, or in building other assets.
+- 3.7.3 analysability — effectively/efficiently assessed regarding impact of an intended change, diagnosed for deficiencies/causes of failure, or identifying parts to be modified; may include mechanisms for the product to analyse its own faults with reports before a failure.
+- 3.7.4 modifiability — effectively/efficiently modified without introducing defects or degrading existing quality; influenced by modularity and analysability; combination of changeability and stability.
+- 3.7.5 testability — enables an objective, feasible test to be designed and performed to determine whether a requirement is met.
+
+3.8 flexibility — adapted to changes in requirements, contexts of use, or system environment. Context-of-use flexibility has technical (execution environment: software/hardware/communication) and non-technical (social: user/task; physical: climate/nature) aspects.
+- 3.8.1 adaptability — effectively/efficiently adapted for or transferred to different hardware, software or other operational/usage environments. If adapted by the end user, corresponds to suitability for individualization (ISO 9241-110). Differences/changes in context (unintended circumstances like underwater/outer space; limited power/no connectivity; unintended user types) resolved by iterating evaluation and requirements; inclusivity and user assistance can collaborate.
+- 3.8.2 scalability — handles growing or shrinking workloads or adapts capacity to variability.
+- 3.8.3 installability — effectively/efficiently installed and/or uninstalled in a specified environment. If installed by an end user, affects functional appropriateness and operability.
+- 3.8.4 replaceability — replaces another specified product for the same purpose in the same environment. Important when upgrading; includes attributes of installability and adaptability; reduces lock-in risk (e.g. via standardized file formats).
+
+3.9 safety — under defined conditions, avoids a state in which human life, health, property, or the environment is endangered. (Differs from standards defining safety as freedom from unacceptable risk.)
+- 3.9.1 operational constraint — constrains operation to within safe parameters/states when encountering an operational hazard (a circumstance exposing people/property/environment to unacceptable risk). Examples: preventing airplane stall; limiting radiation released regardless of operator input.
+- 3.9.2 risk identification — identifies a course of events/operations that can expose life, property or environment to unacceptable risk.
+- 3.9.3 fail safe — automatically places itself in a safe operating mode, or reverts to a safe condition, on failure. When difficult to determine the safer behavior, functional safety concepts and hazard analysis/risk assessment derive safety goals/requirements. Approaches: eliminate/minimize damage caused by failure; transfer control of sufficient operations to continue safe performance. Example: traffic light reverting to blinking red.
+- 3.9.4 hazard warning — provides warnings of unacceptable risks to operations/internal controls so they can react in sufficient time to sustain safe operations. Example: pedestrian light showing remaining seconds before changing.
+- 3.9.5 safe integration — maintains safety during and after integration with one or more components.
+
+Bibliography (selected)
+- IEC 60050-192:2015 (+AMD1:2016) IEV Part 192: Dependability · IEEE 1517:2010 Reuse Processes · ISO 7498-2:1989 Security Architecture · ISO 9001 · ISO/IEC 25023, 25000, 25002, 25012, 25019, 25020, 25021, 25030, 25040 (SQuaRE) · ISO/IEC TS 25011 · ISO 9241-14/110/112 · ISO/IEC/IEEE 12207:2017, 15288, 24765:2017 (Vocabulary), 29119-1 (testing) · ISO/IEC 33063 (process assessment for software testing) · ISO/IEC 5055 (automated source code quality) · ISO TR 25060 (CIF for usability-related information)
+Note: only informative sections of the standard are public; full content requires purchase.

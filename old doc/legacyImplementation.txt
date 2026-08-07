@@ -1,0 +1,255 @@
+Legacy System Study: `legacyCode`
+
+Scope and baseline
+- Studied the frozen legacy implementation under `legacyCode`.
+- `project requirements.txt` at repo root and `legacyCode/doc/project requirements.txt` are the same document in practice.
+- Main entrypoints: `legacyCode/mcweb.py`, `legacyCode/app/main.py`, `legacyCode/app/application_factory.py`.
+- Main architecture contract: `legacyCode/ARCHITECTURE.md`.
+
+Directory structure and use
+
+- `legacyCode/app/` — main Python application package (real implementation; not `mcweb.py`).
+  - `app/bootstrap/` — composition and startup wiring. Loads `mcweb.env`, evaluates setup mode, builds runtime state, bootstraps data, wires services, decides `web`/`worker`/`all`.
+    - `web_app.py` (builds Flask app + runtime) · `web_app_config.py` (config loading + Flask secret key) · `web_app_state.py` (giant runtime state bundle) · `web_app_setup.py` (setup-mode guard + submission) · `worker_app.py` (worker-only entrypoint).
+  - `app/routes/` — thin HTTP translation layer calling commands/queries.
+    - `dashboard_routes.py` (shell, docs, diagnostics, nav-alert endpoints) · `dashboard_control_routes.py` (start/stop/backup/restore/RCON) · `dashboard_metrics_routes.py` (`/metrics`, `/metrics-stream`) · `dashboard_notifications_routes.py` (notifications + operation SSE) · `dashboard_file_routes.py` (backups/log pages, downloads, file viewing, log SSE) · `dashboard_maintenance_api_routes.py` (cleanup page/SSE/APIs) · `panel_settings_routes.py` (settings + device-map) · `setup_routes.py` (first-run setup + validation) · `shell_page.py` (fragment-vs-shell rendering).
+  - `app/commands/` — write-side commands: validation, idempotency, operation records, queuing, conflict enforcement.
+    - `control_handlers.py` (start/stop/backup/restore/RCON flows) · `control_support.py` (shared operation helpers, rate limiting, worker-thread launch) · `maintenance_commands.py` (cleanup password checks, rule save/run/delete/ack) · `setup_commands.py` (setup save orchestration).
+  - `app/queries/` — read-side models/validation: `dashboard_queries.py` (shell alerts, observed-state, consistency report) · `dashboard_file_queries.py` (safe log/file lookup) · `maintenance_queries.py` (cached maintenance payloads + async refresh) · `setup_queries.py` (setup validation + timezone options).
+  - `app/services/` — business logic + background runtimes (largest layer): control usecases (`start_usecase.py`, `stop_usecase.py`, `backup_usecase.py`) · restore (`restore_execution.py`, `restore_jobs.py`, `restore_status.py`, `restore_workflow_helpers.py`) · metrics/log/file runtimes (`dashboard_metrics_runtime.py`, `log_stream_service.py`, `dashboard_file_runtime.py`) · observed-state + operation reconciliation (`dashboard_state_runtime.py`, `dashboard_operations_runtime.py`) · maintenance (`maintenance_*`) · setup/boot data (`setup_service.py`, `data_bootstrap.py`) · watcher loops (`session_watchers.py`, `worker_runtime.py`, `worker_scheduler.py`).
+  - `app/core/` — utilities/persistence: `state_store_*` (SQLite schema + data access) · `response_helpers.py` · `security.py` · `rate_limit.py` · `filesystem_utils.py` · `action_logging.py` · `web_config.py` (dotenv-style parser) · `profiling.py`.
+  - `app/state/` — typed runtime containers; `AppState` splits into immutable config, mutable runtime values, callable service ports, compatibility `ctx`.
+  - `app/ports/` — port interfaces/default registry: service control, metrics, logs, backup execution, state store, filesystem.
+  - `app/infrastructure/` — concrete adapters bridging services to platform modules + SQLite.
+  - `app/platform/` — OS-specific implementations; `loader.py` selects by OS. Legacy control path still depends on `systemd` on Linux (the remove-service-dependency future plan was never finished).
+- `legacyCode/templates/` — `app_shell.html` (persistent shell) · `setup.html` · `fragments/*.html` (page fragments) · `partials/nav.html`, `partials/theme_init.html`.
+- `legacyCode/static/` — `app_shell.js` (shell nav, SSE ownership, multi-tab coordination, view-state persistence) · `service_worker.js` (offline shell + fragment fallback) · `offline_recovery.js` (offline banner + reconnect) · page scripts: `dashboard_home_page.js`, `file_browser_page.js`, `maintenance_page.js`, `panel_settings.js`, `documentation_core.js`.
+- `legacyCode/tests/` — large regression suite: routes, architecture boundaries, performance guards, control semantics, restore, maintenance, setup, metrics, runtime behavior.
+- `legacyCode/doc/` — requirements, quality gates, samples, setup docs.
+- `legacyCode/scripts/` — external helpers; `backup.sh` is a major dependency for real backup execution; performance scripts; topology export/import.
+- `legacyCode/debug/` — separate debug mini-app/tooling, routes hidden behind `DEBUG` config.
+- `legacyCode/nginx/` — optional reverse-proxy/boot-animation/wake experiments; not part of the main runtime.
+
+Old software architecture
+
+High-level layer model
+- Intended dependency direction (`ARCHITECTURE.md`): `routes -> commands/queries -> services -> ports -> infrastructure -> platform`. Mostly followed.
+- One large shared runtime state object, wrapped in typed contexts: `ConfigContext`, `RuntimeContext`, `ServicePorts`, `UnifiedServiceContext`.
+
+Boot and composition flow
+- `mcweb.py` / `python -m app.main` → `create_app()` / `run_server()`.
+- `app/bootstrap/web_app.py`: loads typed config from `mcweb.env` → creates Flask app → builds runtime state (`web_app_state.build_state()`) → ensures data files + SQLite schema (`data_bootstrap.ensure_data_bootstrap()`) → evaluates setup mode → builds bindings (`runtime_wiring.create_runtime()`) → registers routes. Exposes `run_server()`, `run_worker()`, `ensure_runtime_bootstrapped()`.
+
+Runtime roles
+- `MCWEB_PROCESS_ROLE=all|web|worker`: `all` = web + background loops in one process; `web` = request-serving only; `worker` = background loops, consumes queued intents, precomputes/publishes state.
+
+Request architecture
+- Browser requests a page → route returns full `app_shell.html`, or fragment-only HTML when `X-MCWEB-Fragment: 1`. Page JS mounts inside the persistent shell. Writes go through command handlers; reads through query helpers/cached runtime.
+
+Control-plane architecture
+- Protected/async actions are operation-based; recorded in SQLite `operations`; control intents appended to SQLite `events` topic `control_intent`. `all` mode often starts worker threads immediately; `web`+`worker` split records intent in web, worker consumes, worker updates operation status. Progress exposed via `/operation-status/<op_id>`, `/operation-stream`, restore-specific status/log SSE.
+
+Streaming architecture
+- SQLite-backed event topics + in-memory caches. Main topics: `metrics_snapshot`, `ui_notification`, `operation_update`, `restore_log`, `log:<source>`, `maintenance_state:<scope>`, `control_intent`. SSE endpoints read these topics/conditions.
+
+Frontend architecture
+- Persistent shell (`app_shell.html` + `app_shell.js`) owns: navigation, theme, metrics SSE, notifications SSE, operation SSE, multi-tab primary election, shared home log streams, cached page data, offline recovery hooks. Page modules own only mount/unmount + page-specific DOM.
+
+Multi-tab architecture
+- One tab becomes primary via `localStorage` primary record + `BroadcastChannel` (with `storage`-event fallback). Only the primary tab keeps live shared SSE streams open; secondary tabs receive forwarded snapshots/events.
+
+Persistence architecture
+- Config: `mcweb.env`. Structured state: `data/app_state.sqlite3`. Small runtime text/json files: `data/session.txt`, `data/state.txt`, `data/cleanup_non_normal.txt`, `data/restore.history`. Logs: `logs/backup.log`, `logs/restore.log`, `logs/mcweb.log`, `logs/mcweb_actions.log`. Managed data: minecraft root, backup dir, snapshot dir, `data/old_worlds`.
+
+OS boundary
+- Services never directly call `systemctl`, `journalctl`, `mcrcon`, disk usage, or shell utilities — they call ports → infrastructure adapters → platform modules via `app/platform/loader.py`. Current reality: Linux service control still uses `systemctl`; Linux live log streaming still uses `journalctl`.
+
+End-to-end runtime flow
+- Browser load: route returns full shell (first load) or fragment (navigation); `app_shell.js` mounts into shell, restores local UI state. Live data: primary tab opens shared SSE streams; secondary tabs get rebroadcast payloads; shell updates shared UI state/notifications/nav alerts/cached snapshots. Action request: thin route → command handler validates (password, storage guard, conflicts, cooldowns, idempotency) → writes durable operation state + optional event intent. Execution: `all` mode runs background threads; split mode worker consumes intents. Feedback: services update operation rows, publish event topics, append logs, refresh caches; SSE streams back to shell; shell rehydrates and forwards to secondary tabs.
+
+Background worker map
+- `metrics_collector` (publishes dashboard metrics snapshots) · `operation_reconciler` (closes stale/observed operations) · `file-page-cache-refresher` (refreshes backups/log file lists) · `idle_player_watcher` (0-player auto-stop) · `backup_session_watcher` (periodic + shutdown backup) · `storage_safety_watcher` (emergency shutdown on unsafe storage) · `cleanup_scheduler` (scheduled cleanup) · `log_stream_fetcher_<source>` (one per log source) · worker-only loops from `worker_runtime.py` (control intent consumer, maintenance precompute publisher, inventory index refresh).
+
+Runtime data model and state files
+
+- `mcweb.env` — primary runtime config source; stores service name, password hashes, paths, timing knobs, timezone, secret key, role.
+- `data/session.txt` — session start timestamp (session duration + periodic backup scheduling).
+- `data/state.txt` — backup-running flag written by the external backup system; app's in-memory backup run lock adds a second single-flight guard.
+- `data/cleanup_non_normal.txt` — missed cleanup tracking + acknowledgements.
+- `data/restore.history` — append-only restore history text log.
+- `logs/*.log` — persistent app-side logs surfaced in UI + SSE/file viewers.
+
+Database schema (`data/app_state.sqlite3`)
+- Created by `app/core/state_store_core.py`. Enables WAL when possible, falls back to DELETE journal. No explicit FKs; consistency mostly enforced in application code.
+
+Tables
+- `users` — last-seen user/device registry for IP/device identification. Columns: `ip` TEXT PK, `timestamp` TEXT, `device_name` TEXT, `updated_at` TEXT.
+- `device_fallmap` — stored IP → device-name → owner mapping for panel settings/UI labels. Columns: `ip` TEXT PK, `device_name` TEXT, `owner` TEXT, `updated_at` TEXT.
+- `cleanup_store` — cleanup configuration JSON (key `cleanup_config`). Columns: `key` TEXT PK, `json_text` TEXT, `updated_at` TEXT.
+- `cleanup_history` — append-only cleanup execution history. Columns: `id` INTEGER PK AUTOINCREMENT, `at_text` TEXT, `run_json` TEXT.
+- `restore_name_runs` — restore naming decisions + restore IDs. Columns: `id` PK auto, `created_at`, `backup_filename`, `restore_source_name`, `previous_world_name`, `stored_world_name`, `stored_id` UNIQUE, `active_world_name`, `active_id` UNIQUE, `pre_restore_snapshot_name`, `archived_old_world_name`.
+- `restore_runs` — restore job outcomes. Columns: `id` PK auto, `created_at`, `job_id`, `mode`, `backup_filename`, `ok` INT, `error_code`, `message`, `pre_restore_snapshot_name`, `switched_from_world`, `archived_old_world`, `switched_to_world`, `stored_restore_id`, `active_restore_id`.
+- `file_records` — persisted snapshot of latest file-page items. Columns: `id` PK auto, `source_key`, `name`, `mtime` REAL, `size_bytes` INT, `modified_text`, `size_text`, `updated_at`; unique `(source_key, name)`.
+- `file_record_history` — historical file-record change tracking: `id` PK auto, `source_key`, `name`, `event_type`, `mtime`, `size_bytes`, `modified_text`, `size_text`, `observed_at`.
+- `events` — generic append-only event bus for SSE + worker coordination. Columns: `id` PK auto, `topic`, `payload_json`, `created_at`. Topics: `metrics_snapshot`, `ui_notification`, `operation_update`, `restore_log`, `control_intent`, `log:minecraft`, `log:backup`, `log:restore`, `log:mcweb`, `log:mcweb_log`, `maintenance_state:backups`, `maintenance_state:stale_worlds`.
+- `operations` — durable control-plane operation state. Columns: `id` PK auto, `op_id` UNIQUE, `op_type`, `target`, `idempotency_key`, `status`, `checkpoint`, `attempt`, `intent_at`, `started_at`, `finished_at`, `error_code`, `message`, `data_json`, `updated_at`. Used for start/stop/backup/restore/any future operation-tracked action.
+
+Schema notes
+- Backward-compatible migrations exist for `operations.idempotency_key`, `operations.checkpoint`, `device_fallmap.owner`. The DB is used as a stream source, not just a store.
+
+Implementation map
+
+1. Bootstrap and composition
+- `app/bootstrap/web_app.py`: `load_bootstrap_config`, `build_state`, `ensure_data_bootstrap`, `configure_setup`, `create_runtime`, `run_server`, `run_worker`. Loads config; creates app; builds state/locks/caches/paths/timing; ensures `data/` + schema; decides setup mode; wires runtime + routes; starts server/worker. Edge cases: incompatible data archived to `data/old_app_data`; active restore operations force-failed on reboot bootstrap.
+- `app/bootstrap/web_app_state.py` `build_state`: derives paths for logs/data/docs/runtime files; creates locks/caches (backup, session, logs, metrics, restore, storage, device map, password throttle, clients); defines service status intent + log-stream states. World path refreshed later from `server.properties`.
+
+2. Setup mode and configuration
+- Setup page `/setup`: `setup_service.assess_setup_requirement` + `configure_setup`. Missing/invalid `mcweb.env` → setup active; non-setup requests redirected to `/setup`. `paths_only` mode when only path values invalid; `full` mode when password/timezone/core config missing. Invalid timezone or OS-invalid paths force setup.
+- Validate without saving: `setup_queries.validate_setup_request` → `/setup/validate`; validates timezone, minecraft root, backup path (+ optional creation allowance); backup path can report missing-but-creatable separately.
+- Save: `setup_commands.handle_setup_submit`, `setup_orchestration.save_setup_values`, `setup_service.write_env_file`. Normalizes form, validates fields + password length/match (full mode), generates hash, writes `mcweb.env`, ensures bootstrap data, triggers process reload. Residual data can be archived on rewrite.
+
+3. Shell and navigation architecture
+- Shared shell (`app_shell.html`, `static/app_shell.js`): full request → `app_shell.html`; internal nav sends `X-MCWEB-Fragment: 1`; fragment replaces `#mcweb-app-content`; page module unmounts/mounts. Navigation failure → offline recovery helper. Route helpers: `shell_page.fragment_response_requested`, `shell_page.render_shell_page`.
+- Multi-tab single-owner live runtime: `BroadcastChannel` primary election (fallback `localStorage` storage events); primary owns metrics/notifications/operation/home-log streams; forwards snapshots/events to secondaries. Stale primary expires via TTL heartbeat.
+- Offline shell/recovery: `service_worker.js`, `offline_recovery.js`, route `/sw.js`. Precaches shell assets/routes/fragments; serves cached HTML/fragment when offline; banner + reconnect/reload. Missing cache → plain 503.
+
+4. Home page and shared runtime state
+- `/`: `dashboard_routes.index` + `dashboard_queries.get_dashboard_shell_model`; builds alert message from query-string code; gathers cached log snapshots (minecraft, backup, mcweb, mcweb_log); renders home fragment. Shell vs fragment request changes wrapper. Cached-log failure → empty strings.
+- `/home-heartbeat`: `dashboard_metrics_runtime.mark_home_page_client_active`; touches client activity, updates `home_page_last_seen`, wakes metrics-collector waiters; handles both legacy no-arg and new `client_id`.
+- Diagnostics/shell endpoints: `/observed-state`, `/consistency-check`, `/profiling-summary`, `/device-name-map`, `/ui-error-log`. Profiling + auto-repair require password. Observed state cached briefly (~1s lag).
+
+5. Metrics and dashboard live state
+- `dashboard_metrics_routes.py`: `/metrics` (best-effort refresh live metrics → SQLite `metrics_snapshot` → in-memory cache; short per-route cache). `/metrics-stream` (register client, increment stream count, send initial snapshot, wait on condition var + poll SQLite topic, keepalives; nav-attention payload may merge into snapshot; close unregisters).
+- `dashboard_metrics_runtime.py`: `has_active_flask_app_clients`, `metrics_collector_loop`, `collect_and_publish_metrics`. No clients → collector sleeps; server on + no clients → slow storage/cache refresh; clients → normal cadence. Publishes to SQLite `metrics_snapshot` + in-memory condition. Worker role can collect continuously; idle storage cache refreshed separately so reconnecting clients see newer disk/cleanup counts.
+- Metric composition: `collect_dashboard_metrics`, `get_slow_metrics`, `_resolve_service_status_display`. Collects CPU/RAM/frequency/storage, RCON player/tick, backup schedule/status, stale count, cleanup metadata; derives UI classes + nested payloads. Active clients force fresher slow metrics. Unknown RCON while active may still show `Starting`.
+
+6. Notifications and operation streams
+- `/notifications-stream`: streams SQLite `ui_notification`; if no `since`, start from latest; keepalives every 2s idle.
+- `/operation-stream`: streams `operation_update` for async command state; keepalives every 0.5s idle.
+- `app/services/notification_service.py` `publish_ui_notification`: appends `ui_notification` topic (+timestamp if absent).
+
+7. Start, stop, backup, restore, and RCON control plane
+- Control routes (`dashboard_control_routes.py`): `/start`, `/stop`, `/backup`, `/restore-backup`, `/restore-status`, `/stream/restore_logs`, `/operation-status/<op_id>`, `/rcon`. Extract idempotency key/client key/form; call command handlers; normalize `CommandResult`.
+- Start (`start_operation`, `start_usecase.start_service_non_blocking`): rate-limit; confirm off; duplicate-start guard + 10s cooldown; storage guard; create/resume operation; append `control_intent`; intent `starting`; run worker logic or leave to worker role; rotate/write startup RCON settings; platform start (`systemctl start --no-block` on Linux); write session start; reset periodic backup counter; wait for observed completion. No password. Stale start intents failed by request path/reconciler. Running observed when log matches `Dedicated server took ... seconds to load`; early return-to-off → reconciler failure.
+- Stop (`stop_operation`, `stop_usecase.graceful_stop_minecraft`): rate-limit; reject if off; validate password; create/resume operation; intent `shutting`; stop service; run shutdown/session-end backup; clear session file; reset backup schedule; optionally trigger `server_shutdown` event. Requires admin password. Backup-hook failure → stop treated as failed/partial.
+- Backup (`backup_operation`, `backup_usecase.run_backup_script`): rate-limit; reject while starting/shutting, cleanup running, or restore running/queued; storage guard; create/resume operation; append `control_intent`; call backup script via adapter; mark observed on success. No password for manual trigger. Single-flight run lock; non-zero exit with changed files = success-with-warning; stale backup-state file auto-cleared.
+- Restore (`restore_operation`, `restore_jobs.start_restore_job`, `restore_execution.restore_world_backup`): rate-limit; require password + non-empty filename; require server off; reject while cleanup running or backup running/queued; append restore request log event; create/resume restore operation; append `control_intent`; start job thread or leave for worker; track status/logs. Rejects concurrent restore; idempotency conflict checked against restore target.
+- Restore job execution (`_resolve_selected_source`, `_load_restore_context`, `_prepare_restore_source`, `_create_snapshot_for_restore`, `_apply_restore_data`, `_switch_server_properties`, `_restart_after_success`, `restore_world_backup`): validate source (snapshot refs `snapshot::<name>`, backup must be `.zip`); reject if backup running; load active world + `server.properties`; stop service if active; unzip to temp or use snapshot dir; locate world data; reserve restore IDs/names; create pre-restore snapshot zip; choose new world dir name; copy restored world; archive old world into `data/old_worlds`; rewrite `server.properties level-name`; append records to SQLite + text history; update `ctx.WORLD_DIR`; restart service if it had been running. Zip extraction blocks path traversal; corrupted zip → safe failure; `server.properties` update failure tries rolling old world back; failures after stop try restart; rollback is partial, not transactional across all filesystem changes.
+- Restore status/logs (`restore_status.get_restore_status`, `restore_status.append_restore_event`, `/restore-status`, `/stream/restore_logs`): in-memory restore status + durable `restore_log` events; per-job + aggregate logs; one-shot status JSON + SSE stream. Web-only role reconstructs status from pending operations.
+- RCON (`rcon_command`, `rcon_probe_service.run_mcrcon`): require non-empty command, RCON enabled, server active, password; run `mcrcon`; stderr/stdout surfaced in rejection message on failure.
+
+8. Log streaming and file browsing
+- Backup & restore page `/backups`: `dashboard_file_routes.backups_page`, `dashboard_file_runtime.refresh_file_page_items`, `_build_backup_page_items`. Warms/refreshes cached items; merges zip backups + snapshot dirs; attaches latest restore log per item. Snapshot sizes computed lazily; initial page can use persisted SQLite snapshot before rescanning.
+- Downloads: `/download/backups/<filename>`, `/download/backups-snapshot/<snapshot_name>` — require password, path-validate, build temp zip for snapshots (cleaned after response).
+- Log browser (`/minecraft-logs`, `/crash-logs`): `dashboard_file_queries.log_file_source_spec`, `dashboard_file_routes.list_log_files`; sources: minecraft, crash, backup, mcweb, mcweb_log, restore. Returns cached/direct inventory + download/view endpoints.
+- View: `dashboard_file_queries.read_view_file_content`, `/view-file/...`, `/view-log-file/...` — safe path resolve, load text, support `.gz`, truncate >2MB to last 2MB. Bad read → clean error payload.
+- `log_stream_service.py` live streaming (sources minecraft, backup, restore, mcweb, mcweb_log): one fetcher worker per source; journal-follow for Minecraft on Linux, file poll otherwise; batch lines; keep text caches for first paint; append SQLite `log:<source>` events when clients exist; SSE snapshots + batches. Minecraft follow allowed while starting/running; backup follow while backup running/queued. RCON noise filtered from Minecraft stream; startup line clears `starting` intent + marks start observed; crash markers set `crashed` + schedule delayed stop.
+
+9. Maintenance / cleanup subsystem
+- Maintenance page `/maintenance` (scopes `backups`, `stale_worlds`): `register_maintenance_routes`, `maintenance_queries.get_page_model` → loads snapshot, preview, history, device map, active world, backup/stale dirs.
+- State API + SSE: `/maintenance/api/state`, `/maintenance-stream` — cached or fresh state; async worker warms active scopes; SSE pushes page-local changes; refresh pauses when service off + no active maintenance clients; payload has freshness metadata.
+- `maintenance_commands.py` — password confirmation for actions: `open_rules_edit`, `save_rules`, `run_rules`, `manual_delete` (requires admin password).
+  - Save rules: normalize stale-world count settings; validate; rebuild time-based schedules; bump `rule_version` + `schedule_version`; record `last_changed_by/at`; save; append maintenance-state preview event. Stale-world scope maps backup-style count fields into one shape.
+  - Rule run: reject on backup/restore conflict; optional single-rule targeting (age/count/space); dry run → preview + history; wet run → password + cleanup lock; update meta/history/logs. Rules must be enabled.
+  - Manual delete: reject on backup/restore conflict; preview from selected paths; reject ineligible; dry run by default; password for actual delete; ineligible paths reported explicitly.
+  - Acknowledge missed runs: load `cleanup_non_normal.txt`, mark matching entries acknowledged, write back atomically.
+- `maintenance_candidate_scan.py`: candidates `backup_zip`, `stale_world_dir`, `old_world_zip`; unified inventory; resolves active world from `server.properties`; scans backup/snapshot roots + `data/old_worlds`; marks ineligible (symlink, outside allowed roots, active-world overlap, category disabled, stat/resolve failure). Active-world protection is path-based.
+- `maintenance_rules.py`: group by category; build protected paths; apply hard guards; choose targets (manual selection or rule mode); apply age/count/space rules; dedupe oldest first; blast-radius cap; optionally delete; detailed preview/result. Backup zips use per-bucket retention (session, manual, emergency, pre_restore, auto, other). Newest-per-category + last-backup protections stay in force.
+- `maintenance_scheduler.py`: one scheduler worker; every 30s load config + inspect schedules; supports event schedules + time schedules; run if due and conflict-free; record missed runs on conflicts/gaps. Intervals: daily, weekly, monthly, weekdays, every_n_days. Event triggers: `server_boot`, `low_free_space`, externally triggered names like `server_shutdown`. Last tick persisted in memory; gaps over threshold → missed-run records.
+
+10. Observed state, consistency, and operation reconciliation
+- `dashboard_state_runtime.py` `get_observed_state`: probes service status; loads world/backup/snapshot existence; fetches latest start/stop/restore operations; combines raw service status + operations + in-memory intent. Active service probe beats stale intent rows. Short TTL cache (~1s lag).
+- Consistency report `get_consistency_report`: checks active service without session start; off service with stale session start. Optional repair: write missing session start / clear stale.
+- `dashboard_operations_runtime.py` `reconcile_operations_once` (the `operation_reconciler` failure class Doc 6 §2.2 formalizes): loads active operations; inspects actual service state; marks operations observed / failed-stale-intent / failed-timeout / failed-start-returned-to-off; repairs consistency after updates. Restore jobs reconcile against restore-status getter, not only service state.
+
+11. Session, backup scheduling, and safety watchers
+- `session_watchers.py` `idle_player_watcher` + `get_idle_countdown`: while service active and 0 players, countdown; after `IDLE_ZERO_PLAYERS_SECONDS`, automatic stop. Intent `shutting` prevents duplicate auto-stop.
+- `backup_session_watcher`: reads session start; computes due periodic runs from elapsed intervals; runs auto backup on new interval; on shutdown-with-session-timestamp runs session-end backup. Schedule is session-relative, not absolute-clock. Missed intervals recorded + notified, never replayed automatically.
+- `storage_safety_watcher` + `_run_low_storage_emergency_shutdown`: checks storage guard; if unsafe while active → log warning, optional RCON warning, wait 30s, emergency stop+backup. Only one emergency thread active; message prefers detailed storage-guard reason.
+
+12. Security, auth, and request lifecycle
+- `start_usecase.py` password validation/throttling: `validate_sudo_password`, `validate_admin_password`, `validate_superadmin_password` — read hash, per-IP throttle, `werkzeug.security.check_password_hash`, record success/failure, after 3 failures block 10s + UI notification. `MCWEB_REQUIRE_PASSWORD=false` can bypass admin checks for sudo-style actions.
+- `app_lifecycle.py` before-request hooks: ensure session tracking, ensure CSRF token, reject unsafe methods without valid CSRF except selected setup/heartbeat endpoints (explicitly exempt).
+- `restore_workflow_helpers.py` `ensure_startup_rcon_settings`: find `server.properties`; force `enable-rcon=true`; keep/add `rcon.port`; generate new random `rcon.password`; write + refresh cached RCON config. Start fails if file unreadable/unwritable.
+
+13. Panel settings and device map
+- `/panel-settings` + `/panel-settings/api/state`: load env defaults + persisted values, build timezone options, load device map + grouped machine rows.
+- `/panel-settings/confirm-password`: requires superadmin password (not just admin).
+- `/panel-settings/security`: validate superadmin password; optionally change admin/superadmin password; save `MCWEB_REQUIRE_PASSWORD`; write env. If no superadmin hash exists yet, initialized from admin hash.
+- `/panel-settings/paths`: validate superadmin password; validate timezone/minecraft root/backup dir via setup validators; save env.
+- `/panel-settings/reboot`: validate superadmin password; `os.execv` current process after short detached delay.
+- Device map: `/panel-settings/device-map/save`, `/panel-settings/device-map/import` — superadmin password; save rows into `device_fallmap`; CSV import with conflict reporting + merge (append/overwrite) and conflict resolution (overwrite/use_existing/skip); rebuild grouped view; read-after-write verification on manual save.
+
+14. Documentation page
+- `/readme`, `/doc/server_setup_doc.md`, `/doc/readme-url`, `/downloads/<filename>`; frontend `static/documentation_core.js` + `documentation.css`. Shell loads configured markdown URL; frontend parses markdown with `marked`; syntax highlighting; side ToC from headings; built-in inline ToC hidden on desktop when detected. Static downloads validated against allowed downloads directory.
+
+15. Debug and optional side systems
+- `legacyCode/debug/` — separate debug Flask app + server.properties/env tools; not part of production shell runtime.
+- `legacyCode/nginx/` — optional boot/offline proxy helpers; not integrated into core lifecycle.
+
+Requirements vs implemented features checklist
+Legend: `[x]` implemented · `[~]` partial/different/caveated · `[ ]` not found
+
+- `[x]` 1. Live metrics SSE + shell-designed shared live broadcasts (`/metrics-stream`, `/notifications-stream`, `/operation-stream`, home log SSE, maintenance SSE, restore log SSE, shell-owned runtime).
+- `[x]` 1. Server-side cached metrics for instant first paint (`metrics_cache_payload`, SQLite `metrics_snapshot`, file-record snapshots, log text caches).
+- `[x]` 1. Multi-tab single-owner streaming (`BroadcastChannel`, primary election, secondary rebroadcast).
+- `[x]` 1. Offline shell/recovery (`service_worker.js`, `offline_recovery.js`, cached routes/fragments/assets).
+- `[~]` 1. "No client polling" mostly achieved; some page-local refresh loops remain (file/maintenance SSE loops; explicit shell fetches).
+- `[~]` 1. "Shell owns all metrics/processes" is the target; page modules still own page-local SSE + DOM runtime.
+- `[x]` 2. Start: no password, queued/starting flow (`start_operation`, `start_service_non_blocking`, intent `starting`).
+- `[x]` 2. Start cooldown + duplicate guard (`_START_COOLDOWN_SECONDS = 10.0`, active-operation checks, idempotency).
+- `[x]` 2. Running recognized from startup log readiness and/or active service status (`_mark_start_observed_from_log`, reconciler, observed-state).
+- `[x]` 2. Stop requires password + shutting-down state (`stop_operation`, `validate_sudo_password`).
+- `[x]` 2. 0-player auto-stop after 3 min (`idle_player_watcher`, `IDLE_ZERO_PLAYERS_SECONDS`).
+- `[x]` 2. Low-storage emergency shutdown (`storage_safety_watcher`, `StorageGuard`).
+- `[x]` 2. Start/backup blocked by low storage (`StorageGuard` in `start_operation`/`backup_operation`).
+- `[~]` 2. UI button enablement likely in frontend; server-side rules clear, exact visual coverage not fully audited.
+- `[x]` 3. Backups: manual, session-end, emergency, auto/snapshot flows.
+- `[x]` 3. External script + backup-running state file (`scripts/backup.sh`, `BACKUP_STATE_FILE`, `is_backup_running`).
+- `[x]` 3. Password-protected downloads for backups + snapshots.
+- `[x]` 3. Backup single-flight (run lock + `is_backup_running`).
+- `[x]` 3. Restore list/button/status/log stream (`/backups`, `/restore-status`, `/stream/restore_logs`).
+- `[x]` 3. Pre-restore snapshot, old-world archival, new-world naming, `server.properties` switch (`restore_execution.py`, `restore_name_runs`, `restore_runs`).
+- `[x]` 3. Restore blocked while server running or backup running/queued (`restore_operation`).
+- `[~]` 3. Restore rollback on invalid/corrupted backup only partially transactional (safe zip rejection + some rollback; no full filesystem transaction).
+- `[ ]` 3. No dedicated undo-restore endpoint/UI (pre-restore snapshot used conceptually only).
+- `[x]` 4. Cleanup scopes `backups` + `stale_worlds`.
+- `[x]` 4. Age/count/space/schedule/dry-run/wet-run/history/missed-run tracking.
+- `[x]` 4. Password required for destructive actions.
+- `[x]` 4. Conflict guards block cleanup while backup/restore running/queued.
+- `[x]` 4. Blast-radius caps.
+- `[~]` 4. Stale-world count rules normalized into shared rule model rather than exact requirement phrasing.
+- `[x]` 5. Log listing/view/download; sources include Minecraft, crash, backup, restore, control-panel actions, control-panel system/error.
+- `[x]` 6. Markdown-driven README with generated ToC; built-in ToC hiding on desktop.
+- `[~]` 7. Shell/pane/nav architecture in spirit (persistent shell, nav pane, fragments, view state, modals, alerts, page panes).
+- `[x]` 7. Nav alert states for home/restore/cleanup; offline banner; startup/shutdown sounds.
+- `[~]` 7. Exact CSS tokens/spacing/modal classes not all verified against text spec.
+- `[x]` 8. Home page stat groups + live logs + RCON input; backup/restore page with list, sort/filter, restore pane, restore logs; unified log browser.
+- `[x]` 9. Initial setup generates `mcweb.env`.
+- `[~]` 9. Setup-as-always-available page only partially realized (panel-settings covers much; setup still primarily first-run).
+- `[x]` 10. CSRF; hashed+salted passwords; RCON password regenerated per start + written to `server.properties`.
+- `[x]` 11. App actions/failures logged in dedicated app logs; restore/cleanup histories persisted structurally.
+- `[x]` 12. Env file stores runtime config, hashes, secret key, dirs, intervals; password retry throttle (3 failures → 10s + notification).
+- `[~]` 12. "Typed passwords don't remain in form" likely handled in frontend UX; not fully audited.
+- `[x]` 13. UI notifications; missed backups/cleanups tracked + notified (no auto-catch-up); client reconnection with cached rehydration + offline recovery; device identification + IP-to-name mapping; startup/shutdown chimes.
+- `[~]` 13. Crash popup behavior not as explicit as wording (marks crash + schedules stop; exact popup coverage unproven).
+- `[~]` 14. Conflict resolution implemented but not every sentence exact: cleanup blocked by backup/restore; restore blocked by running/queued backup; duplicate-start suppression + cooldown; operation records + idempotency. Differences: backup single-flight reuses existing operations rather than deep queue; stop deduplicated more than truly queued; priority ordering enforced as guards, not a general scheduler.
+- `[ ]` 15. Future plan to remove Linux/system-service dependency not implemented (still `systemctl` + `journalctl`).
+- `[x]` 16. All "implemented behavior" extras present: client registry, idle log buffering/draining, restore log SSE, cleanup missed-run persistence, cleanup history persistence, blast-radius caps, cleanup priority guards, storage guard.
+- `[~]` 17. Panel settings partial. Implemented: admin/superadmin password changes, path settings, timezone, device map save/import + grouped display, reboot app. Missing: shutdown entire server, update control panel from git, revert control panel, full Tailscale-style row-edit not verified end-to-end.
+
+Bottom line
+- The legacy system is already a layered control-plane application: persistent SPA-like shell, SQLite-backed operation/event streams, split web/worker runtime, background watchers/schedulers, setup, panel settings, restore orchestration, cleanup engine, multi-tab/offline behavior.
+- Biggest constraints carried forward: one very large shared runtime state object; reliance on external scripts + platform service commands; partial transactional safety across filesystem-heavy operations; much capability concentrated in one process model (though concerns are being split into layers).
+
+Known gaps / uncertain areas
+- High-confidence architecture/behavior map, not an exhaustive file/symbol index.
+- Large modules (esp. `app/services/`, `static/`) analyzed by behavior + major control flow.
+- Frontend visual compliance only partially verified (CSS tokens, spacing, modal variants, some interactions).
+- Test suite not fully mapped (no feature-to-test coverage yet).
+- Debug-only code, nginx helpers, support scripts reviewed at high level only.
+- Some conclusions inferred from route/service/cache/worker interaction, not a single explicit spec.
+- UX details (popup timing, form reset, exact button enable/disable, some alerts) not exhaustively verified.
+- Restore safety reviewed carefully; filesystem-heavy edge cases (corrupted archives, unusual paths, partial disk, races) not simulated.
+- Platform behavior outside main Linux path less certain.
+- To become near-exhaustive: file-by-file inventory, route-to-template/script mapping, module function inventories, test coverage map.
