@@ -175,7 +175,7 @@ Purpose
 - A Status Indicator (badge/pill) communicates state at a glance — a world's run state, a backup's status, a sync job's outcome — without being clickable or introducing a new visual language. Informational only: never buttons, never onclick, never hover/pressed states.
 
 17.1 Where used
-- Stat boxes (Server Status, Backup Stats — Doc 1 §8).
+- Stat boxes (Server Status, Backup Stats — Doc 5 homepage).
 - Backup list rows (sync status per backup — Doc 5).
 - Any place a discrete state needs a compact label rather than prose.
 

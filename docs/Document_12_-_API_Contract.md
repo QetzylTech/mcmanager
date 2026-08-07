@@ -1,0 +1,327 @@
+# Document 12: API Contract & Realtime Stream Contract
+
+## Envelope
+
+Every JSON response uses one envelope:
+
+```json
+{"ok": true, "data": {...}, "meta": {"op_id": "op_9c1e...", "queue_position": 1, "freshness": 1753142445}}
+```
+
+Error responses:
+
+```json
+{"ok": false, "error": {"code": "WORLD_NOT_OFF", "message": "World must be off to restore.", "details": {"world_id": "w_7f3a...", "state": "running"}}, "meta": {"op_id": "op_..."}}
+```
+
+- `error.code` — canonical machine-readable code (§7). Never changes meaning; additive-only.
+- `error.message` — short human summary. Full detail in `error.details.log` when available; always persisted in `operations.message`/`data_json` and `audit_records.payload`.
+- `meta`: `op_id` (any Operation-creating call), `queue_position` (queued ops), `freshness` (epoch seconds) on cached-live-snapshot payloads, `pagination` on lists.
+
+## Conventions (locked)
+
+- Routes `/api`; streams `/stream`. JSON in/out unless stated (file download/upload, SSE).
+- JSON timestamps are ISO-8601 UTC; DB stores epoch seconds — conversion only in serializers.
+- **Authn**: cookie `mcmanager_session` (HttpOnly, SameSite=Lax, Path=/; Secure over TLS). Cookie value = opaque session id, looked up in `client_sessions` (Doc 7) with expiry/revocation checked on every request. Server-side authz on every request regardless of origin. `POST /api/auth/login` sets cookie; `POST /api/auth/logout` revokes (`deleted_at`).
+- **CSRF**: every state-changing request (POST/PATCH/DELETE) needs `X-CSRF-Token` (double-submit, session-bound, rotated on session restore); missing/mismatch → `CSRF_INVALID`. SSE GET needs none.
+- **Step-up (S)**: requires verified window on session (`client_sessions.step_up_confirmed_at` ≤ default 10 min) or fresh `POST /api/auth/step-up {password}`. S routes additionally require elevated confirmation / scope preview. Password never persisted/pre-filled.
+- **Idempotency**: Operation-creating POSTs accept `Idempotency-Key` (stored on `operations.idempotency_key`, unique per `op_type`). Same key + op_type retry → original Operation (200). Server generates one if omitted → `meta.idempotency_key`.
+- **Async (O)**: state-changing actions are durable Operations. Validate preconditions → create → **202** `{meta.op_id, data.operation.status (Created|Queued), meta.queue_position?}`. No polling — progress via SSE `operation.*`, fallback `GET /api/operations/{op_id}`. Rejection-path preconditions (never queued: Restore while running, DeleteWorld not off, stale-version ConfigEdit) → **409**, no Operation. Idempotent replay of completed op → **200** terminal state.
+- **Paging/filter/sort**: list endpoints `limit` (default 50, max 500) + `offset` (0) → `meta.pagination {limit, offset, total}`. Filters per-endpoint server-side query params. `sort` = comma list, optional `-` desc (`sort=-created_at`); unsupported field → `VALIDATION_ERROR`.
+
+## HTTP Status Summary
+
+| Status | Meaning |
+|---|---|
+| 200 | OK (read, idempotent replay, completed writes) |
+| 201 | Resource created (login session, notification read marker) |
+| 202 | Operation created/queued; async accepted |
+| 400 | Validation (`VALIDATION_ERROR`, `CONFIG_*`, `FILE_*`) |
+| 401 | Missing/invalid/expired/revoked session |
+| 403 | Authenticated but denied, or step-up required/expired |
+| 404 | Resource not found (`*_NOT_FOUND`) |
+| 409 | Conflict: precondition rejection, stale version, in-flight conflict, duplicate identity |
+| 422 | Structural request-body failure (malformed JSON/type) |
+| 429 | Throttled |
+| 500 | Internal (`INTERNAL_ERROR`; always `details.log`, `details.op_id` when known) |
+
+## Route Catalog
+
+Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` = Superadmin only; `C` = Client with grant; `any` = any authenticated user.
+
+### Auth & Session
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| POST | `/api/auth/login` | public | `{username, password, device_id?}` → session cookie; 429 after throttle; audit on success/failure |
+| POST | `/api/auth/logout` | any | revokes session |
+| POST | `/api/auth/step-up` | any | `{password}` → 10-min window; S routes check it |
+| GET | `/api/session` | any | user, role, permission grants, device, step-up expiry, settings visibility |
+
+### Worlds
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/worlds` | any | filters `state`, `server_type`, `mc_version`, `search` (display_name), `include_deleted=false` |
+| POST | `/api/worlds` | A | O CreateWorld; body: template_id, display_name, port, addressing_strategy/value, java_runtime_id, launch_args |
+| GET | `/api/worlds/{world_id}` | any | detail incl. live state + last backup summary; deleted → 404 |
+| PATCH | `/api/worlds/{world_id}` | A | RenameWorld `{display_name, version}` (metadata ConfigEdit, version per Doc 11); allowed concurrently with Backup/Restore/Cleanup |
+| DELETE | `/api/worlds/{world_id}` | A S | O DeleteWorld; scope preview required first; 409 unless `off` + no in-flight ops |
+| GET | `/api/worlds/{world_id}/runtime-config` | A | read view: java_runtime_id, launch_args, port, addressing |
+| PATCH | `/api/worlds/{world_id}/runtime-config` | A | O ConfigEdit; **409 unless state = off**; requires `version`; immediate write, effect next boot |
+| POST | `/api/worlds/{world_id}/start` | any | O Start; 10s cooldown; duplicates ignored |
+| POST | `/api/worlds/{world_id}/stop` | A | O Stop; password via step-up window |
+| POST | `/api/worlds/{world_id}/kill` | A S | O Kill; elevated confirmation; supersedes in-flight Stop atomically |
+| POST | `/api/worlds/{world_id}/server-properties` | A | O ConfigEdit guarded editor (validated keys/values) |
+| GET | `/api/worlds/{world_id}/server-properties` | A | validated content + allowed-keys catalog |
+
+### Operations
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/operations` | any | filters `world_id`, `op_type`, `status`, `actor_user_id`; sort `-created_at` |
+| GET | `/api/operations/{op_id}` | any | incl. `checkpoint`, `error_code`, `message`, `data_json` |
+| POST | `/api/operations/{op_id}/cancel` | A | O only from `Queued`/`Validating`, cancellable types; else 409 `OP_NOT_CANCELLABLE` |
+| GET | `/api/worlds/{world_id}/operations` | any | world-scoped shorthand |
+
+### Backups & Restores
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/worlds/{world_id}/backups` | any | filters `category`, `deleted=false`; retention-protected rows flagged |
+| POST | `/api/worlds/{world_id}/backups` | A | O Backup `category=manual`; 202; queued single-flight if backup/restore/cleanup in flight |
+| GET | `/api/backups/{artifact_id}` | any | artifact detail incl. sync status |
+| DELETE | `/api/backups/{artifact_id}` | A S | soft-delete + remove file; 409 if retention floor violated without SA `?force=true` + elevated confirmation |
+| GET | `/api/backups` | A | manager + all-worlds inventory; `world_id=null` = ManagerBackups |
+| GET | `/api/worlds/{world_id}/restores` | any | restore history |
+| POST | `/api/worlds/{world_id}/restores` | A S | O Restore `{artifact_id}` (or `source_path`); 409 unless `off` + no in-flight backup/cleanup; queued single-flight; mandates `pre_restore_artifact_id` |
+| POST | `/api/worlds/{world_id}/restores/rollback` | A S | O corrective restore referencing pre-restore artifact (recovery path, not undo toggle) |
+
+### Cleanup
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_worlds\|logs, world_id?, policy_version?}` → affected-candidate summary in `data` once Validating |
+| POST | `/api/cleanup/execute` | A S | O Cleanup `wet=true`; requires dry-run preview (`scope`, `dry_run_operation_id`); blast-radius cap enforced |
+| GET | `/api/cleanup/runs` | A | cleanup history with summaries in `data_json` |
+| GET | `/api/worlds/{world_id}/cleanup-preview` | A | scoped dry-run shorthand |
+
+### Sync
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/sync/records` | A | manager-wide recent sync activity; filters `status`, `world_id`, `artifact_id` |
+| GET | `/api/backups/{artifact_id}/sync` | any | sync job + immutable attempt timeline |
+| POST | `/api/sync/retry` | A | O re-trigger sync `{artifact_id}` (only auto-retrying op; this is manual) |
+| GET | `/api/sync/targets` | A | targets with effective resolution (global default vs world override) |
+
+### Schedules & Missed Runs
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/schedules` | A | filters `scope`, `world_id`, `schedule_type`, `enabled` |
+| POST | `/api/schedules` | A | O ConfigEdit; body per Doc 7 |
+| PATCH | `/api/schedules/{schedule_id}` | A | O ConfigEdit; requires `version`; 409 stale |
+| DELETE | `/api/schedules/{schedule_id}` | A | O ConfigEdit soft-delete |
+| GET | `/api/missed-runs` | A | filter `pending\|resolved\|ignored` |
+| PATCH | `/api/missed-runs/{missed_run_id}` | A | `{resolution: resolved\|ignored}` — terminal; 409 once set |
+
+### Settings & Manager
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/settings` | A | merged effective global settings + `version` |
+| PATCH | `/api/settings` | A | O ConfigEdit global settings; requires `version`; 409 stale |
+| GET | `/api/worlds/{world_id}/settings` | A | effective 3-tier settings |
+| PATCH | `/api/worlds/{world_id}/settings` | A | O ConfigEdit world override; requires `version`; notification defaults not overridable |
+| GET | `/api/manager` | any | singleton: deployed_version, setup_completed, state |
+| POST | `/api/manager/backup` | A | O ManagerBackup (`world_id=null`) |
+| POST | `/api/manager/restore` | A S | O restore from ManagerBackup artifact |
+| POST | `/api/manager/restart` | A S | management action |
+| POST | `/api/manager/update` | SA S | version update |
+| POST | `/api/manager/rollback` | SA S | version rollback |
+| GET | `/api/setup` | any | setup state |
+| POST | `/api/setup` | SA | complete first-run setup |
+
+### Templates & Java Runtimes
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/templates` | any | filters `category`, `deprecated=false` |
+| POST | `/api/templates` | A | O ConfigEdit template create |
+| PATCH | `/api/templates/{template_id}` | A | O ConfigEdit; requires `version`; 409 stale |
+| DELETE | `/api/templates/{template_id}` | A | O ConfigEdit **deprecate** flow (never hard-delete once referenced) |
+| GET | `/api/java-runtimes` | A | list with `status` |
+| POST | `/api/java-runtimes` | A | O ConfigEdit register (path, label) |
+| POST | `/api/java-runtimes/{runtime_id}/verify` | A | O ConfigEdit health verification |
+| PATCH | `/api/java-runtimes/{runtime_id}` | A | O ConfigEdit; requires `version` |
+| DELETE | `/api/java-runtimes/{runtime_id}` | A | O ConfigEdit deprecate |
+
+### Users, Roles, Permissions, Devices
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/users` | SA | status, last activity, role assignments |
+| POST | `/api/users` | SA | create user |
+| PATCH | `/api/users/{user_id}` | SA (self: A) | display_name/status/password reset; username edit subject to step-up |
+| DELETE | `/api/users/{user_id}` | SA | soft-delete; 409 if last active Superadmin |
+| GET | `/api/roles` | SA | baseline + custom roles |
+| POST | `/api/roles` | SA | custom role |
+| PATCH | `/api/roles/{role_id}` | SA | O ConfigEdit; requires `version`; baseline roles immutable (409) |
+| DELETE | `/api/roles/{role_id}` | SA | soft-delete; 409 if holders exist |
+| GET | `/api/roles/{role_id}/permissions` | SA | permission catalog |
+| POST | `/api/permissions` | SA | grant (role OR user attachment — never both) |
+| DELETE | `/api/permissions/{permission_id}` | SA | revoke (soft) |
+| GET | `/api/devices` | SA | device list |
+| PATCH | `/api/devices/{device_id}` | SA | approve / revoke / rename |
+| GET | `/api/devices/{device_id}/sessions` | SA | session history |
+| GET | `/api/session/activity` | any | own session client-monitoring snapshot |
+
+### Notifications & Audit
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/notifications` | any | unread-first, severity then recency; `meta.unread_count`; filters `severity`, `read`, `world_id` |
+| POST | `/api/notifications/{notification_id}/read` | any | per-user read marker |
+| POST | `/api/notifications/{notification_id}/dismiss` | any | per-user dismiss (dropdown only; row permanent) |
+| POST | `/api/notifications/read-all` | any | bulk per-user read |
+| GET | `/api/audit` | any | immutable history; filters `actor_user_id`, `world_id`, `event_type`, `from`/`to`; sort `-created_at` |
+| GET | `/api/audit/{audit_id}` | any | incl. `annotation_of`, `payload` |
+
+### Files & Logs
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/worlds/{world_id}/files` | A | browse `path` (relative), `include_hidden=false` → name, type, size, mtime |
+| GET | `/api/worlds/{world_id}/files/download` | A | `path`; binary |
+| POST | `/api/worlds/{world_id}/files` | A | multipart upload `path`, `file`; guarded boundary checks |
+| POST | `/api/worlds/{world_id}/files/mkdir` | A | `{path, name}` |
+| PATCH | `/api/worlds/{world_id}/files` | A | O FileEdit `{action: rename\|move\|copy, from, to}` |
+| DELETE | `/api/worlds/{world_id}/files` | A S | `{path}`; elevated + audit |
+| GET | `/api/worlds/{world_id}/logs` | any | channel list |
+| GET | `/api/worlds/{world_id}/logs/{channel}` | A | file list for channel |
+| GET | `/api/worlds/{world_id}/logs/{channel}/{file}` | A | download |
+| GET | `/api/worlds/{world_id}/logs/{channel}/tail` | A | `?offset=` historical tail; new lines via SSE `log.line` |
+
+**Log channels (`{channel}`)** — canonical closed set; others → `VALIDATION_ERROR`:
+`minecraft` (live console/stdout-stderr) · `crash_reports` · `backup_restore` (dedicated live stream `/stream/restore_logs`) · `panel_activity` · `panel_errors` · `debug` / `sync` / `manager_action`
+
+### System
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/health` | public | `{status:"ok", version, db:"ok"}` — no sensitive data |
+| GET | `/api/system/stats` | any | CPU/RAM/storage/worlds; cached; `meta.freshness` |
+| GET | `/api/diagnostics` | A | consistency/health checks (foreign_key_check status, reconciliation report) |
+
+## SSE Stream Contract
+
+**Transport**: `text/event-stream`; WebSocket allowed as future alternative behind the same topic abstraction — never per-tab polling. Each tab opens its own independent connection; server computes each event once and fans out; no election/forwarding. `event:`/`data:`/`id:` format; `id` = per-stream monotonic sequence; reconnect with `Last-Event-ID` replays buffered events (keep last 200/stream); `retry:` 3000ms. Payloads single-line JSON.
+
+### Endpoints
+
+| Endpoint | Scope | First event on connect |
+|---|---|---|
+| `GET /stream/events` | manager-wide | `snapshot` (durable + cached live, never blank) |
+| `GET /stream/worlds/{world_id}/events` | one world | `snapshot.world` |
+| `GET /stream/worlds/{world_id}/logs` | one world's live console | `log.line` + buffered replay |
+| `GET /stream/restore_logs?world_id={world_id}` | one world's restore stream | `restore.progress` + `log.line` (restore channel) |
+| `GET /stream/metrics` | manager + all worlds | `metrics` snapshot then live deltas |
+
+All require a valid session cookie. CSRF not applicable (GET, read-only).
+
+### Topics (event names = stable API; additions only; 1:1 with Doc 6 domain events)
+
+| event | Payload (`data`) |
+|---|---|
+| `snapshot` | `{manager:{worlds, operations, backups, schedules, notifications, freshness}, cached_live:{metrics, world_states}}` — full durable snapshot + cached live with `freshness` |
+| `world.state` | `{world_id, state, previous_state, at, reason, operation_id?}` |
+| `world.metrics` | `{world_id, players, players_count, tick_time_ms, uptime_s, last_metrics_at}` |
+| `operation.created` | `{op_id, op_type, world_id, actor_type, status, queue_position}` |
+| `operation.progress` | `{op_id, op_type, status, checkpoint, error_code?, message?, pct?}` |
+| `operation.terminal` | `{op_id, op_type, status:"Completed\|Failed\|Cancelled\|TimedOut", error_code?, message?}` |
+| `notification` | Notification shape |
+| `system.stats` | `{cpu_pct, ram_mb, storage_pct, worlds_count, at}` (cached cadence) |
+| `backup.progress` | `{world_id, operation_id, stage:"pausing_autosave\|capturing\|resuming_autosave\|registered", pct?, artifact_id?}` |
+| `restore.progress` | `{world_id, operation_id, stage:"validating\|pre_backup\|staging\|archiving\|switching\|recording", pct?, reverted:false}` |
+| `sync.status` | `{sync_id, artifact_id, status:"pending\|succeeded\|failed", attempt_number, outcome?}` |
+| `log.line` | `{world_id, session_id, channel:"stdout\|stderr\|minecraft\|backup\|restore\|manager", line, line_no, ts}` |
+| `alert` | `{category:"critical_storage\|suspicious_activity\|unauthorized_attempt", severity:"critical\|high", message, details}` |
+| `queue.position` | `{op_id, op_type, queue_position}` |
+| `missed_run` | `{missed_run_id, schedule_id, schedule_name_snapshot, expected_run_at}` |
+
+### MetricsCadence & Broadcast Set
+
+- Clients = 0 AND all worlds off → no emission (`null` cadence). Any world on OR any client connected → 15s cached snapshot refresh. ≥1 connected client → 1Hz stream cadence (log lines as emitted).
+- **Broadcast set** (canonical payload fields; SSE/JSON push-only, no polling; projected across `world.metrics`, `system.stats`, `snapshot`, `notifications`):
+  - Host: RAM, CPU/core, CPU frequency, storage %.
+  - World: MC status, RCON player list, tick time, auto-stop timer, backup status, last backup, next backup, backups folder, backup count, stale-worlds count.
+  - Jobs/policy: cleanup last run, cleanup rule version, schedule version, rule last changed by, next run, missed-run count.
+  - Logs: console, backup, panel activity, panel error (live via `log.line`; history via Files & Logs channels).
+
+## Error-Code Catalog
+
+Canonical, additive-only. `operations.error_code` values appear here so UI "explain error" resolves code → friendly text + expandable detail.
+
+| Code | HTTP | Source | Meaning |
+|---|---|---|---|
+| `VALIDATION_ERROR` | 400 | any | Field/param validation failed; `details.fields` |
+| `VALIDATION_STALE_VERSION` | 409 | ConfigEdit | alias of `CONFIG_VERSION_CONFLICT` (legacy clients) |
+| `AUTH_INVALID_CREDENTIALS` | 401 | login | Bad username/password |
+| `AUTH_ACCOUNT_LOCKED` | 403 | login | Retry-throttle lockout; `details.locked_until` |
+| `AUTH_THROTTLED` | 429 | login/step-up | Retry/session/destructive throttle active |
+| `AUTH_SESSION_EXPIRED` | 401 | any | `client_sessions.expires_at` passed |
+| `AUTH_SESSION_REVOKED` | 401 | any | `deleted_at` set (logout/admin/password change) |
+| `AUTH_CSRF_INVALID` | 403 | state-changing | Missing/mismatched `X-CSRF-Token` |
+| `AUTH_STEP_UP_REQUIRED` | 403 | S routes | Step-up window absent |
+| `AUTH_STEP_UP_EXPIRED` | 403 | S routes | Window elapsed mid-session |
+| `FORBIDDEN` | 403 | any | Authenticated but denied (always audit-logged) |
+| `FORBIDDEN_LAST_SUPERADMIN` | 409 | user mgmt | Last-active-Superadmin guard |
+| `NOT_FOUND` | 404 | any | Generic (`*_NOT_FOUND` preferred) |
+| `WORLD_NOT_FOUND` | 404 | worlds | Unknown/deleted world_id |
+| `WORLD_DELETED` | 409 | worlds | Action on tombstoned world |
+| `WORLD_NOT_OFF` | 409 | stop/kill/restore/config/delete | Precondition requires `off` |
+| `WORLD_ALREADY_RUNNING` | 409 | start | Duplicate start (idempotency "ignored") |
+| `WORLD_IN_COOLDOWN` | 409 | start | 10s cooldown |
+| `WORLD_NAME_CONFLICT` | 409 | create/rename | display_name non-unique among live worlds |
+| `WORLD_PORT_CONFLICT` | 409 | create/config | port non-unique among live worlds |
+| `WORLD_RUNTIME_CONFIG_STATE` | 409 | runtime-config | config edit while not `off` |
+| `OP_NOT_FOUND` | 404 | operations | Unknown op_id |
+| `OP_NOT_CANCELLABLE` | 409 | cancel | Type/status not cancellable (`Queued`/`Validating` only) |
+| `OP_ALREADY_TERMINAL` | 409 | cancel/transition | Terminal ops immutable |
+| `OP_CONFLICT_IN_FLIGHT` | 409 | reject-path ops | In-flight op blocks this type (Document 11 matrix) |
+| `OP_QUEUED` | 202 | queue-path ops | Not an error: queued single-flight; `meta.queue_position` |
+| `OP_SUPERSEDED_BY_KILL` | n/a (transition) | kill | In-flight Stop cancelled atomically by Kill |
+| `OP_MANAGER_RESTART_INCOMPLETE` | 409 | reconcile | Op failed at restart reconciliation |
+| `OP_TIMEOUT` | n/a (terminal) | ops | Locked timeout reached |
+| `STORAGE_GUARD_TRIPPED` | 409 | start/backup/restore/sync | Contextual storage guard active; `details.reserve_bytes` |
+| `BACKUP_ARTIFACT_NOT_FOUND` | 404 | backups | Unknown artifact_id |
+| `BACKUP_INVALID_CHECKSUM` | 409 | restore validate | Checksum mismatch |
+| `BACKUP_RETENTION_GUARD` | 409 | delete backup | Floor/last-viable-artifact guard; `?force` SA-only |
+| `RESTORE_ARTIFACT_INVALID` | 409 | restore | Artifact corrupt/unreadable |
+| `RESTORE_PREBACKUP_FAILED` | 502 | restore | Mandatory pre-restore backup failed |
+| `RESTORE_REVERTED` | n/a (outcome) | restore_history | Restore completed as `reverted` |
+| `SYNC_TARGET_UNRESOLVED` | 409 | sync | Zero-resolvable target (not an error when none configured — no-op) |
+| `SYNC_TRANSIENT` | n/a (attempt) | sync_attempts | `failed_transient` — retryable |
+| `SYNC_PERMANENT` | n/a (attempt) | sync_attempts | `failed_permanent` — terminal for job |
+| `SYNC_CONCURRENCY_CAP` | 429 | sync | Global transfer cap reached |
+| `CONFIG_INVALID_KEY` | 400 | server.properties | Unapproved key |
+| `CONFIG_INVALID_VALUE` | 400 | server.properties | Value fails approved-format validation |
+| `CONFIG_VERSION_CONFLICT` | 409 | ConfigEdit all | Stale `version` optimistic-lock rejection |
+| `CLEANUP_NOTHING_TO_DO` | 200 | cleanup | Empty candidate set (not an error) |
+| `CLEANUP_PREVIEW_REQUIRED` | 409 | cleanup execute | Wet run without matching dry-run preview |
+| `CLEANUP_BLAST_RADIUS` | 409 | cleanup execute | Candidate count over cap without elevated confirmation |
+| `CLEANUP_POLICY_FLOOR` | 409 | policy save | Save strands an artifact below floor |
+| `FILE_PATH_UNAUTHORIZED` | 403 | files | Path escapes world boundary |
+| `FILE_NOT_FOUND` | 404 | files | Missing file/folder |
+| `FILE_EXISTS` | 409 | files | Target name collision |
+| `FILE_TOO_LARGE` | 400 | files | Upload over configured cap |
+| `FILE_INVALID` | 400 | files | Illegal name/type for operation |
+| `SCHEDULE_CONFLICT` | 409 | schedules | Optimistic lock or conflict rule |
+| `MISSED_RUN_RESOLVED` | 409 | missed-runs | Already terminal |
+| `DEVICE_UNREGISTERED` | 403 | devices | Unknown device privileged action |
+| `DEVICE_REVOKED` | 403 | devices | Revoked device |
+| `INTERNAL_ERROR` | 500 | any | Unexpected; always `details.log` + `details.op_id` when an Operation involved |
+| `NOT_IMPLEMENTED` | 501 | any | Declared future capability not yet built |
+
+**Error ↔ operations mapping**: Operation-creating failures set `operations.error_code` to the REST-relevant code; the `operations` row is the durable record, the HTTP response mirrors it. System-observed failures (`CRASH_DETECTED`, `OP_MANAGER_RESTART_INCOMPLETE`, `BACKUP_FAILED`) become `operations.error_code` and surface via SSE `operation.terminal`; they do not map to a synchronous HTTP error.
