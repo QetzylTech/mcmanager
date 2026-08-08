@@ -1,306 +1,193 @@
-# Architecture Instructions
+**AI instruction** — reference-only; never supersedes a numbered document. Corpus: this file + Documents 4–14 (contiguous). Documents 1–3 retired; residuals consolidated here (§15/§16). Precedence: higher doc number wins; Doc 9 final on locking/concurrency; Doc 14 final on Minecraft adaptation.
 
-Standing instruction to AI coding assistants working on this project.
-Reference-only material: it never supersedes a numbered document. First-read entry point
-that points at the normative contracts. Normative corpus: Documents 4–8 and 11–15.
-(Documents 1–3, 9, 10 are retired and removed; their residual content is consolidated
-here and in the numbered documents — see §14.)
+## 1 Document Index
 
-------------------------------------------------------------------------
+| Doc | File | Jump targets |
+|---|---|---|
+| 4 | style guide | Tokens; layout system; nav bans; component property table; modal kinds; responsive; status indicators |
+| 5 | nav/workflow | Shell responsibilities; manager-context pages; world-context pages; nav rules; Instructions rendering contract |
+| 6 | domain model | Global audit invariant; entities; lifecycles; event catalog; invariants; closed enum value objects; aggregate roots + deletion tiers |
+| 7 | schema | Conventions (IDs/timestamps/deleted_at/FK-restrict/invariants); 27 table definitions; constraint/cascade summary; migration strategy; startup reconciliation |
+| 8 | services | Capability matrix; operation preconditions/terminal states; scheduler; **locked tuning constants**; retry/cancel policy; failure recovery; notification/audit pipeline |
+| 9 | concurrency | Lock taxonomy; what is not lockable; mutual-exclusion matrix; **optimistic-concurrency version table**; runtime-config-off-only; queue/reject/preempt (incl. restore-wins-over-delete) |
+| 10 | API contract | **Route catalog**; envelope; error-code catalog; SSE endpoints/topics; MetricsCadence + broadcast set |
+| 11 | testing | Pyramid (70/25/5); ISO/IEC 25010 mapping; tooling/coverage; acceptance + performance + release gate |
+| 12 | directory/standards | Top-level + app package layout; **dependency rule**; composition/boot; tests layout; **tooling locks** (black/isort/ruff/mypy/import-linter) |
+| 13 | process-control adapter | Port interface; POSIX/Windows/tailing; supervision; reconciliation; **conformance suite C1–C14**; static guards; prototype plan |
+| 14 | minecraft adapter | **Capability matrix** (Vanilla/Paper/Fabric/Forge); **readiness hierarchy**; EULA model; version-aware `server.properties`; Java compatibility; shutdown ladder; save coordination; backup format + integrity; restore rollback tree |
 
-## 0. Hard Constraints
+Fallback rules: disagreement → Doc 9 governs locking/concurrency; §16 Conflict Log governs all other resolved disagreements; otherwise higher number wins. One canonical file per number — if two files claim the same number, stop and flag; stale copies are deleted, never coexist.
 
-Binding product constraints, not preferences. A change that violates one is rejected.
-Verification for each lives in Document 13.
+## 2 Cross-Cutting References (single sources, do not restate elsewhere)
+
+- Locked numeric constants → Doc 8 (scheduler 30s, Start 120s, Stop 60s, Kill 10s, cooldown 10s, sync backoff, MetricsCadence, storage reserve 10 GB, step-up 10min, log buffer 5000, blast radius 500, throttle, session expiry, SSE replay 200).
+- Minecraft runtime contracts → Doc 14 (readiness §3; EULA §5; properties §6; Java §7; save §10; backup format/integrity §11; rollback §12).
+- World-survival invariant → §16 ruling 10 (Windows `KILL_ON_JOB_CLOSE` not default; Doc 13 §3.2/§5.3).
+- Security finishes → §16 ruling 14 (Argon2id, session rotation, HTTPS, security headers, no password-reset by design, secrets encrypted at rest).
+- Optimistic-lock tables → Doc 9 §4. Queue/reject/preempt → Doc 9 §6.
+- Error codes → Doc 10 (additive-only). SSE topics → Doc 10. Closed enums → Doc 6.
+- Deletion tiers → Doc 6 (Tier 1 permanent; Tier 2 soft + Cleanup-only physical delete).
+- Adapter/import boundaries → Doc 12 + §6 here (platform leaf-only; no shell=True in `app/platform/process/`; no systemd/journalctl — C14).
+- Test gates → Doc 11; tooling gate → Doc 12.
+- Process-control prototype gate → Doc 13 (C1–C14 on target OS + fake adapter + C11 E2E). Minecraft spike gate → Doc 14 (§15 item 1).
+
+## 3 Hard Constraints
+
+Binding; a change violating one is rejected. Verification in Doc 11.
 
 - **Modular monolith.** No microservices. One authoritative control plane.
-- **Multi-world, multi-version.** Many independent world instances run concurrently on
-  one host; each carries its own version/type/Java/ports/files/logs/backups/retention/crash
-  handling. One world's crash/restore/backup never blocks unrelated worlds except where a
-  shared global safety rule (storage guard) requires it.
-- **No `systemd` / `journalctl` dependency.** The control plane must run anywhere Java and
-  Python run. Structural test C14 (Document 15) + import-linter enforce this.
-- **Portable process control.** Worlds launch via data-driven argv (no shell, no
-  double-fork), supervised through the `ProcessControlPort` (Document 15) on every
-  supported OS.
-- **Idle CPU below the documented reference-host threshold** (5-minute average window with
-  no state changes/backups/restores/active streams). Threshold + measurement method:
-  Document 13 and `benchmarks/thresholds.json`.
-- **Baseline memory within a documented range** for the manager alone (excluding managed MC
-  processes). Method: Document 13.
-- **Zero-trust security.** Trusted-network placement reduces exposure only; every request
-  is authenticated with a server-issued session and authorized server-side, regardless of
-  origin.
-- **Realtime without client polling.** Shared server-side streams, compute-once fan-out
-  (Document 12).
-- **Auditability + defensive guardrails preserved.** Immutable audit/event history, durable
-  Operations, storage safety, scope previews, elevated confirmation (Doc 6).
-- **Low resource use.** Event-driven, throttled, or paused background work; no heavy
-  per-client tasks; offline-capable without CDN.
-- **Failure criteria are testable.** The negation of the above (Linux-only control,
-  cross-world interference, lost auditability, excessive weight) must fail its matching
-  test (Document 13).
+- **Multi-world, multi-version.** Many independent worlds per host, each with own version/type/Java/ports/files/logs/backups/retention/crash handling. One world's crash/restore/backup never blocks unrelated worlds except the shared global storage guard.
+- **No `systemd`/`journalctl` dependency.** Runs anywhere Java+Python run. C14 (Doc 13) + import-linter.
+- **Portable process control.** Data-driven argv launch, no shell/double-fork; supervised via `ProcessControlPort` (Doc 13) on every OS.
+- **Idle CPU below documented reference-host threshold** (5-min avg, no state changes/backups/restores/streams). Threshold+method: Doc 11 + `benchmarks/thresholds.json`.
+- **Baseline memory within documented range** (manager only, excluding MC processes). Method: Doc 11.
+- **Zero-trust security.** Every request authenticated (server-issued session) and authorized server-side regardless of origin.
+- **Realtime without client polling.** Shared server-side streams, compute-once fan-out (Doc 10).
+- **Auditability + guardrails preserved.** Immutable audit/events; durable Operations; storage safety; scope previews; elevated confirmation (Doc 6).
+- **Low resource use.** Event-driven/throttled/paused background work; no heavy per-client tasks; offline-capable, no CDN.
+- **Failure criteria testable.** Negation (Linux-only control, cross-world interference, lost auditability, excessive weight) fails its matching test (Doc 11).
 
-------------------------------------------------------------------------
-
-## 1. Top-Level Architecture
+## 4 Planes & Subsystem Map
 
 Five planes, one process (or two cooperating processes sharing one SQLite store, topology B):
 
-- **Presentation plane** — persistent web shell; routed page modules; realtime client
-  hydration. Each tab holds its own independent connection to shared server-side streams;
-  no tab election, heartbeats, or client-side forwarding.
-- **Control plane** — API/session gateway; authorization/policy; world orchestration;
-  operation coordination; scheduler + background jobs.
-- **Runtime plane** — world process supervision; RCON session handling; health probes;
-  startup/shutdown detection (Document 15).
-- **Data plane** — relational state; append-only audit/events; logs; world files; backups;
-  secrets (Doc 7).
-- **Integration plane** — OS process adapter; filesystem adapter; routing adapter; offsite
-  sync adapter; future cluster adapters (all behind ports).
-
-------------------------------------------------------------------------
-
-## 2. Subsystem Map
-
-Detail lives in Documents 8 / 6 / 11 / 12.
+- **Presentation** — persistent web shell; routed page modules; per-tab independent connections to shared server-side streams; no tab election, heartbeats, or client-side forwarding.
+- **Control** — API/session gateway; authorization/policy; world orchestration; operation coordination; scheduler + background jobs.
+- **Runtime** — world process supervision; RCON sessions; health probes; startup/shutdown detection (Doc 13).
+- **Data** — relational state; append-only audit/events; logs; world files; backups; secrets (Doc 7).
+- **Integration** — OS process adapter; filesystem; routing; offsite sync; future cluster (all behind ports).
 
 | § | Subsystem | Ownership / notes |
 |---|---|---|
-| 5.1 | Presentation & shell | Shell owns shared client state; per-tab independent streams; navigation + page-state persistence (Doc 4/5). |
-| 5.2 | HTTP/API & session gateway | Thin routes; authn/authz/CSRF/step-up; maps requests to commands/queries (Document 12). |
-| 5.3 | Realtime streams | SSE default; rehydration snapshot never blank; compute once, fan out (Document 12). |
-| 5.4 | World registry | Canonical world list; immutable IDs; editable display name + policies (Doc 7). |
-| 5.5 | World lifecycle orchestration | Runtime state machine; idempotency/cooldowns/conflicts; durable Operations; reconciliation (Doc 6, Document 11). |
-| 5.6 | World runtime session | One contiguous run; per-session RCON rotation; durable metadata survives restart (Doc 6). |
-| 5.7 | Background jobs & scheduler | Async ops off request path; missed-run detection (never auto-replayed); conflict rules (Doc 8, Document 11). |
-| 5.8 | Backup/restore/sync/retention | Native portable engine is the **only** supported production path; script adapters transitional-only, retired before first stable release. Restore checkpointed with immutable history (Doc 8, Document 15). |
+| 5.1 | Presentation & shell | Shared client state; per-tab streams; navigation + page-state persistence (Doc 4/5). |
+| 5.2 | HTTP/API & session gateway | Thin routes; authn/authz/CSRF/step-up; maps to commands/queries (Doc 10). |
+| 5.3 | Realtime streams | SSE default; rehydration snapshot never blank; compute once, fan out (Doc 10). |
+| 5.4 | World registry | Canonical list; immutable IDs; editable display name + policies (Doc 7). |
+| 5.5 | World lifecycle | State machine; idempotency/cooldowns/conflicts; durable Operations; reconciliation; EULA + readiness gating (Doc 6, Doc 9, Doc 14). |
+| 5.6 | Runtime session | One contiguous run; per-session RCON rotation; durable metadata survives restart (Doc 6). |
+| 5.7 | Scheduler & background jobs | Async off request path; missed-run detection (never auto-replayed); conflicts (Doc 8, Doc 9). |
+| 5.8 | Backup/restore/sync/retention | Native portable engine = **only** production path; script adapters transitional, retired before first stable. Restore checkpointed with immutable history (Doc 8, Doc 13). |
 | 5.9 | File & config management | Guarded file ops; protected config editors; per-world path policy (Doc 8). |
-| 5.10 | Security & secrets | Sessions, authz, device trust, step-up, secret rotation; secrets server-side only (Doc 8, Doc 7). |
-| 5.11 | Audit, history & events | Append-only; immutable; feeds notifications + history views (Doc 6, Doc 8). |
-| 5.12 | Observability & diagnostics | Status aggregation; health/consistency reports; failure context for "explain error" (Doc 8, Document 12). |
-| 5.13 | Setup & settings | First-run setup + persistent settings share one model (Manager singleton, Doc 6). |
-| 5.14 | Platform adapters | Spawning/termination, filesystem, disk checks, network/routing, sync, future cluster. Main portability boundary; Linux helpers exist only as adapter implementations. |
+| 5.10 | Security & secrets | Sessions, authz, device trust, step-up, rotation; secrets server-side only (Doc 8, Doc 7). |
+| 5.11 | Audit/history/events | Append-only immutable; feeds notifications + history views (Doc 6, Doc 8). |
+| 5.12 | Observability | Status aggregation; health/consistency reports; "explain error" context (Doc 8, Doc 10). Manager health ≠ world health: scheduler tick, SQLite writer, process adapter individually observable (ruling 12). |
+| 5.13 | Setup & settings | First-run + persistent settings share one model (Manager singleton, Doc 6). |
+| 5.14 | Platform adapters | Spawning/termination, filesystem, disk, network/routing, sync, cluster. Main portability boundary; Linux helpers exist only as adapter implementations. |
 
-------------------------------------------------------------------------
+## 5 General Rules & Precedence
 
-## 3. General Rules
+- Read numbered docs before architecture decisions; use §1 to locate a contract.
+- Docs are source of truth; implementation conflict → follow docs.
+- **Precedence:** higher number supersedes lower. **Doc 9 is the final word on all operational locking, mutual exclusion, queue/reject/preempt, and optimistic concurrency.** **Docs 10–14 extend the spec** (API, testing, layout/tooling, process control, Minecraft adaptation) — no competing business rules, only binding existing rules to wire formats/tests/layout/platform/Minecraft runtime. **Doc 14 is the final word on Minecraft adaptation** (readiness, EULA, `server.properties`, Java, RCON, save coordination). This file is reference-only.
+- **One canonical file per number.** Duplicate number = stop and flag; never guess a revision suffix wins. Stale copies deleted.
+- **New conflicts** appended to §16 before writing resolving code. Check §16 + Doc 9 before assuming a lower-numbered doc is still accurate.
 
-- **Normative corpus**: Documents 4–8 and 11–15 + this file. Documents 1–3, 9, and 10 are
-  retired and removed — no archived copies exist. Their residual content was consolidated
-  (see §14); never treat a retired document as a source of requirements.
-- Read the numbered documents before making architectural decisions. Use CONTEXT_MAP.md to
-  locate a contract instead of re-reading the corpus.
-- Treat the design documents as the source of truth. If implementation conflicts with the
-  documents, follow the documents.
-- **Precedence.** Numbered documents are ordered by number; a higher-numbered document
-  supersedes a lower-numbered one wherever they conflict.
-  - **Document 11 is the final word on all operational locking, mutual exclusion,
-    queue/reject/preempt semantics, and optimistic concurrency.**
-  - **Documents 12–15 extend the specification** (API, testing, layout/tooling, process
-    control). They introduce no competing business rules; they bind existing rules to wire
-    formats, tests, physical layout, and platform behavior.
-  - This file is reference-only and never supersedes a numbered document.
-- **One canonical file per document number.** If two files claim the same number, stop and
-  flag it — do not guess that a revision suffix wins. Stale copies are deleted, never
-  allowed to coexist. Numbers 9 and 10 are retired and are never reused.
-- **New conflicts** are appended to §14 (Conflict Log) before writing the code that
-  resolves them. Check §14 and Document 11 before assuming a lower-numbered document is
-  still accurate.
+## 6 Architecture
 
-------------------------------------------------------------------------
+- Modular monolith; modules loosely coupled, highly cohesive.
+- DI in a single composition root (`app/bootstrap.py`, Doc 12).
+- Ports-and-adapters for OS/Minecraft/storage-specific behavior.
+- **Adapter boundaries enforced** (import-linter, Doc 12): `platform/` leaf-only — no `services/`/`commands/`/`web/` module imports it or any script adapter; `services/` depend on `ports/` interfaces only; concrete adapters injected at composition root; no `shell=True` in `app/platform/process/` (Doc 13).
+- **Script adapters retired** (ruling 6): `backup.sh`-style scripts are transitional only, removed before first stable; no new platform-specific script logic. Native portable engine (`ports/backup_engine.py` + `infrastructure/backup_engine.py`) is the sole production path.
 
-## 4. Architecture
+## 7 Optimistic Concurrency
 
-- Preserve the modular monolith; no microservices. Modules loosely coupled, highly
-  cohesive.
-- Dependency injection in a single composition root (`app/bootstrap.py`, Document 14).
-- Ports-and-adapters for OS-specific, Minecraft-server-specific, and storage-specific
-  behavior.
-- **Adapter boundaries are enforced, not stylistic** (import-linter contracts, Document 14):
-  - `platform/` is leaf-only. No `services/`, `commands/`, or `web/` module ever imports
-    `platform/` or any script-based adapter directly.
-  - `services/` depend on `ports/` interfaces only; concrete adapters are injected at the
-    composition root.
-  - No `shell=True` anywhere in `app/platform/process/` (Document 15).
-- **Script-based adapters are retired** (§14 ruling 6). Scripts such as `backup.sh` exist
-  only as transitional migration tools and must be removed before the first stable release.
-  No new platform-specific script logic may be added. The native portable backup engine
-  (`ports/backup_engine.py` + `infrastructure/backup_engine.py`) is the sole supported
-  production path.
+Applies to every multi-admin-editable config table.
 
-------------------------------------------------------------------------
+- Every such row carries `version` — `schedules`, `cleanup_policies`, `global_settings`, `world_settings`, `templates`, `roles`, `sync_targets`, `world_instances` metadata fields.
+- Every `ConfigEdit` submits the last-read `version`; `ConfigurationService` compares at write; mismatch → `409 CONFIG_VERSION_CONFLICT`, no write. **Never last-save-wins.**
+- `permissions`/`role_assignments` excluded (atomic single-field grant/revoke).
+- Version = service-layer compare-then-write, not a DB constraint.
 
-## 5. Optimistic Concurrency
+## 8 Domain Model
 
-Applies to every multi-admin-editable configuration table.
+- No renaming domain entities or inventing concepts unless explicitly required; preserve aggregate boundaries, ownership, documented invariants (Doc 6).
+- Every state-changing action is a durable Operation (incl. `CreateWorld`/`DeleteWorld`) (Doc 6).
+- Deletion tiers (Doc 6): Tier 1 never deleted by anything; Tier 2 soft-deleted (`deleted_at`) by normal actions, physically removed only by `CleanupService` — never any other route/command/service.
 
-- Every row in a multi-admin-editable configuration table carries a `version` column —
-  `schedules`, `cleanup_policies`, `global_settings`, `world_settings`, `templates`,
-  `roles`, `sync_targets`, and `world_instances` metadata fields.
-- Every `ConfigEdit` submits the `version` the editor last read. `ConfigurationService`
-  compares at write time; a mismatch is rejected with `409 CONFIG_VERSION_CONFLICT` and no
-  write occurs. **Never last-save-wins.**
-- `permissions` and `role_assignments` are deliberately excluded (atomic single-field
-  grant/revoke rows).
-- The version is compare-then-write logic in the service layer, not a DB constraint.
+## 9 Persistence
 
-------------------------------------------------------------------------
+- SQLite primary store; runtime state in memory; only durable state persisted (Doc 7).
+- **Global Persistence Invariant** (defined once here; referenced by name): every connection runs `PRAGMA foreign_keys = ON` before any other statement; every boot runs `PRAGMA foreign_key_check` after migrations before serving. Any violation = startup-blocking critical error, never silently repaired.
+- Clients connecting during boot reconciliation are rehydrated immediately from durable + last cached live snapshot — never blank/unknown during warm-up.
 
-## 6. Domain Model
+## 10 Operations
 
-- Do not rename domain entities; do not invent new domain concepts unless explicitly
-  required.
-- Preserve aggregate boundaries, ownership rules, and the documented business invariants
-  (Doc 6).
-- Every state-changing action executes as a durable Operation (Doc 6) — including
-  `CreateWorld`/`DeleteWorld`, not just start/stop/backup/restore.
-- Follow the Global Deletion & Retention Model (Doc 6): Tier 1 entities are never deleted
-  by anything; Tier 2 entities are soft-deleted (`deleted_at`) by normal actions and
-  physically removed only by `CleanupService`, never by any other route, command, or
-  service.
+- All state changes = durable Operations; audit + domain events; restart-safe where practical (Doc 6/8).
+- Runtime status **never** from a single log line. State resolver = process state + health probes + startup signals + operation checkpoints + crash markers. Log strings advisory (Doc 13). Readiness per Doc 14 hierarchy; listening port alone ≠ `running` (ruling 13).
+- Queue/reject/preempt (Doc 9): Backup/Restore/Cleanup duplicates queued single-flight (auto-dispatch, position via live stream — never rejected, never polled); Start duplicates ignored; DeleteWorld/ConfigEdit conflicts rejected. Priority between waiting ops contextual (manual/safety-critical first).
+- Storage guards contextual (job size + configurable absolute reserve, default 10 GB; 10% free-space only as overflow safety net) — never a flat 10% rule.
+- Runtime config (java, launch args, port) editable only while `state = off`; write immediate, effect deferred to next boot by construction.
 
-------------------------------------------------------------------------
+## 11 Web Application
 
-## 7. Persistence
-
-- SQLite is the primary persistent store; runtime state stays in memory; only durable
-  state is persisted. Follow the documented migration strategy (Doc 7).
-- **Global Persistence Invariant** (defined once here; referenced by name — do not
-  restate): every connection runs `PRAGMA foreign_keys = ON` before any other statement,
-  and every boot runs a `PRAGMA foreign_key_check` sweep after migrations apply and before
-  serving requests. Any violation is a startup-blocking critical error, never silently
-  repaired.
-- Clients connecting during boot reconciliation are rehydrated immediately from the
-  durable snapshot plus the last cached live snapshot — never shown a blank or unknown
-  state during the warm-up window.
-
-------------------------------------------------------------------------
-
-## 8. Operations
-
-- All state-changing actions execute as durable Operations; maintain auditability; emit
-  domain events; be restart-safe whenever practical (Doc 6/8).
-- Runtime status is **never** derived from a single log line. The state resolver combines
-  process state, health probes, startup signals, operation checkpoints, and crash markers.
-  Log strings such as "Dedicated server took x seconds to load" are advisory only
-  (Document 15).
-- Follow queue/reject/preempt semantics (Document 11): Backup/Restore/Cleanup duplicates
-  are queued single-flight (auto-dispatch, queue position surfaced via live stream — never
-  rejected outright, never polled); Start duplicates ignored; DeleteWorld/ConfigEdit
-  conflicts rejected. Priority between waiting operations is contextual (manual/
-  safety-critical first).
-- Storage guards are contextual (job size + configurable absolute reserve, default 10 GB,
-  with a 10% free-space bound only as an overflow safety net), never a flat 10% rule.
-- Runtime config (java runtime, launch args, port) is editable only while `state = off`;
-  the write is immediate, the effect deferred to next boot by construction.
-
-------------------------------------------------------------------------
-
-## 9. Web Application
-
-- Python + Flask. API endpoints stay thin; business logic lives in services/domain layers
-  (layer chain: routes → commands → services → ports → infrastructure → platform,
-  Document 14).
+- Python + Flask. API endpoints thin; logic in services/domain (routes → commands → services → ports → infrastructure → platform, Doc 12).
 - No business logic in routes or templates.
 
-------------------------------------------------------------------------
+## 12 UI
 
-## 10. User Interface
+- Doc 4 style + Doc 5 nav.
+- One shared visual system; page-scoped CSS only under Doc 4 §0 (layout-only, shared tokens, promoted when a second page needs it).
+- Reuse shared components — incl. Status Indicator (Doc 4) for any state display; no invented one-off badges.
+- Multi-tab: each tab owns an independent connection to shared server-side streams; no election/TTL heartbeats/BroadcastChannel forwarding; failing tab never disrupts others.
+- Step-up: session-scoped, time-bounded (default 10 min); one success authorizes subsequent sensitive actions in the window.
 
-- Follow the CSS Style Guide (Doc 4) and Navigation & Workflow Blueprint (Doc 5).
-- One shared visual system. Page-scoped CSS only under Doc 4's Functional Appropriateness
-  Exception (layout-only; shared tokens only; promoted when a second page needs it).
-- Reuse shared components — including the Status Indicator (Doc 4) for any state display.
-  No invented one-off badges.
-- Multi-tab: each tab opens its own independent connection to the shared server-side
-  streams. No primary/secondary election, TTL heartbeats, or BroadcastChannel forwarding.
-  A failing/closed tab never disrupts others.
-- Step-up verification is session-scoped and time-bounded (default 10 min); one successful
-  verification authorizes subsequent sensitive actions in that window.
+## 13 Coding Standards
 
-------------------------------------------------------------------------
+- Readable, focused, small functions; clear docstrings; tests for new functionality (Doc 11).
+- **Tooling locked in Doc 12, enforced CI-merge-blocking:** `black` (100, single quotes), `isort` (profile=black), `ruff`, `mypy` strict (`domain/`/`services/`/`ports/`/`commands/` — no `Any`), `import-linter` (layering + leaf-platform). Doc 12 directory layout is normative.
+- Closed enums from `domain/value_objects.py`; never inline stringly-typed states; value outside a documented closed set = contract violation.
+- No hand-rolled HTML escaping/security utilities — framework/Jinja mechanisms only.
 
-## 11. Coding Standards
+## 14 Task Completion Checklist
 
-- Prefer readability over cleverness; keep functions focused and small; clear docstrings.
-- Add tests for new functionality (Document 13).
-- **Tooling is locked in Document 14 and enforced in CI (merge-blocking):** `black`
-  (line length 100, single quotes), `isort` (profile=black), `ruff`, `mypy` (strict for
-  `domain/`, `services/`, `ports/`, `commands/` — no `Any`), and `import-linter`
-  (layering + leaf-platform contracts). Follow Document 14's directory layout — the
-  physical folder structure is normative.
-- Closed enums come from `domain/value_objects.py`. Never invent stringly-typed states
-  inline; a value outside a documented closed set is a contract violation.
-- Do not hand-roll HTML escaping or security utilities — use framework/Jinja mechanisms.
+- [ ] Aligns with Docs 4–14 (Doc 9 for locking; §16 for other conflicts; Docs 10–14 = API/testing/directory/process-control/Minecraft contracts).
+- [ ] No architectural rule violated (monolith, ports-and-adapters, Operation-based control, deletion tiers, leaf boundary).
+- [ ] Optimistic concurrency: every ConfigEdit on a versioned table submits/validates `version`; no last-save-wins path (Doc 9 §4).
+- [ ] No script adapter introduced; `platform/` imports leaf-only; import-linter contracts hold.
+- [ ] Naming consistent (no renamed/duplicated domain concepts).
+- [ ] API routes/shapes/error codes per Doc 10 (route catalog, envelope, error catalog); SSE topics per Doc 10.
+- [ ] Layout per Doc 12; module-per-service; composition-root DI.
+- [ ] Tests per Doc 11 (pyramid, ISO/IEC 25010 mapping, coverage floors); Doc 12 tooling gate green.
+- [ ] Process control per Doc 13 (port used by services; platform impls leaf-only; no systemd/journalctl; conformance expectations).
+- [ ] Minecraft behavior per Doc 14 (readiness hierarchy, EULA gating, version-aware server.properties, Java compatibility, save coordination).
+- [ ] Existing ports/adapters/shared components reused, not duplicated.
 
-------------------------------------------------------------------------
+## 15 Build Order & Gates
 
-## 12. Before Completing Any Task
-
-- [ ] Aligns with Documents 4–8 and 11–15 (Document 11 for locking; §14 Conflict Log for
-      all other conflicts; Docs 12–15 are API, testing, directory/standards, and
-      process-control-adapter contracts).
-- [ ] No architectural rule violated (monolith, ports-and-adapters, Operation-based
-      control, deletion tiers, adapter leaf-only boundary).
-- [ ] Optimistic concurrency respected: every ConfigEdit on a versioned table submits and
-      validates `version`; no last-save-wins path (Document 11, §5 of this file).
-- [ ] No script-based adapter introduced; `platform/` imports stay inside the platform
-      layer; import-linter contracts hold.
-- [ ] Naming consistent with the docs (no renamed/duplicated domain concepts).
-- [ ] API routes/shapes/error codes follow Document 12 (route catalog, envelope, error
-      catalog); SSE topics from Document 12.
-- [ ] Code layout follows Document 14 (layering, module-per-service, composition-root DI).
-- [ ] Tests added per Document 13 (pyramid, ISO/IEC 25010 mapping, coverage floors);
-      Document 14 tooling gate green.
-- [ ] Process control respects Document 15 (port interface used by services; platform
-      implementations leaf-only; no systemd/journalctl; conformance suite expectations).
-- [ ] Existing ports/adapters and shared components reused, not duplicated.
-
-------------------------------------------------------------------------
-
-## 13. Build Order & Gates
-
-From retired Document 9 — the only content it carried. Implement in this order; nothing
-downstream starts until its gate is green.
+Retired-document residual. Implement in order; nothing downstream starts until its gate is green.
 
 | # | Work item | Ready-to-code contract | Gate before next item |
 |---|---|---|---|
-| 1 | Platform process-control adapter prototype | Document 15 (port, POSIX/Windows, tailing, reconciliation, conformance) | Conformance C1–C14 green on the target OS **and** the fake adapter; C11 re-attach verified end-to-end with a real manager boot (Document 15) |
-| 2 | Foundational layers: world registry + schema, settings/setup model, operation + audit model, adapter interfaces, session/auth core | Doc 7 (all tables; constraints), Doc 6, Document 14 layout, §7 of this file | `PRAGMA foreign_key_check` sweep clean on a fresh migration run; migrations runner test green (Document 13) |
-| 3 | Control plane: world lifecycle orchestration, runtime state reconciliation, scheduler, metrics + log streams | Doc 6 (states), Doc 8 (30s tick), Document 12 (SSE topics), Document 15 (supervision) | Scheduler tick-to-Operation + missed-run integration tests green (Document 13); reconciler restart scenarios green |
-| 4 | Operational subsystems: backup/restore, cleanup/retention, file/config management, offsite sync | Doc 8, Doc 6, Document 11 | Restore checkpoint-interrupt tests + optimistic-lock matrix green (Document 13) |
-| 5 | Experience + hardening: shell polish/offline, multi-tab, diagnostics, ISO-aligned verification + thresholds | Doc 4/5 (UI), Document 12 (streams/rehydrate), Document 13 | E2E UI/SSE suites + performance benchmarks within thresholds (Document 13) |
+| 1 | Platform process-control adapter prototype **+ real Minecraft spike** | Doc 13 (port, POSIX/Windows, tailing, reconciliation, conformance); Doc 14 (readiness, EULA, Java, save) | C1–C14 green on target OS + fake adapter; C11 re-attach E2E with real manager boot (Doc 13); live Vanilla/Paper/Forge/Fabric spike validates Doc 14 readiness + Java assumptions |
+| 2 | Foundational layers: registry + schema, settings/setup, operation + audit, adapter interfaces, session/auth core | Doc 7, Doc 6, Doc 12 layout; `eula_required` + EulaState (Doc 14 §5, Doc 6 §2.3) | `foreign_key_check` clean on fresh migration; migrations runner test green (Doc 11) |
+| 3 | Control plane: lifecycle orchestration, reconciliation, scheduler, metrics + log streams | Doc 6 (states), Doc 8 (30s tick), Doc 10 (SSE), Doc 13 (supervision) | Tick→Operation + missed-run integration green (Doc 11); reconciler restart scenarios green |
+| 4 | Operational subsystems: backup/restore, cleanup/retention, file/config, offsite sync | Doc 8, Doc 6, Doc 9 | Restore checkpoint-interrupt + optimistic-lock matrix green (Doc 11) |
+| 5 | Experience + hardening: shell/offline, multi-tab, diagnostics, ISO verification + thresholds | Doc 4/5, Doc 10, Doc 11 | E2E UI/SSE + performance benchmarks within thresholds (Doc 11) |
 
-Standing gates (enforced regardless of stage): script-based adapters retired (§14 ruling 6);
-optimistic `version` on every ConfigEdit (Document 11, §5 of this file); `platform/`
-leaf-only with import-linter CI contracts (Document 14); C14 no-systemd structural test
-(Document 15); only `CleanupService` issues physical `DELETE FROM` (Doc 6);
-black/isort/ruff/mypy/import-linter tooling gate (Document 14).
+Standing gates: script adapters retired (ruling 6); `version` on every ConfigEdit (Doc 9 §4); `platform/` leaf with import-linter (Doc 12); C14 no-systemd (Doc 13); only `CleanupService` issues physical `DELETE FROM` (Doc 6); tooling gate (Doc 12).
+Shortcuts: locked constants → Doc 8; error codes/SSE topics → Doc 10; closed enums → Doc 6; Minecraft runtime contracts → Doc 14.
 
-Reference shortcuts: locked tuning constants → Doc 8; error codes → Document 12; SSE topics
-→ Document 12; closed enums → Doc 6.
+## 16 Conflict Log (resolved rulings)
 
-------------------------------------------------------------------------
-
-## 14. Conflict Log (resolved rulings)
-
-Standing table of every resolved disagreement, from former Document 10 (retired). This is
-the **only** place a new conflict gets recorded before it is resolved in code.
-
-**Append convention.** New conflict discovered: append an entry `Conflict / Resolution /
-Amends (where the rule now lives)` here before writing the resolving code. Document 11
-governs locking/concurrency disagreements; Documents 12–15 govern their contracts; all
-other disagreements are decided by the entry appended here.
+Standing table of every resolved disagreement. The **only** place a new conflict is recorded before resolution in code.
+**Append convention:** new conflict → append `Conflict / Resolution / Amends` row here before writing resolving code. Doc 9 governs locking/concurrency; Docs 10–14 govern their contracts; all else decided by the row appended here.
 
 | # | Standing rule | Normative home |
 |---|---|---|
-| 1 | Nav carries no status/notification indication — no flashing, pulsing, or state coloring. Ban is on *where* state appears (nav), not on the colors; state surfaces via the notification dropdown and per-page status displays. | Doc 4 (already specified the desired state) |
-| 2 | Secrets live in the SQLite `secrets` table; the env file holds no secrets (only non-secret runtime config). Server-side-only access, per-session RCON isolation, and rotation rules are unchanged. | Doc 7/8 |
-| 3 | Document 11 is authoritative for all concurrency/locking: lock taxonomy, generalized optimistic concurrency, mutual-exclusion matrix, queue/reject/preempt. | Document 11 |
-| 4 | Baseline roles: **Client / Admin / Superadmin**. Admin has full world authority but not control-panel/user-management authority; Superadmin has both plus exclusive ability to delegate individual `permissions`. | Doc 6 |
-| 5 | Doc 1 residuals consolidated: live-metrics broadcast set + MetricsCadence → Document 12; log channel taxonomy → Document 12; Instructions rendering contract → Doc 5; startup/shutdown chimes → Doc 8; restore-wins-over-delete → Document 11; epoch-second timestamps → Doc 7. | Document 12 / 5 / 8 / 11 / 7 |
-| 6 | Script-based adapters are retired before first stable release; no new platform-specific script logic; the native portable backup engine is the only production path. Enforcement: import-linter leaf rule, no `shell=True` in `platform/process/`, no `scripts/` layer. | §4 of this file; Document 15 |
-| 7 | Docs 1–3 retired and removed; this file is the single general-rules entry point; numbered documents remain the normative contracts. | This file |
-| 8 | Traceability tables removed from every document; relationship provenance is inline. | All numbered documents |
-| 9 | Doc 7 ER diagram removed; the FK graph in Doc 7 (compact table definitions + constraint summary) is the sole normative relationship contract. | Doc 7 |
+| 1 | Nav carries no status/notification indication — no flashing, pulsing, state coloring. Ban is on *where* state appears (nav), not the colors; state surfaces via notification dropdown + per-page status displays. | Doc 4 |
+| 2 | Secrets live in SQLite `secrets` table; env file holds no secrets (non-secret runtime config only). Server-side-only access, per-session RCON isolation, rotation unchanged. | Doc 7/8 |
+| 3 | Doc 9 authoritative for all concurrency/locking: lock taxonomy, generalized optimistic concurrency, mutual-exclusion matrix, queue/reject/preempt. | Doc 9 |
+| 4 | Baseline roles: **Client / Admin / Superadmin**. Admin has full world authority but not control-panel/user-management; Superadmin has both plus exclusive right to delegate individual `permissions`. | Doc 6 |
+| 5 | Retired Doc 1 residuals: live-metrics broadcast set + MetricsCadence → Doc 10; log channel taxonomy → Doc 10; Instructions rendering contract → Doc 5; startup/shutdown chimes → Doc 8; restore-wins-over-delete → Doc 9; epoch-second timestamps → Doc 7. | Doc 10/5/8/9/7 |
+| 6 | Script-based adapters retired before first stable; no new platform-specific script logic; native portable backup engine only production path. Enforcement: import-linter leaf rule, no `shell=True` in `platform/process/`, no `scripts/` layer. | §6; Doc 13 |
+| 7 | Docs 1–3 retired; this file is the single general-rules entry point; numbered docs remain normative. | This file |
+| 8 | Traceability tables removed from every doc; relationship provenance inline. | All numbered docs |
+| 9 | Doc 7 ER diagram removed; FK graph in Doc 7 (compact table definitions + constraint summary) is the sole normative relationship contract. | Doc 7 |
+| 10 | **World survival across manager restart = cross-platform invariant.** Windows Job Object must NOT default to `KILL_ON_JOB_CLOSE`; worlds survive manager death on every OS, re-attached by boot reconciliation. "Deployment option" resolved away: survival is the default, never silently divergent per-OS. | Doc 13 §3.2/§5.3; Doc 7 §6 |
+| 11 | **EULA never auto-accepted.** Manager detects `eula.txt`, gates Start behind it (`eula_required`), writes `eula=true` only after explicit, audited, step-up-protected operator action. | Doc 14 §5; Doc 6 §2.3 |
+| 12 | **Manager health ≠ world health.** Diagnostics separately observe scheduler tick, SQLite writer, process adapter; live HTTP server ≠ healthy manager. | Doc 10 (system routes); Doc 8 |
+| 13 | **Minecraft readiness is a hierarchy, not a socket check.** `starting -> running` requires highest available level (Doc 14 §3); Doc 13 C8 socket test is the minimum floor, not the contract. | Doc 14 §3; Doc 13 C8 |
+| 14 | **Security finishes: Argon2id** hashing; session-ID rotation on login/elevation/password change; HTTPS mandatory for non-loopback; security-header contract (CSP, X-Content-Type-Options, Referrer-Policy, frame-ancestors, cache control); no password-reset mechanism by design; secrets encrypted at rest in `secrets`. | Doc 7 §2.21a/§2.24; Doc 8 (Auth/Security); Doc 10 |
+| 15 | **Backup artifact format locked: ZIP** (deflate, streaming) + **SHA-256** checksum; `.part` atomic write + fsync + rename; post-write verification before registration; structural verification before restore. | Doc 14 §11; Doc 7 §2.10 |
+| 16 | **ManagerBackup uses SQLite backup API** (online consistent snapshot), never a plain file copy of a live `.db`. | Doc 14 §11; Doc 7 SQLite operational contract |

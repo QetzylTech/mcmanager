@@ -1,0 +1,259 @@
+Technical Specification Reference: MC Manager Core Contracts
+
+1. Architecture §0: BINDING_CONSTRAINTS
+
+* MODULAR_MONOLITH :: One authoritative control plane, zero microservices.
+* MULTI_WORLD :: Concurrent independent world instances; operations never block unrelated instances except via shared storage guard.
+* NO_SYSTEMD :: Zero dependency on systemd or journalctl; functional on any Java/Python-compliant OS.
+* PORTABLE_PROCESS_CONTROL :: Data-driven argv launch (no shell/double-fork); supervised via ProcessControlPort.
+* IDLE_CPU_THRESHOLD :: < host-reference threshold (5-min avg) during zero state-change/stream activity.
+* BASELINE_MEMORY :: Manager process within documented range, excluding managed MC processes.
+* ZERO_TRUST_SECURITY :: Mandatory server-issued session authentication and server-side authorization for all requests.
+* REAL_TIME_SSE :: Shared server-side streams; compute-once fan-out; zero client-side polling.
+* AUDIT_GUARDRAILS :: Immutable audit/event history, durable Operations, and storage safety guards.
+* TESTABLE_FAILURE_CRITERIA :: Constraint violations (e.g., Linux-only control, cross-world interference) must trigger Doc 13 test failures.
+
+2. Document 8 §6.0: Locked Tuning Constants
+
+Constant	Value	Scope/Note
+Scheduler tick interval	30s	Granularity for missed-run detection
+Start readiness timeout	120s	Configurable; leads to TimedOut/Error state
+Stop graceful deadline	60s	Threshold before Kill escalation
+Kill process deadline	10s	Termination re-assertion window
+Start cooldown	10s	Duplicate trigger guard
+Sync retries	3 attempts	Exponential backoff (30s, 60s, 120s)
+Sync attempt timeout	120s	Configurable
+Sync outer overall bound	30min	Configurable; total wall-clock limit
+Sync concurrency cap	2	Configurable; simultaneous transfers
+MetricsCadence	15s / 1Hz	15s cache refresh; 1Hz active stream
+Storage reserve	10 GB	Configurable; absolute floor; 10% overflow safety
+Step-up window	10min	Configurable; verification validity period
+Log buffer	5000 lines	Configurable; per-world ring buffer
+Supervisor poll	1s / 15s	1s (running); 15s (idle/off)
+Blast-radius cap	500	Configurable; max cleanup candidates
+Password throttle	5/15min	Configurable; 5 failures = 15min lockout
+Session expiry	7d / 30d	Configurable; 7d inactivity; 30d absolute
+SSE replay buffer	200	Configurable; events per stream
+
+3. Document 11 §3.1 & §6: Concurrency and Operational Logic
+
+3.1 World-Scoped Mutual-Exclusion Matrix
+
+Requested Operation	Backup Running	Restore Running	Cleanup Running	Start/Stop/Kill
+Backup	Q	R	R	A/Q
+Restore	R	Q	R	R
+Cleanup	R	R	Q	A
+DeleteWorld	R	R	R	R
+RenameWorld	A	A	A	A
+ConfigEdit	R	R	R	R
+
+Symbols: Q (Queue/Single-flight), R (Reject), A (Allowed), A/Q (Allowed, but Stop/Kill queues behind Backup).
+
+3.2 Operational Priority
+
+Manual (User-initiated) > Safety-Critical (Emergency Stop/Cleanup) > Default (Backup > Restore > Cleanup)
+
+3.3 Queue / Reject / Preempt Authoritative Table
+
+Op_Type	On_Conflict_Behavior	Preemption_Rule
+Start	Ignore	N/A (10s cooldown)
+Stop	Allowed/Idempotent	N/A
+Kill	Allowed/Escalation	Cancels in-flight Stop (superseded_by_kill)
+Backup	Queue (Single-flight)	N/A
+Restore	Queue (Single-flight)	Wins over queued DeleteWorld
+Cleanup	Queue (Scope-locked)	N/A
+Sync	Queue (Artifact-locked)	Cancellable mid-run
+ConfigEdit	Reject (Stale Version)	N/A
+DeleteWorld	Reject (Not Off/Active)	Preempted by subsequent Restore
+
+4. Document 11 §4 & §5: Optimistic Concurrency and Runtime Config
+
+Versioned Optimistic-Lock Tables
+
+* schedules [VERSIONED: TRUE]
+* cleanup_policies [VERSIONED: TRUE]
+* global_settings [VERSIONED: TRUE]
+* world_settings [VERSIONED: TRUE]
+* templates [VERSIONED: TRUE]
+* roles [VERSIONED: TRUE]
+* sync_targets [VERSIONED: TRUE]
+* world_instances [VERSIONED: TRUE] (Metadata only)
+* permissions [VERSIONED: FALSE] (Atomic grant/revoke)
+* role_assignments [VERSIONED: FALSE] (Atomic grant/revoke)
+
+Runtime Configuration Change Rule
+
+CONFIG_EDIT_PRECONDITION :: [STATE == OFF] -> [EFFECT_WINDOW == NEXT_BOOT]
+
+5. Document 12: API Route Catalog
+
+M	Path	Access	Traits
+POST	/api/auth/login	public	C
+POST	/api/auth/logout	any	C
+POST	/api/auth/step-up	any	S
+GET	/api/session	any	C
+GET	/api/worlds	any	C
+POST	/api/worlds	A	O, A
+GET	/api/worlds/{id}	any	C
+PATCH	/api/worlds/{id}	A	O, A
+DELETE	/api/worlds/{id}	A, S	O, S, A
+GET	/api/worlds/{id}/runtime-config	A	A
+PATCH	/api/worlds/{id}/runtime-config	A	O, A
+POST	/api/worlds/{id}/start	any	O, C
+POST	/api/worlds/{id}/stop	A	O, A
+POST	/api/worlds/{id}/kill	A, S	O, S, A
+POST	/api/worlds/{id}/server-properties	A	O, A
+GET	/api/worlds/{id}/server-properties	A	A
+GET	/api/operations	any	C
+GET	/api/operations/{id}	any	C
+POST	/api/operations/{id}/cancel	A	O, A
+GET	/api/worlds/{id}/backups	any	C
+POST	/api/worlds/{id}/backups	A	O, A
+GET	/api/backups/{id}	any	C
+DELETE	/api/backups/{id}	A, S	S, A
+POST	/api/worlds/{id}/restores	A, S	O, S, A
+POST	/api/cleanup/dry-run	A	O, A
+POST	/api/cleanup/execute	A, S	O, S, A
+POST	/api/sync/retry	A	O, A
+GET	/api/schedules	A	A
+PATCH	/api/schedules/{id}	A	O, A
+GET	/api/settings	A	A
+PATCH	/api/settings	A	O, A
+POST	/api/manager/restart	A, S	S, A
+POST	/api/manager/update	SA, S	S, SA
+
+Traits: S (Step-up), O (Async Operation), A (Admin), SA (Superadmin), C (Client).
+
+6. Document 12 §6.0: SSE Topic Registry
+
+Event_Topic	Data_Payload_Summary
+snapshot	Durable state + cached live metrics (never blank)
+world.state	world_id, state, previous_state, reason, operation_id
+world.metrics	player list, tick_time, uptime, world_id
+operation.created	op_id, op_type, status, queue_position
+operation.progress	checkpoint, status, percentage, error_code
+operation.terminal	final status, error_code, message
+notification	Full notification object shape
+system.stats	host CPU, RAM, storage utilization, world_count
+backup.progress	stage (pausing, capturing, resuming), percentage
+restore.progress	stage (validating, staging, switching), reverted flag
+sync.status	sync_id, status (pending, succeeded, failed), outcome
+log.line	world_id, channel, line content, line_no, ts
+queue.position	op_id, updated queue_position
+alert	category, severity, message, details
+
+* MetricsCadence: Null (all off); 15s refresh (active world/client); 1Hz stream (active client).
+* Broadcast Set: RAM, CPU Core/Freq, Storage %, MC Status, Player List, Tick Time, Auto-stop, Backup state/count, Cleanup status, Schedule/Version info.
+
+7. Document 12 §7: Error-Code Catalog
+
+Code	HTTP	Source/Context
+VALIDATION_ERROR	400	Request Field Failure
+VALIDATION_STALE_VERSION	409	Legacy CONFIG_VERSION_CONFLICT alias
+AUTH_INVALID_CREDENTIALS	401	Bad login credentials
+AUTH_ACCOUNT_LOCKED	403	Lockout active
+AUTH_THROTTLED	429	Retry/destructive limit
+AUTH_SESSION_EXPIRED	401	session_expires_at reached
+AUTH_SESSION_REVOKED	401	Session deleted/revoked
+AUTH_CSRF_INVALID	403	State-changing request
+AUTH_STEP_UP_REQUIRED	403	Elevated route access
+AUTH_STEP_UP_EXPIRED	403	Window elapsed mid-session
+FORBIDDEN	403	Authz denial
+FORBIDDEN_LAST_SUPERADMIN	409	Last active superadmin guard
+NOT_FOUND	404	Generic resource missing
+WORLD_NOT_FOUND	404	Unknown world_id
+WORLD_DELETED	409	Action on tombstoned world
+WORLD_NOT_OFF	409	Precondition requires OFF
+WORLD_ALREADY_RUNNING	409	Duplicate Start ignored
+WORLD_IN_COOLDOWN	409	10s start cooldown
+WORLD_NAME_CONFLICT	409	display_name non-unique
+WORLD_PORT_CONFLICT	409	port non-unique
+WORLD_RUNTIME_CONFIG_STATE	409	Config edit while not OFF
+OP_NOT_FOUND	404	Unknown op_id
+OP_NOT_CANCELLABLE	409	Type/status not cancellable
+OP_ALREADY_TERMINAL	409	Terminal ops are immutable
+OP_CONFLICT_IN_FLIGHT	409	Mutual-exclusion rejection
+OP_QUEUED	202	Async operation queued
+OP_SUPERSEDED_BY_KILL	N/A	Stop cancelled by Kill
+OP_MANAGER_RESTART_INCOMPLETE	409	Failed at reconciliation
+OP_TIMEOUT	N/A	Locked timeout reached
+STORAGE_GUARD_TRIPPED	409	Contextual disk space guard
+BACKUP_ARTIFACT_NOT_FOUND	404	Unknown artifact_id
+BACKUP_INVALID_CHECKSUM	409	Restore checksum mismatch
+BACKUP_RETENTION_GUARD	409	Retention floor violation
+RESTORE_ARTIFACT_INVALID	409	Artifact corrupt/unreadable
+RESTORE_PREBACKUP_FAILED	502	Mandatory pre-restore backup fail
+RESTORE_REVERTED	N/A	Restore outcome: reverted
+SYNC_TARGET_UNRESOLVED	409	Zero targets resolved
+SYNC_TRANSIENT	N/A	Failed; retryable
+SYNC_PERMANENT	N/A	Failed; terminal
+SYNC_CONCURRENCY_CAP	429	Global transfer cap
+CONFIG_INVALID_KEY	400	server.properties key denied
+CONFIG_INVALID_VALUE	400	server.properties value denied
+CONFIG_VERSION_CONFLICT	409	Stale version ConfigEdit
+CLEANUP_NOTHING_TO_DO	200	Empty candidate set
+CLEANUP_PREVIEW_REQUIRED	409	Wet run without dry run
+CLEANUP_BLAST_RADIUS	409	Over candidate cap
+CLEANUP_POLICY_FLOOR	409	Strands artifact below floor
+FILE_PATH_UNAUTHORIZED	403	Path boundary escape
+FILE_NOT_FOUND	404	Missing file/folder
+FILE_EXISTS	409	Target name collision
+FILE_TOO_LARGE	400	Upload over cap
+FILE_INVALID	400	Illegal name/type
+SCHEDULE_CONFLICT	409	Optimistic lock/conflict
+MISSED_RUN_RESOLVED	409	Record already terminal
+DEVICE_UNREGISTERED	403	Unknown device action
+DEVICE_REVOKED	403	Revoked device action
+INTERNAL_ERROR	500	Unexpected exception
+NOT_IMPLEMENTED	501	Future capability
+
+8. Document 15 §6: Process-Control Conformance Suite (C1–C14)
+
+ID	Test_Name	Assertion_Target
+C1	Spawn/Probe	spawn() creates process; probe() finds; poll() reports running
+C2	Graceful Stop	Stdin stop → world exits 0; ExitClass.graceful
+C3	Forced Kill	Forced signal → tree dies; ExitClass.forced
+C4	Crash Detect	Exit without stop signal → ExitClass.crashed
+C5	Tail/Replay	Line capture; buffer replay; buffer_trimmed signal
+C6	Orphan Containment	Killing group/job kills all child helper processes
+C7	PID-Reuse Guard	Verifies pid starttime; reports reconciled_missing on mismatch; blocks signal emission
+C8	Readiness Socket	TCP port listen detection confirms readiness
+C9	Start Timeout	120s timeout enforced when never ready
+C10	Stop Timeout	60s escalation from graceful to forced
+C11	Re-attach	Boot-time probe re-attaches to live world process
+C12	Durability	Emitted lines persist in on-disk log files
+C13	Backpressure	Slow SSE sink dropped to prevent process block
+C14	No-Systemd	Static scan: zero systemd/journalctl tokens in control plane
+
+9. Architecture §13: Build Order and Gates
+
+#	Work_Item	Contract_Ref	Gate_Condition
+1	Platform Adapter	Document 15	Conformance C1–C14 green; C11 Re-attach verified
+2	Foundational Layers	Doc 7, Doc 6	PRAGMA foreign_key_check clean; Migrations test green
+3	Control Plane	Doc 8, Doc 12	Scheduler tick-to-Operation tests green; Reconciler scenarios green
+4	Operational Subsystems	Document 11	Restore checkpoint-interrupt + Optimistic-lock matrix green
+5	Experience/Hardening	Doc 4/5, Doc 13	E2E UI/SSE suites + performance benchmarks within thresholds
+
+10. Technical Directory and Tooling Locks
+
+Dependency Rule
+
+web -> commands -> services -> ports -> infrastructure -> platform
+
+Tooling Locks
+
+Tool	Role	Key_Settings
+black	Formatter	line-length 100, single-quotes
+isort	Imports	profile=black
+ruff	Linter	select E,F,W,I,UP,B,SIM; ban non-test pass
+mypy	Type Check	strict (domain, services, ports, commands); no Any
+pytest	Runner	strict-markers
+import-linter	Layering	Layering + Leaf-platform + DI-root-only contracts
+
+Global Persistence Invariants
+
+PRAGMA foreign_keys = ON;
+PRAGMA foreign_key_check;
+
+
+Retired script adapters -> Optimistic versioning on all ConfigEdits -> platform/ leaf-only imports -> C14 No-Systemd structural test -> CleanupService-only physical DELETE -> Tooling gate (Black/Isort/Ruff/Mypy/Import-linter) green.

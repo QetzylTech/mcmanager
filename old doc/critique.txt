@@ -1,0 +1,931 @@
+I re-scanned the latest versions of the actual design documents, including the August 8 revisions, and treated the condensed file as irrelevant.
+
+My conclusion is:
+
+**You are substantially closer to implementation-ready than the previous review, but I would not declare the design completely closed yet. You can start coding, but only if you treat a few items as explicit implementation gates rather than silently deciding them during development.**
+
+There are no obvious architectural disasters. The modular-monolith/ports-and-adapters approach, durable Operations model, concurrency model, persistence model, security model, SSE model, and cross-platform process-control design are coherent and unusually well specified.
+
+However, there are several remaining gaps, and a few are important enough that I would resolve them before the corresponding subsystem is implemented.
+
+## Overall assessment
+
+| Area                                                     | Assessment                                   |
+| -------------------------------------------------------- | -------------------------------------------- |
+| Overall architecture                                     | Very strong                                  |
+| Domain model                                             | Essentially complete                         |
+| Database model                                           | Essentially complete, one concrete DDL issue |
+| Services/operations                                      | Strong, minor omissions                      |
+| Concurrency                                              | Strong                                       |
+| Security model                                           | Strong conceptually                          |
+| API                                                      | Now substantially specified                  |
+| UI architecture                                          | Strong                                       |
+| Testing                                                  | Strong                                       |
+| Process control                                          | Strong specification, but must prototype     |
+| Minecraft-specific behavior                              | **Not quite deep enough**                    |
+| Production-readiness specification                       | **Not quite complete**                       |
+| Safe to begin foundational coding                        | **Yes**                                      |
+| Safe to build the whole system without revisiting design | **No**                                       |
+
+The biggest change from the older state is that Documents 12–15 now exist and fill what used to be major holes. The current `ARCHITECTURE.md` explicitly treats them as binding extensions of the normative corpus. 
+
+## 1. There is still stale documentation that needs cleanup
+
+This is not a design flaw, but it is dangerous for AI-assisted development.
+
+The latest `ARCHITECTURE.md` says Documents 9 and 10 are retired and the normative corpus is Documents 4–8 and 11–15. 
+
+But the uploaded `Document_9_-_Design_Completion_Checklist_v2.md` still says things like:
+
+> API contract: not started
+
+and
+
+> testing strategy: not started
+
+even though Documents 12, 13, 14 and 15 now exist and are detailed. 
+
+That checklist is clearly stale relative to the August 8 documents.
+
+This matters because an AI could read it and conclude that the API or testing architecture is unfinished.
+
+**Before coding, either remove Document 9 from the working corpus or update it to reflect the current state.**
+
+I would not leave contradictory completion-status documents lying around.
+
+---
+
+# 2. The process-control design is good, but it needs the promised real-world spike
+
+This is the most important remaining engineering risk.
+
+Document 15 is now quite good. It specifies:
+
+* direct argv spawning
+* process groups
+* PID reuse protection
+* stdout/stderr capture
+* graceful termination
+* forced termination
+* Windows Job Objects
+* restart reconciliation
+* log durability
+* backpressure
+* C1–C14 conformance tests
+
+and explicitly calls for testing against real Vanilla/Paper/Forge servers. 
+
+That is exactly the right approach.
+
+But the document itself says the adapter is a **spec + prototype guide**, not a finished implementation, and specifically requires a real-server spike. 
+
+I agree with that decision.
+
+Do not implement the entire manager and discover afterward that your assumptions about Minecraft process behavior are wrong.
+
+The first coding milestone should be:
+
+**real Java server → ProcessControlPort → readiness → log capture → RCON → graceful stop → forced stop → manager restart → reattach.**
+
+That should be done before building the higher-level lifecycle system around it.
+
+### There is also one particularly important Windows issue
+
+The design recognizes the problem:
+
+> POSIX worlds survive manager death; Windows Job Objects with `KILL_ON_JOB_CLOSE` do not.
+
+It then says the Windows configuration must disable that behavior when worlds need to survive manager restarts. 
+
+That's reasonable, but I'd make one decision explicit:
+
+**World survival across manager restart should be a cross-platform invariant, not a deployment option, unless you intentionally want different semantics by OS.**
+
+If the product requirement is "manager restart must not stop Minecraft servers," then the Windows implementation should default to that behavior too.
+
+Otherwise you have:
+
+Linux:
+
+`Manager dies → Minecraft survives`
+
+Windows:
+
+`Manager dies → maybe Minecraft dies`
+
+That's an undesirable product-level semantic difference.
+
+---
+
+# 3. Minecraft readiness is still under-specified
+
+This is one of the biggest Minecraft-specific gaps I found.
+
+Document 15 has:
+
+> C8 readiness via socket
+
+and the architecture correctly says a log line must not be the sole source of truth. 
+
+But **a listening Minecraft TCP port is not equivalent to "Minecraft is ready."**
+
+A server can bind its port before the world is fully usable.
+
+You need a hierarchy of readiness signals.
+
+I would define something like:
+
+1. Process exists.
+2. Minecraft server port is listening.
+3. RCON is accepting connections, if enabled.
+4. A safe readiness probe succeeds.
+5. Server reports an operationally valid state.
+6. Only then transition `starting → running`.
+
+For supported versions/server types, the readiness adapter should be capable of choosing the best available signal.
+
+This matters especially with:
+
+* large worlds
+* Forge/Fabric/Paper startup
+* datapack loading
+* plugin/mod initialization
+* world generation
+* slow disks
+* Java GC/startup delays
+
+The current architecture recognizes this generally, but the exact **readiness contract** isn't sufficiently Minecraft-specific.
+
+The official Minecraft setup documentation confirms that server startup is fundamentally a Java process and that `eula.txt` and `server.properties` are created/used during initialization. ([Minecraft.net][1])
+
+---
+
+# 4. EULA handling needs an explicit product rule
+
+This is a real omission.
+
+Minecraft's official setup flow explicitly requires the operator to set:
+
+`eula=false → eula=true`
+
+before the server can run normally. ([Minecraft.net][2])
+
+Your design has:
+
+* world creation
+* templates
+* setup
+* protected configuration
+* server.properties editing
+
+but I did not find an equally explicit **EULA acceptance model**.
+
+The manager should not silently flip `eula=true` as part of provisioning.
+
+I'd add:
+
+* `eula.txt` is recognized as a protected Minecraft-required file.
+* The manager detects whether EULA acceptance exists.
+* First launch of an unaccepted server enters a clear `EULA_REQUIRED`/setup state.
+* The UI presents the EULA acceptance requirement.
+* Only an explicit operator action records acceptance.
+* The manager writes `eula=true` only as the result of that action.
+* Acceptance is audited.
+* The manager never implies that it is granting the license itself.
+
+This is small, but it is exactly the kind of Minecraft-specific behavior that belongs in the design.
+
+---
+
+# 5. `server.properties` needs version-aware semantics
+
+The design correctly says that `server.properties` should be guarded and validated.
+
+But Minecraft server properties are **version-dependent**.
+
+This is particularly important now because Mojang has been moving properties into game rules and adding/removing properties across versions. For example, Minecraft Java 1.21.9 removed several old properties in favor of game rules and added management-server properties. ([Minecraft.net][3])
+
+Therefore, this:
+
+> "approved keys and approved value formats"
+
+isn't enough.
+
+The configuration model should distinguish:
+
+**Core manager-owned properties**
+
+Examples conceptually:
+
+* server port
+* RCON configuration
+* IP binding
+* query settings if supported
+
+from:
+
+**Version/server-type-dependent properties**
+
+Examples:
+
+* properties that exist only on particular Minecraft versions
+* Paper-specific properties
+* Forge/Fabric-specific behavior
+* deprecated properties
+* properties replaced by gamerules
+
+The validator should be driven by a **server-type/version capability schema**, not one universal hard-coded list.
+
+Otherwise upgrading a world from one Minecraft version to another can cause the manager to reject legitimate settings or preserve obsolete ones.
+
+---
+
+# 6. Java compatibility needs to become a first-class compatibility matrix
+
+You already model `JavaRuntime`, which is good.
+
+But the design currently treats:
+
+> Minecraft version + server type + Java runtime
+
+as configurable attributes.
+
+That's not quite enough.
+
+These combinations have compatibility constraints.
+
+For example, current Paper documentation lists substantially different Java requirements across Minecraft versions, including Java 21 for 1.20–1.21.11 and Java 25 for 26.1+. ([PaperMC Docs][4])
+
+Therefore the template/runtime model should be able to express:
+
+`Minecraft/server type/version → supported Java major versions`
+
+and preferably:
+
+`recommended Java version`
+
+plus:
+
+`minimum Java version`.
+
+The manager should validate the combination before starting.
+
+Otherwise an administrator can select:
+
+> Minecraft X + Java Y
+
+and only discover incompatibility after launching.
+
+Your architecture is already designed for this; the missing part is the compatibility contract.
+
+---
+
+# 7. Backup correctness needs more Minecraft-specific detail
+
+The current backup sequence is conceptually correct:
+
+> pause autosave → flush/save → capture → resume autosave
+
+and the requirements explicitly call for coordination with the server. 
+
+But this needs to be nailed down more precisely.
+
+You need explicit semantics for:
+
+* what command is used to flush saves
+* how save completion is detected
+* what happens if RCON becomes unavailable
+* what happens if the server crashes while saving
+* what happens if `save-off` succeeds but `save-all` fails
+* what happens if the manager crashes after disabling autosave
+* how `save-on` is restored
+* whether backup is allowed while the server is unreachable through RCON
+* whether offline worlds can simply be copied
+* what files are included/excluded
+* how symlinks/reparse points are handled
+* what happens when a mod/plugin writes outside the expected world directory
+
+The current documents give the **workflow**, but not all of these operational edge conditions.
+
+This is probably the largest Minecraft-specific area that deserves one more design pass.
+
+---
+
+# 8. Backup format is still a design decision
+
+You say:
+
+> zip or snapshot
+
+That is not actually one implementation.
+
+For a manager that may handle very large worlds, the backup engine needs a defined strategy.
+
+You should decide whether the first implementation is:
+
+* ZIP
+* tar-based archive
+* filesystem snapshot where available
+* copy-to-staging + archive
+* content-addressed/deduplicated storage
+* another format
+
+And specify:
+
+* compression
+* checksum algorithm
+* atomic completion
+* temporary-file naming
+* interrupted backup cleanup
+* verification after creation
+* restore validation
+* artifact corruption detection
+
+The checksum field exists, which is good, but the **backup artifact integrity protocol** isn't fully locked.
+
+---
+
+# 9. Restore has one potentially serious edge case
+
+Your restore flow is:
+
+> validate → stop → pre-backup → stage → archive → switch → restart if previously running.
+
+That's a good architecture.
+
+But there needs to be a clearly defined state if the final switch succeeds and the restart fails.
+
+For example:
+
+`old world archived`
+→ `new world installed`
+→ `Minecraft fails to start`
+
+What exactly happens?
+
+Does the manager:
+
+1. leave the restored world in place and mark `error`?
+2. automatically roll back?
+3. attempt rollback only after a failed readiness check?
+4. restore the old world automatically?
+5. require an operator?
+
+The domain model supports rollback/recovery concepts, but the **decision tree for failed post-restore startup** should be explicit.
+
+You don't want this decision invented inside `RestoreService`.
+
+---
+
+# 10. Security is conceptually strong, but I would tighten several implementation requirements
+
+The security model is much better now than the original design.
+
+It has:
+
+* server-side auth
+* server-side authorization
+* sessions
+* CSRF
+* step-up authentication
+* password hashing
+* secret isolation
+* audit snapshots
+* throttling
+* immutable security records
+
+That's solid.
+
+OWASP's current guidance is consistent with several of these choices: opaque unpredictable server-side session IDs, `HttpOnly`, `Secure`, appropriate `SameSite`, server-side session state, and avoiding browser storage for authentication tokens. ([OWASP Cheat Sheet Series][5])
+
+But I would explicitly lock these:
+
+### Password hashing
+
+Say **Argon2id** rather than merely "modern algorithm."
+
+OWASP currently recommends Argon2id as the preferred password hashing choice. ([OWASP Cheat Sheet Series][6])
+
+### Session rotation
+
+Explicitly require session ID rotation after:
+
+* login
+* privilege elevation
+* password change
+* step-up authentication if applicable
+
+### Cookie security
+
+You already have:
+
+* HttpOnly
+* SameSite=Lax
+* Secure over TLS
+
+Good.
+
+But I'd explicitly define whether HTTPS is mandatory for non-loopback deployment.
+
+### Security headers
+
+I don't see a sufficiently explicit security-header contract.
+
+At minimum I'd specify:
+
+* Content-Security-Policy
+* X-Content-Type-Options
+* Referrer-Policy
+* frame-ancestors / clickjacking protection
+* appropriate cache control for authenticated/private content
+
+### Password reset/recovery
+
+I don't see a complete account recovery model.
+
+If there is intentionally **no password-reset mechanism**, say so explicitly.
+
+Otherwise it becomes an implementation-time invention.
+
+---
+
+# 11. Secrets in SQLite are acceptable for this project, but encryption-at-rest is still unresolved
+
+The design deliberately puts secrets into SQLite rather than `.env`, which is internally coherent.
+
+But:
+
+> stored server-side
+
+isn't the same as:
+
+> encrypted at rest.
+
+OWASP recommends centralized, protected secret handling and emphasizes limiting exposure, rotation and preventing plaintext leakage. ([OWASP Cheat Sheet Series][7])
+
+You should decide whether the `secrets` table stores:
+
+**A. encrypted secret material**
+
+or
+
+**B. plaintext secret material protected solely by filesystem/DB permissions.**
+
+For a Minecraft manager, I strongly prefer A.
+
+Otherwise someone who obtains a copy of the manager database can potentially obtain:
+
+* RCON credentials
+* sync credentials
+* other secrets
+
+The design should specify the encryption/key-management model before production.
+
+This is not necessarily a blocker for starting development, but it is a blocker for calling the security design finished.
+
+---
+
+# 12. SQLite concurrency is good enough for the stated scale, but the write model needs careful implementation
+
+Your use of SQLite is reasonable for a single-host manager.
+
+The documents correctly recognize that Operations and AuditRecords are high-write tables and that the deployment isn't internet-scale. 
+
+But you should explicitly specify:
+
+* WAL mode
+* busy timeout
+* transaction boundaries
+* read/write connection behavior
+* checkpoint policy
+* handling `SQLITE_BUSY`
+* long-running backup/cleanup transactions
+* whether database backups use SQLite's backup API versus copying the `.db` file
+
+That last point is particularly important because you have ManagerBackup.
+
+**Do not simply copy the SQLite file while it is being written and call that a database backup.**
+
+Use SQLite's backup mechanism or a transactionally safe equivalent.
+
+This is an implementation detail that should be elevated into the ManagerBackup contract.
+
+---
+
+# 13. SSE is well designed, but operational stream behavior could be more explicit
+
+The API contract now exists and the architecture is strong.
+
+The main remaining question is production behavior around:
+
+* reconnect
+* replay
+* slow clients
+* disconnected clients
+* stream authentication expiry
+* Last-Event-ID
+* event ordering
+* duplicate events
+* event IDs
+* heartbeats
+* stream shutdown
+* proxy buffering
+
+You have a 200-event replay buffer and slow-sink protection, which is good.
+
+But I'd explicitly define:
+
+> **At-least-once or best-effort delivery?**
+
+and:
+
+> **Is event ordering guaranteed per stream?**
+
+and:
+
+> **What happens when a client reconnects after the replay window?**
+
+The UI already has rehydration, so you have the ingredients for a good answer:
+
+**snapshot + replayable events + idempotent client application.**
+
+I would formalize that.
+
+---
+
+# 14. The notification/audit distinction is good
+
+I specifically checked this because it was previously an area of potential ambiguity.
+
+The current design is clear:
+
+* notifications are permanent
+* per-user read/dismiss state is separate
+* Audit/History remains authoritative
+* dismissal does not delete history
+
+That is good domain modeling. 
+
+No major change needed there.
+
+---
+
+# 15. The concurrency model is one of the strongest parts
+
+I don't see a major structural problem here.
+
+The separation of:
+
+* world lock
+* global storage guard
+* cleanup scope lock
+* optimistic config versioning
+
+is sensible. The requirement that the application-level lock be derived from Operations rather than represented as a mutable lock column is also a good choice. 
+
+The single-transaction Operation creation/recheck is particularly important.
+
+I would keep this architecture.
+
+---
+
+# 16. There is one concrete schema item I would fix before coding the schema
+
+The `permissions` invariant:
+
+> exactly one of `role_id` and `user_id`
+
+is currently described as an application invariant rather than enforced by SQLite.
+
+The schema document itself acknowledges this. 
+
+This should absolutely become a database `CHECK`.
+
+Otherwise the database can represent a state the domain explicitly says is impossible.
+
+This is a small fix, but it is exactly the sort of invariant that should be enforced at the lowest appropriate layer.
+
+---
+
+# 17. Value objects should be closed before implementation
+
+Document 6 still has some value-object typing marked as incomplete.
+
+The remaining candidates include things like:
+
+* trigger type
+* notification severity
+* sync outcome
+
+The directory specification already anticipates typed values such as `WorldState`, `TriggerType`, `Severity`, `SyncOutcome`, etc. 
+
+I'd finish that now.
+
+This is not a conceptual gap, but allowing stringly typed values to creep into the initial implementation will create needless inconsistencies.
+
+---
+
+# 18. Industry-standard architecture: mostly good
+
+Against normal software engineering practice, I don't see anything fundamentally strange.
+
+In fact, several choices are stronger than many small management applications:
+
+* ports/adapters
+* dependency inversion
+* explicit domain model
+* durable operation records
+* optimistic concurrency
+* immutable audit trail
+* explicit deletion tiers
+* migration discipline
+* test pyramid
+* static architectural enforcement
+* process adapter conformance tests
+* no shell interpolation
+* platform isolation
+* server-side authorization
+* step-up authentication
+* SSE rather than client polling
+
+The biggest deviations from common industry practice are deliberate product constraints:
+
+### Single-host SQLite
+
+Reasonable given the stated scope.
+
+### Modular monolith
+
+Also reasonable.
+
+### Vanilla frontend
+
+Reasonable given the low-resource requirement.
+
+### Trusted-network deployment
+
+Acceptable, provided you keep the zero-trust application layer—which you do.
+
+### Immutable audit records without erasure
+
+This is more unusual and potentially creates regulatory/privacy implications.
+
+Your documents explicitly acknowledge that this is a deliberate product limitation. That's good, but it should eventually receive legal/product review if the software is deployed beyond personal/private use.
+
+---
+
+# 19. One industry-standard issue I would add: observability of the manager itself
+
+You have application logs and audit records, but I'd explicitly define:
+
+* manager health state
+* worker health
+* scheduler health
+* database health
+* filesystem health
+* process-adapter health
+* stream subsystem health
+* last successful scheduler tick
+* last reconciliation
+* operation backlog
+* queue depth
+* database write failures
+
+This matters because:
+
+> "Minecraft world is healthy"
+
+and
+
+> "manager is healthy"
+
+are different things.
+
+A manager can be alive while its scheduler thread is dead.
+
+A manager can serve HTTP while its SQLite writer is wedged.
+
+A manager can serve the UI while process reconciliation has failed.
+
+Those need distinguishable diagnostics.
+
+---
+
+# 20. Minecraft-specific features I would explicitly add
+
+If this is intended to be a serious Minecraft Java manager rather than just a generic process manager with Minecraft support, I'd add a small **Minecraft Server Adapter Contract**.
+
+It should define:
+
+### Startup
+
+* Java compatibility validation
+* EULA state
+* server JAR existence
+* working directory
+* startup arguments
+* memory arguments
+* server port availability
+* RCON port availability
+* readiness detection
+* startup failure classification
+
+### Runtime
+
+* RCON availability
+* player-list query
+* safe command allowlist
+* server tick/performance query where available
+* server-specific capabilities
+
+### Shutdown
+
+* RCON `stop`
+* stdin fallback
+* process termination fallback
+* timeout
+* forced termination
+* abnormal shutdown classification
+
+### Backup
+
+* save coordination
+* autosave suspension
+* flush
+* capture
+* restoration of save behavior
+* failure recovery
+
+### Configuration
+
+* EULA
+* `server.properties`
+* version-dependent property schema
+* RCON settings
+* port settings
+* server-specific properties
+
+### Compatibility
+
+A capability matrix:
+
+| Capability           | Vanilla           | Paper | Fabric | Forge |
+| -------------------- | ----------------- | ----- | ------ | ----- |
+| RCON                 | required/optional | ...   | ...    | ...   |
+| Safe readiness probe | ...               | ...   | ...    | ...   |
+| Player query         | ...               | ...   | ...    | ...   |
+| Save coordination    | ...               | ...   | ...    | ...   |
+| TPS metric           | ...               | ...   | ...    | ...   |
+| Management protocol  | version-dependent | ...   | ...    | ...   |
+
+You don't need to implement every cell immediately.
+
+But the architecture should explicitly support capabilities rather than assuming every server behaves identically.
+
+That will pay off considerably once you support Forge/Fabric/Paper.
+
+---
+
+# Can you start coding?
+
+**Yes, with a qualification.**
+
+I would start coding now rather than continuing to endlessly expand the documentation.
+
+But I would make the first development stages:
+
+### Gate 0 — clean the specification
+
+Fix:
+
+1. stale Document 9/checklist
+2. permissions SQLite CHECK
+3. remaining value objects
+4. explicit EULA handling
+5. Java compatibility contract
+6. Minecraft readiness contract
+7. SQLite ManagerBackup mechanism
+8. secret-at-rest strategy
+
+### Gate 1 — process-control prototype
+
+Build the actual:
+
+`ProcessControlPort`
+
+against:
+
+* Linux/POSIX
+* Windows
+* fake process
+
+and test:
+
+C1–C14, especially C8–C11.
+
+Document 15 explicitly identifies this as the highest-risk component. 
+
+### Gate 2 — real Minecraft spike
+
+Run actual:
+
+* Vanilla
+* Paper
+* Forge
+* Fabric
+
+and validate:
+
+* startup
+* readiness
+* RCON
+* logs
+* player query
+* graceful stop
+* forced stop
+* restart/reconciliation
+* save coordination
+* backup
+* Java compatibility
+
+Paper is particularly important because its Java requirements already vary significantly by Minecraft version. ([PaperMC Docs][4])
+
+### Gate 3 — foundational manager
+
+Then build:
+
+`SQLite → domain → repositories → Operations → auth → RuntimeService → scheduler → API → SSE`
+
+### Gate 4 — backup/restore
+
+Only after the real-world process/runtime behavior is proven.
+
+---
+
+## Final verdict
+
+I would classify the current design as:
+
+**~90–95% architecturally complete.**
+
+Not because there are huge missing subsystems. There aren't.
+
+The remaining issues are mostly **edge-condition contracts and platform/Minecraft integration details**, which is exactly where a design like this should become more specific before the implementation starts making irreversible assumptions.
+
+The three things I would consider genuinely important before calling the design "locked" are:
+
+**1. Minecraft-specific runtime contract**
+Readiness, EULA, RCON, save coordination, server.properties/version capabilities, Java compatibility.
+
+**2. Process-control prototype**
+Especially real Vanilla/Paper/Forge/Fabric behavior and Windows restart survival.
+
+**3. Security/persistence finishing details**
+Secret encryption, SQLite backup semantics, SSE reconnect semantics, security headers/session rotation.
+
+Everything else is sufficiently mature that I would **stop expanding the architecture and start implementing against it**.
+
+The current architecture's own build order is actually appropriate: process control first, foundational schema/domain/auth second, lifecycle/reconciliation third, backup/restore/cleanup fourth, then UI and hardening. 
+
+That is the point where additional documentation has diminishing returns and executable prototypes/tests become more valuable.
+
+[1]: https://www.minecraft.net/en-us/download/server?utm_source=chatgpt.com "Minecraft Server Download | Minecraft"
+[2]: https://help.minecraft.net/hc/en-us/articles/360058525452-How-to-Setup-a-Minecraft-Java-Edition-Server?utm_source=chatgpt.com "How to Setup a Minecraft: Java Edition Server | Minecraft Help"
+[3]: https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-9?utm_source=chatgpt.com "Minecraft Java Edition 1.21.9 | Minecraft"
+[4]: https://docs.papermc.io/paper/getting-started/?utm_source=chatgpt.com "Getting started | PaperMC Docs"
+[5]: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html?utm_source=chatgpt.com "Session Management - OWASP Cheat Sheet Series"
+[6]: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html?utm_source=chatgpt.com "Password Storage - OWASP Cheat Sheet Series"
+[7]: https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html?utm_source=chatgpt.com "Secrets Management - OWASP Cheat Sheet Series"
+
+
+
+
+
+critique response:
+The latest critique represents an expert-level review that confirms your architecture is **substantially implementation-ready (~90–95%)**. It praises the **modular-monolith/ports-and-adapters** approach and the **durable Operations model** as unusually well-specified and coherent. 
+
+However, it identifies that while your **workflow** is strong, your **Minecraft-specific runtime contracts** need to be "nailed down" before you can call the design locked. Below is an analysis of how these new insights refine your current plans.
+
+### 1. Immediate "Gate 0" Documentation Cleanup
+The critique correctly identifies **Document 9** as "stale" and dangerous for AI-assisted development because it claims several finished documents are "not started". 
+*   **Action:** You should **permanently delete Document 9** from your sources. The **Build Order & Gates** it contained have already been successfully consolidated into **`ARCHITECTURE.md` §13**.
+*   **Action:** Append the following resolved rulings to your **Conflict Log (§14)** in `ARCHITECTURE.md` to address the critique's "Gate 0" requirements:
+    *   **EULA Handling:** Establish a rule that the manager must detect unaccepted EULAs and require an explicit, audited operator action to write `eula=true`.
+    *   **Windows Invariant:** Mandate that "world survival across manager restart" is a **cross-platform invariant**, meaning the Windows adapter must default to leaving worlds running unless configured otherwise.
+    *   **Manager Observability:** Expand your **Diagnostics (§5.12)** to include health checks for the **scheduler thread, SQLite writer, and process-adapter**, distinguishing "manager health" from "world health".
+
+### 2. Refining the "Highest-Risk" Prototype (Gate 1 & 2)
+The critique reinforces your decision to make the **Platform process-control adapter** (Work Item 1) the first mandatory gate. It suggests that the current **C8 readiness test** (readiness via socket) is insufficient.
+*   **Minecraft Readiness Contract:** You must define a hierarchy of signals (Process exists → Port listening → RCON authenticated → Probe succeeds) rather than relying on a single TCP bind.
+*   **The Real-World Spike:** Before building the higher-level lifecycle, you must verify the **ProcessControlPort** against real **Vanilla, Paper, and Forge** servers to classify their unique startup/shutdown/readiness behaviors.
+
+### 3. Hardening Operational Contracts (Gate 3 & 4)
+The critique identifies several "edge-condition contracts" that are currently under-specified:
+*   **Backup Integrity Protocol:** You need to explicitly decide on the first-class backup format (e.g., **ZIP or tar**) and specify the **integrity protocol** (checksumming, atomic completion, and verification after creation).
+*   **Restore Decision Tree:** You must define exactly what happens if a world is successfully restored but fails its post-restore readiness check (e.g., automatic rollback to the pre-restore artifact vs. requiring operator intervention).
+*   **Security Details:** To finish the security design, you should explicitly name **Argon2id** as your hashing algorithm and define a strategy for **secret-at-rest encryption** within the SQLite secrets table.
+
+### 4. Version-Aware Configuration
+Your current **`server.properties`** editor is described as a "guarded editor with validated keys/values". The critique warns that properties are **version-dependent** (e.g., 1.21.9 removing properties in favor of gamerules).
+*   **Action:** Your configuration model should move toward a **server-type/version capability schema** rather than a universal hard-coded list, preventing the manager from rejecting legitimate settings during version upgrades.
+

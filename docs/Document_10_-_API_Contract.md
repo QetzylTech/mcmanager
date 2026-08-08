@@ -1,35 +1,25 @@
-# Document 12: API Contract & Realtime Stream Contract
+# Document 10: API Contract & Realtime Stream Contract
 
 ## Envelope
 
-Every JSON response uses one envelope:
+Success: `{"ok": true, "data": {...}, "meta": {"op_id": "op_9c1e...", "queue_position": 1, "freshness": 1753142445}}`
+Error: `{"ok": false, "error": {"code": "WORLD_NOT_OFF", "message": "World must be off to restore.", "details": {"world_id": "w_7f3a...", "state": "running"}}, "meta": {"op_id": "op_..."}}`
 
-```json
-{"ok": true, "data": {...}, "meta": {"op_id": "op_9c1e...", "queue_position": 1, "freshness": 1753142445}}
-```
-
-Error responses:
-
-```json
-{"ok": false, "error": {"code": "WORLD_NOT_OFF", "message": "World must be off to restore.", "details": {"world_id": "w_7f3a...", "state": "running"}}, "meta": {"op_id": "op_..."}}
-```
-
-- `error.code` — canonical machine-readable code (§7). Never changes meaning; additive-only.
-- `error.message` — short human summary. Full detail in `error.details.log` when available; always persisted in `operations.message`/`data_json` and `audit_records.payload`.
-- `meta`: `op_id` (any Operation-creating call), `queue_position` (queued ops), `freshness` (epoch seconds) on cached-live-snapshot payloads, `pagination` on lists.
+- `error.code` — canonical machine-readable code (§Error catalog); never changes meaning; additive-only.
+- `error.message` — short human summary. Full detail in `error.details.log` when available; always persisted in `operations.message`/`data_json` + `audit_records.payload`.
+- `meta`: `op_id` (any Operation-creating call), `queue_position` (queued ops), `freshness` (epoch seconds, cached-live-snapshot payloads), `pagination` (lists).
 
 ## Conventions (locked)
 
-- Routes `/api`; streams `/stream`. JSON in/out unless stated (file download/upload, SSE).
-- JSON timestamps are ISO-8601 UTC; DB stores epoch seconds — conversion only in serializers.
-- **Authn**: cookie `mcmanager_session` (HttpOnly, SameSite=Lax, Path=/; Secure over TLS). Cookie value = opaque session id, looked up in `client_sessions` (Doc 7) with expiry/revocation checked on every request. Server-side authz on every request regardless of origin. `POST /api/auth/login` sets cookie; `POST /api/auth/logout` revokes (`deleted_at`).
-- **CSRF**: every state-changing request (POST/PATCH/DELETE) needs `X-CSRF-Token` (double-submit, session-bound, rotated on session restore); missing/mismatch → `CSRF_INVALID`. SSE GET needs none.
-- **Step-up (S)**: requires verified window on session (`client_sessions.step_up_confirmed_at` ≤ default 10 min) or fresh `POST /api/auth/step-up {password}`. S routes additionally require elevated confirmation / scope preview. Password never persisted/pre-filled.
-- **Idempotency**: Operation-creating POSTs accept `Idempotency-Key` (stored on `operations.idempotency_key`, unique per `op_type`). Same key + op_type retry → original Operation (200). Server generates one if omitted → `meta.idempotency_key`.
-- **Async (O)**: state-changing actions are durable Operations. Validate preconditions → create → **202** `{meta.op_id, data.operation.status (Created|Queued), meta.queue_position?}`. No polling — progress via SSE `operation.*`, fallback `GET /api/operations/{op_id}`. Rejection-path preconditions (never queued: Restore while running, DeleteWorld not off, stale-version ConfigEdit) → **409**, no Operation. Idempotent replay of completed op → **200** terminal state.
-- **Paging/filter/sort**: list endpoints `limit` (default 50, max 500) + `offset` (0) → `meta.pagination {limit, offset, total}`. Filters per-endpoint server-side query params. `sort` = comma list, optional `-` desc (`sort=-created_at`); unsupported field → `VALIDATION_ERROR`.
+- Routes `/api`; streams `/stream`. JSON in/out unless stated (file download/upload, SSE). JSON timestamps ISO-8601 UTC; DB stores epoch seconds — conversion only in serializers.
+- **Authn:** cookie `mcmanager_session` (HttpOnly, SameSite=Lax, Path=/; Secure over TLS); opaque session id looked up in `client_sessions` (Doc 7), expiry/revocation checked every request. Server-side authz on every request regardless of origin. `POST /api/auth/login` sets cookie; `POST /api/auth/logout` revokes (`deleted_at`).
+- **CSRF:** every state-changing request (POST/PATCH/DELETE) needs `X-CSRF-Token` (double-submit, session-bound, rotated on session restore); missing/mismatch → `CSRF_INVALID`. SSE GET needs none.
+- **Step-up (S):** requires verified window on session (`client_sessions.step_up_confirmed_at` ≤ default 10 min) or fresh `POST /api/auth/step-up {password}`. S routes additionally require elevated confirmation / scope preview. Password never persisted/pre-filled.
+- **Idempotency:** Operation-creating POSTs accept `Idempotency-Key` (stored on `operations.idempotency_key`, unique per `op_type`). Same key + op_type retry → original Operation (200). Server generates one if omitted → `meta.idempotency_key`.
+- **Async (O):** state changes are durable Operations. Validate preconditions → create → **202** `{meta.op_id, data.operation.status (Created|Queued), meta.queue_position?}`. No polling — progress via SSE `operation.*`, fallback `GET /api/operations/{op_id}`. Rejection-path preconditions (never queued: Restore while running, DeleteWorld not off, stale-version ConfigEdit) → **409**, no Operation. Idempotent replay of completed op → **200** terminal state.
+- **Paging/filter/sort:** `limit` (default 50, max 500) + `offset` (0) → `meta.pagination {limit, offset, total}`. Filters per-endpoint server-side query params. `sort` = comma list, optional `-` desc (`sort=-created_at`); unsupported field → `VALIDATION_ERROR`.
 
-## HTTP Status Summary
+## HTTP status summary
 
 | Status | Meaning |
 |---|---|
@@ -45,12 +35,11 @@ Error responses:
 | 429 | Throttled |
 | 500 | Internal (`INTERNAL_ERROR`; always `details.log`, `details.op_id` when known) |
 
-## Route Catalog
+## Route catalog
 
 Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` = Superadmin only; `C` = Client with grant; `any` = any authenticated user.
 
-### Auth & Session
-
+### Auth & session
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | POST | `/api/auth/login` | public | `{username, password, device_id?}` → session cookie; 429 after throttle; audit on success/failure |
@@ -59,24 +48,24 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/session` | any | user, role, permission grants, device, step-up expiry, settings visibility |
 
 ### Worlds
-
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/worlds` | any | filters `state`, `server_type`, `mc_version`, `search` (display_name), `include_deleted=false` |
 | POST | `/api/worlds` | A | O CreateWorld; body: template_id, display_name, port, addressing_strategy/value, java_runtime_id, launch_args |
-| GET | `/api/worlds/{world_id}` | any | detail incl. live state + last backup summary; deleted → 404 |
-| PATCH | `/api/worlds/{world_id}` | A | RenameWorld `{display_name, version}` (metadata ConfigEdit, version per Doc 11); allowed concurrently with Backup/Restore/Cleanup |
+| GET | `/api/worlds/{world_id}` | any | detail incl. live state, **resolved capability record** (Doc 14 §2/§8), last backup summary; deleted → 404 |
+| PATCH | `/api/worlds/{world_id}` | A | RenameWorld `{display_name, version}` (metadata ConfigEdit, version per Doc 9 §4); allowed concurrently with Backup/Restore/Cleanup |
 | DELETE | `/api/worlds/{world_id}` | A S | O DeleteWorld; scope preview required first; 409 unless `off` + no in-flight ops |
 | GET | `/api/worlds/{world_id}/runtime-config` | A | read view: java_runtime_id, launch_args, port, addressing |
 | PATCH | `/api/worlds/{world_id}/runtime-config` | A | O ConfigEdit; **409 unless state = off**; requires `version`; immediate write, effect next boot |
 | POST | `/api/worlds/{world_id}/start` | any | O Start; 10s cooldown; duplicates ignored |
 | POST | `/api/worlds/{world_id}/stop` | A | O Stop; password via step-up window |
 | POST | `/api/worlds/{world_id}/kill` | A S | O Kill; elevated confirmation; supersedes in-flight Stop atomically |
-| POST | `/api/worlds/{world_id}/server-properties` | A | O ConfigEdit guarded editor (validated keys/values) |
-| GET | `/api/worlds/{world_id}/server-properties` | A | validated content + allowed-keys catalog |
+| POST | `/api/worlds/{world_id}/server-properties` | A | O ConfigEdit guarded editor — **validated per server-type/version capability schema** (Doc 14 §6); unknown/deprecated keys flagged, never deleted |
+| GET | `/api/worlds/{world_id}/server-properties` | A | validated content + allowed-keys catalog for the world's server_type/mc_version |
+| POST | `/api/worlds/{world_id}/eula/accept` | A S | O ConfigEdit `eula`; explicit audited EULA acceptance (Doc 14 §5) — the **only** route that writes `eula=true`; world `eula_required -> off` |
+| GET | `/api/worlds/{world_id}/eula` | any | `EulaState` + world state; EULA-acceptance prompt when `eula_required` |
 
 ### Operations
-
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/operations` | any | filters `world_id`, `op_type`, `status`, `actor_user_id`; sort `-created_at` |
@@ -84,8 +73,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | POST | `/api/operations/{op_id}/cancel` | A | O only from `Queued`/`Validating`, cancellable types; else 409 `OP_NOT_CANCELLABLE` |
 | GET | `/api/worlds/{world_id}/operations` | any | world-scoped shorthand |
 
-### Backups & Restores
-
+### Backups & restores
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/worlds/{world_id}/backups` | any | filters `category`, `deleted=false`; retention-protected rows flagged |
@@ -98,7 +86,6 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | POST | `/api/worlds/{world_id}/restores/rollback` | A S | O corrective restore referencing pre-restore artifact (recovery path, not undo toggle) |
 
 ### Cleanup
-
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_worlds\|logs, world_id?, policy_version?}` → affected-candidate summary in `data` once Validating |
@@ -107,7 +94,6 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/worlds/{world_id}/cleanup-preview` | A | scoped dry-run shorthand |
 
 ### Sync
-
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/sync/records` | A | manager-wide recent sync activity; filters `status`, `world_id`, `artifact_id` |
@@ -115,8 +101,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | POST | `/api/sync/retry` | A | O re-trigger sync `{artifact_id}` (only auto-retrying op; this is manual) |
 | GET | `/api/sync/targets` | A | targets with effective resolution (global default vs world override) |
 
-### Schedules & Missed Runs
-
+### Schedules & missed runs
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/schedules` | A | filters `scope`, `world_id`, `schedule_type`, `enabled` |
@@ -126,8 +111,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/missed-runs` | A | filter `pending\|resolved\|ignored` |
 | PATCH | `/api/missed-runs/{missed_run_id}` | A | `{resolution: resolved\|ignored}` — terminal; 409 once set |
 
-### Settings & Manager
-
+### Settings & manager
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/settings` | A | merged effective global settings + `version` |
@@ -143,8 +127,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/setup` | any | setup state |
 | POST | `/api/setup` | SA | complete first-run setup |
 
-### Templates & Java Runtimes
-
+### Templates & Java runtimes
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/templates` | any | filters `category`, `deprecated=false` |
@@ -157,8 +140,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | PATCH | `/api/java-runtimes/{runtime_id}` | A | O ConfigEdit; requires `version` |
 | DELETE | `/api/java-runtimes/{runtime_id}` | A | O ConfigEdit deprecate |
 
-### Users, Roles, Permissions, Devices
-
+### Users, roles, permissions, devices
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/users` | SA | status, last activity, role assignments |
@@ -177,8 +159,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/devices/{device_id}/sessions` | SA | session history |
 | GET | `/api/session/activity` | any | own session client-monitoring snapshot |
 
-### Notifications & Audit
-
+### Notifications & audit
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/notifications` | any | unread-first, severity then recency; `meta.unread_count`; filters `severity`, `read`, `world_id` |
@@ -188,8 +169,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/audit` | any | immutable history; filters `actor_user_id`, `world_id`, `event_type`, `from`/`to`; sort `-created_at` |
 | GET | `/api/audit/{audit_id}` | any | incl. `annotation_of`, `payload` |
 
-### Files & Logs
-
+### Files & logs
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/worlds/{world_id}/files` | A | browse `path` (relative), `include_hidden=false` → name, type, size, mtime |
@@ -203,20 +183,29 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/worlds/{world_id}/logs/{channel}/{file}` | A | download |
 | GET | `/api/worlds/{world_id}/logs/{channel}/tail` | A | `?offset=` historical tail; new lines via SSE `log.line` |
 
-**Log channels (`{channel}`)** — canonical closed set; others → `VALIDATION_ERROR`:
-`minecraft` (live console/stdout-stderr) · `crash_reports` · `backup_restore` (dedicated live stream `/stream/restore_logs`) · `panel_activity` · `panel_errors` · `debug` / `sync` / `manager_action`
+**Log channels (`{channel}`)** — canonical closed set; others → `VALIDATION_ERROR`: `minecraft` (live console/stdout-stderr) · `crash_reports` · `backup_restore` (dedicated live stream `/stream/restore_logs`) · `panel_activity` · `panel_errors` · `debug` / `sync` / `manager_action`
 
 ### System
-
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/health` | public | `{status:"ok", version, db:"ok"}` — no sensitive data |
 | GET | `/api/system/stats` | any | CPU/RAM/storage/worlds; cached; `meta.freshness` |
-| GET | `/api/diagnostics` | A | consistency/health checks (foreign_key_check status, reconciliation report) |
+| GET | `/api/diagnostics` | A | manager diagnostics distinct from world health (ARCHITECTURE §16 ruling 12): scheduler last-tick + next-tick, SQLite writer busy/wedge status, process-adapter last-poll health, foreign_key_check status, reconciliation report, operation backlog/queue depth, last successful checkpoint |
 
-## SSE Stream Contract
+## SSE stream contract
 
-**Transport**: `text/event-stream`; WebSocket allowed as future alternative behind the same topic abstraction — never per-tab polling. Each tab opens its own independent connection; server computes each event once and fans out; no election/forwarding. `event:`/`data:`/`id:` format; `id` = per-stream monotonic sequence; reconnect with `Last-Event-ID` replays buffered events (keep last 200/stream); `retry:` 3000ms. Payloads single-line JSON.
+**Transport:** `text/event-stream`; WebSocket allowed as future alternative behind the same topic abstraction — never per-tab polling. Each tab opens its own independent connection; server computes each event once and fans out; no election/forwarding. `event:`/`data:`/`id:` format; `id` = per-stream monotonic sequence; reconnect with `Last-Event-ID` replays buffered events (keep last 200/stream); `retry:` 3000ms. Payloads single-line JSON.
+
+**Delivery semantics (locked; ARCHITECTURE §16, single source):**
+- At-least-once delivery, not best-effort/exactly-once. `snapshot` first event guaranteed (never blank); each event delivered ≥1× per connected client.
+- Ordering guaranteed per stream: `id` monotonic; replay via `Last-Event-ID` never reorders buffered events.
+- Reconnect within replay window (200): resume from next sequence, no observable gap. Past window: events older than buffer lost → client re-syncs via **snapshot + rehydration** (`snapshot` event + `freshness`), applies idempotently — documented recovery path, not an error.
+- Duplicates possible after reconnect (at-least-once). Client application must be idempotent: applying the same `world.state`/`operation.*`/`notification` payload twice is a no-op. UI rehydration model already assumes this.
+- Heartbeats: empty comment line (`: ping`) every 15s keeps proxies from closing; clients treat as no-op (never drives UI state — Doc 4 nav ban).
+- Stream shutdown: clean shutdown ends streams with final `event: manager.shutdown`; on crash no such event — clients detect dropped connection and reconnect with `Last-Event-ID`.
+- Proxy buffering: deployment must disable intermediate buffering for `/stream`; Doc 11 E2E covers this on the supported deployment shape.
+- Auth expiry mid-stream: session expiry/revocation closes stream with 401-equivalent terminal `event: stream.error`, `data: {"code": "AUTH_SESSION_EXPIRED"}`; client re-authenticates and reconnects.
+- Slow clients: fan-out drops the slowest sink rather than blocking the event source (Doc 13 §3.3 backpressure); dropped-client alert surfaces at most once per minute per client.
 
 ### Endpoints
 
@@ -228,7 +217,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | `GET /stream/restore_logs?world_id={world_id}` | one world's restore stream | `restore.progress` + `log.line` (restore channel) |
 | `GET /stream/metrics` | manager + all worlds | `metrics` snapshot then live deltas |
 
-All require a valid session cookie. CSRF not applicable (GET, read-only).
+All require valid session cookie. CSRF not applicable (GET, read-only).
 
 ### Topics (event names = stable API; additions only; 1:1 with Doc 6 domain events)
 
@@ -250,7 +239,7 @@ All require a valid session cookie. CSRF not applicable (GET, read-only).
 | `queue.position` | `{op_id, op_type, queue_position}` |
 | `missed_run` | `{missed_run_id, schedule_id, schedule_name_snapshot, expected_run_at}` |
 
-### MetricsCadence & Broadcast Set
+### MetricsCadence & broadcast set
 
 - Clients = 0 AND all worlds off → no emission (`null` cadence). Any world on OR any client connected → 15s cached snapshot refresh. ≥1 connected client → 1Hz stream cadence (log lines as emitted).
 - **Broadcast set** (canonical payload fields; SSE/JSON push-only, no polling; projected across `world.metrics`, `system.stats`, `snapshot`, `notifications`):
@@ -259,7 +248,7 @@ All require a valid session cookie. CSRF not applicable (GET, read-only).
   - Jobs/policy: cleanup last run, cleanup rule version, schedule version, rule last changed by, next run, missed-run count.
   - Logs: console, backup, panel activity, panel error (live via `log.line`; history via Files & Logs channels).
 
-## Error-Code Catalog
+## Error-code catalog
 
 Canonical, additive-only. `operations.error_code` values appear here so UI "explain error" resolves code → friendly text + expandable detail.
 
@@ -286,10 +275,12 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `WORLD_NAME_CONFLICT` | 409 | create/rename | display_name non-unique among live worlds |
 | `WORLD_PORT_CONFLICT` | 409 | create/config | port non-unique among live worlds |
 | `WORLD_RUNTIME_CONFIG_STATE` | 409 | runtime-config | config edit while not `off` |
+| `EULA_NOT_ACCEPTED` | 409 | start | World EULA not accepted (`eula_required`); operator must accept via explicit audited route (Doc 14 §5) |
+| `JAVA_INCOMPATIBLE` | 409 | start/create | Resolved Java major outside the server type/version's supported range (Doc 14 §4/§7); rejected before spawn, never discover-after-launch |
 | `OP_NOT_FOUND` | 404 | operations | Unknown op_id |
 | `OP_NOT_CANCELLABLE` | 409 | cancel | Type/status not cancellable (`Queued`/`Validating` only) |
 | `OP_ALREADY_TERMINAL` | 409 | cancel/transition | Terminal ops immutable |
-| `OP_CONFLICT_IN_FLIGHT` | 409 | reject-path ops | In-flight op blocks this type (Document 11 matrix) |
+| `OP_CONFLICT_IN_FLIGHT` | 409 | reject-path ops | In-flight op blocks this type (Doc 9 matrix) |
 | `OP_QUEUED` | 202 | queue-path ops | Not an error: queued single-flight; `meta.queue_position` |
 | `OP_SUPERSEDED_BY_KILL` | n/a (transition) | kill | In-flight Stop cancelled atomically by Kill |
 | `OP_MANAGER_RESTART_INCOMPLETE` | 409 | reconcile | Op failed at restart reconciliation |
@@ -305,8 +296,8 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `SYNC_TRANSIENT` | n/a (attempt) | sync_attempts | `failed_transient` — retryable |
 | `SYNC_PERMANENT` | n/a (attempt) | sync_attempts | `failed_permanent` — terminal for job |
 | `SYNC_CONCURRENCY_CAP` | 429 | sync | Global transfer cap reached |
-| `CONFIG_INVALID_KEY` | 400 | server.properties | Unapproved key |
-| `CONFIG_INVALID_VALUE` | 400 | server.properties | Value fails approved-format validation |
+| `CONFIG_INVALID_KEY` | 400 | server.properties | Key not valid for the world's server_type/mc_version capability schema (Doc 14 §6.2) |
+| `CONFIG_INVALID_VALUE` | 400 | server.properties | Value fails format validation for the world's server_type/mc_version capability schema |
 | `CONFIG_VERSION_CONFLICT` | 409 | ConfigEdit all | Stale `version` optimistic-lock rejection |
 | `CLEANUP_NOTHING_TO_DO` | 200 | cleanup | Empty candidate set (not an error) |
 | `CLEANUP_PREVIEW_REQUIRED` | 409 | cleanup execute | Wet run without matching dry-run preview |
@@ -324,4 +315,4 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `INTERNAL_ERROR` | 500 | any | Unexpected; always `details.log` + `details.op_id` when an Operation involved |
 | `NOT_IMPLEMENTED` | 501 | any | Declared future capability not yet built |
 
-**Error ↔ operations mapping**: Operation-creating failures set `operations.error_code` to the REST-relevant code; the `operations` row is the durable record, the HTTP response mirrors it. System-observed failures (`CRASH_DETECTED`, `OP_MANAGER_RESTART_INCOMPLETE`, `BACKUP_FAILED`) become `operations.error_code` and surface via SSE `operation.terminal`; they do not map to a synchronous HTTP error.
+**Error ↔ operations mapping:** Operation-creating failures set `operations.error_code` to the REST-relevant code; the `operations` row is the durable record, the HTTP response mirrors it. System-observed failures (`CRASH_DETECTED`, `OP_MANAGER_RESTART_INCOMPLETE`, `BACKUP_FAILED`) become `operations.error_code` and surface via SSE `operation.terminal`; they do not map to a synchronous HTTP error.
