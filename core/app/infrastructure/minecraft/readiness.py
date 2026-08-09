@@ -1,0 +1,75 @@
+"""Readiness evaluator per server type (Document 14 section 3).
+
+``starting -> running`` fires only at the highest available level for the
+server type. Log strings are advisory evidence only — never the sole signal.
+"""
+
+from __future__ import annotations
+
+import socket
+
+from app.domain.value_objects import ServerReadinessLevel, ServerType
+from app.ports.minecraft import MinecraftCapabilities, ReadinessState, evaluate_readiness
+
+# Per-type default target levels (Doc 14 section 3).
+DEFAULT_TARGET_LEVELS: dict[ServerType, ServerReadinessLevel] = {
+    ServerType.VANILLA: ServerReadinessLevel.PROBE_OK,
+    ServerType.PAPER: ServerReadinessLevel.OPERATIONALLY_VALID,
+    ServerType.FABRIC: ServerReadinessLevel.PROBE_OK,
+    ServerType.FORGE: ServerReadinessLevel.PROBE_OK,
+}
+
+
+def target_level_for(server_type: ServerType) -> ServerReadinessLevel:
+    """Configured readiness target for a server type."""
+    return DEFAULT_TARGET_LEVELS.get(server_type, ServerReadinessLevel.PROBE_OK)
+
+
+def port_is_bound(host: str, port: int, timeout_s: float = 1.0) -> bool:
+    """TCP connect probe (Doc 13 C8 minimum floor)."""
+    if port <= 0:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
+
+
+def evaluate(
+    *,
+    server_type: ServerType,
+    caps: MinecraftCapabilities,
+    state: ReadinessState,
+    rcon_enabled: bool = True,
+) -> ServerReadinessLevel:
+    """Resolve the world's current readiness level.
+
+    The target level is capped by the server type's declared capabilities:
+    a port-bound-only check is the minimum; the hierarchy is authoritative.
+    """
+    target = target_level_for(server_type)
+    # A capability the type doesn't have cannot be claimed.
+    if not rcon_enabled and target is not ServerReadinessLevel.PROCESS_ALIVE:
+        target = ServerReadinessLevel.PORT_BOUND
+    return evaluate_readiness(state, target)
+
+
+def build_state(
+    *,
+    process_alive: bool,
+    port: int,
+    rcon_ready: bool = False,
+    probe_ok: bool = False,
+    operationally_valid: bool = False,
+    host: str = '127.0.0.1',
+    port_timeout_s: float = 1.0,
+) -> ReadinessState:
+    """Build a ReadinessState from live signals; port probe is live."""
+    return ReadinessState(
+        process_alive=process_alive,
+        port_bound=port_is_bound(host, port, port_timeout_s),
+        rcon_ready=rcon_ready,
+        probe_ok=probe_ok,
+        operationally_valid=operationally_valid,
+    )

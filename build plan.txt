@@ -1,0 +1,63 @@
+Phase 1: The Runtime Foundation (Gate 1)
+Focus: Validating that we can control Minecraft processes without systemd or shell-script wrappers
+.
+Platform Adapter Implementation: Build the ProcessControlPort interface for the target OS (POSIX or Windows)
+.
+C1–C14 Conformance Suite: Verify the adapter against the 14 mandatory tests, including orphan containment, PID-reuse guards, and world-survival during a manager crash
+.
+Real Minecraft Spike: Spawn Vanilla, Paper, and Forge servers to validate the Readiness Hierarchy (confirming that a world is "Running" only after the process, port, RCON, and probe signals are all green)
+.
+Java & EULA Gating: Implement the logic to detect unaccepted EULAs and verify Java compatibility before a process is ever spawned
+.
+
+
+Phase 2: Data & Identity Core (Gate 2)
+Focus: Establishing the single source of truth and the Zero-Trust security model
+.
+Composition Root & DI: Set up app/bootstrap.py as the only place where concrete adapters are injected into services
+.
+SQLite Schema & Invariants: Deploy the 27-table schema with the "Global Persistence Invariant" (enforcing foreign_keys = ON and foreign_key_check at boot)
+.
+Authentication Engine: Build the session and identity modules using Argon2id hashing, session-ID rotation, and the 10-minute Step-Up window for sensitive actions
+.
+Audit & Notification Pipeline: Implement the append-only, immutable AuditRecord and permanent Notification systems
+.
+
+
+Phase 3: The Control Plane (Gate 3)
+Focus: Orchestrating the world lifecycle and background tasks
+.
+Durable Operation Engine: Implement the Operation model as the sole driver for state changes, ensuring every action is trackable and restart-safe
+.
+Derived World Locking: Build the concurrency query that checks for in-flight operations to prevent world-scoped conflicts
+.
+Scheduler & Missed-Runs: Establish the 30s scheduler tick and the detection logic for jobs that fail to fire due to crashes or conflicts
+.
+Realtime SSE Streams: Build the "compute-once, fan-out" server-side stream for world states and log lines
+.
+
+
+Phase 4: Operational Subsystems (Gate 4)
+Focus: Ensuring data integrity for backups, restores, and cleanup
+.
+Native Backup Engine: Implement the ZIP + SHA-256 portable engine with RCON-based autosave suspension
+.
+Restore Decision Tree: Build the staged restore flow (Validate → Pre-Backup → Switch → Restart) with the mandatory automatic rollback for failed post-restore startups
+.
+Cleanup & Retention: Implement the Tier 2 deletion logic that enforces age and count floors, ensuring no action ever deletes the "last viable artifact"
+.
+Optimistic Concurrency: Apply the version-based conflict detection to all multi-admin configuration tables
+.
+
+
+Phase 5: Presentation & Hardening (Gate 5)
+Focus: Final UI delivery and performance verification
+.
+Persistent Web Shell: Build the left-nav/right-pane layout following the strict Document 4 Style Guide
+.
+API Route Mapping: Connect the 17 distinct page modules to the thin-route API handlers
+.
+Manager Diagnostics: Implement the health-check routes that separately monitor the scheduler, the SQLite writer, and the process adapters
+.
+Performance Acceptance: Verify that idle CPU and RAM usage remain below the documented reference-host thresholds
+.
