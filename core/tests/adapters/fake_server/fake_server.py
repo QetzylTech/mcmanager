@@ -112,7 +112,7 @@ def _install_signal_handlers(args: argparse.Namespace, controller: _StopControll
 
 
 def _run_tcp_listener(port: int) -> None:
-    """Accept + close connections so readiness port probes succeed (C8)."""
+    """Accept connections; answer the legacy Minecraft ping (C8 + level-4)."""
 
     def _serve() -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -125,11 +125,20 @@ def _run_tcp_listener(port: int) -> None:
                 except OSError:
                     return
                 try:
-                    conn.sendall(b'Hello from FakeServer\r\n')
+                    conn.settimeout(1.0)
+                    raw = conn.recv(2)
+                    if raw == b'\xfe\x01':
+                        # Legacy server-list-ping: 0xFF + magic + UTF-16BE payload.
+                        conn.sendall(b'\xff\x00\x07localhost\x00\x63\x00\xdd\x00\x01\x00\x00')
+                    else:
+                        conn.sendall(b'Hello from FakeServer\r\n')
                 except OSError:
                     pass
                 finally:
-                    conn.close()
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
 
     threading.Thread(target=_serve, name='fake-tcp-listener', daemon=True).start()
 

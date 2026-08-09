@@ -162,11 +162,20 @@ class _VirtualProcess:
                 except OSError:
                     return
                 try:
-                    conn.sendall(b'FakeServer\r\n')
+                    conn.settimeout(1.0)
+                    raw = conn.recv(2)
+                    if raw == b'\xfe\x01':
+                        # Legacy server-list-ping handshake (level-4 probe).
+                        conn.sendall(b'\xff\x00\x07localhost\x00\x63\x00\xdd\x00\x01\x00\x00')
+                    else:
+                        conn.sendall(b'FakeServer\r\n')
                 except OSError:
                     pass
                 finally:
-                    conn.close()
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
 
         threading.Thread(target=_serve, name='fake-tcp-accept', daemon=True).start()
 

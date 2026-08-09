@@ -9,6 +9,7 @@ from __future__ import annotations
 import socket
 
 from app.domain.value_objects import ServerReadinessLevel, ServerType
+from app.infrastructure.minecraft.ping import ping_protocol
 from app.ports.minecraft import MinecraftCapabilities, ReadinessState, evaluate_readiness
 
 # Per-type default target levels (Doc 14 section 3).
@@ -64,12 +65,24 @@ def build_state(
     operationally_valid: bool = False,
     host: str = '127.0.0.1',
     port_timeout_s: float = 1.0,
+    host_is_minecraft: bool = True,
 ) -> ReadinessState:
-    """Build a ReadinessState from live signals; port probe is live."""
+    """Build a ReadinessState from live signals.
+
+    ``probe_ok`` is a live legacy-protocol ping whenever the port is bound on
+    a Minecraft server; callers that can prove a stronger signal (Paper API,
+    external probe) pass ``probe_ok`` and/or ``operationally_valid``
+    explicitly. ``host_is_minecraft=False`` forces the bare-connect floor
+    (Doc 13 C8) so a non-Minecraft listener never claims ``probe_ok``.
+    """
+    bound = port_is_bound(host, port, port_timeout_s)
+    live_probe = probe_ok or (
+        bound and host_is_minecraft and ping_protocol(host, port, port_timeout_s)
+    )
     return ReadinessState(
         process_alive=process_alive,
-        port_bound=port_is_bound(host, port, port_timeout_s),
+        port_bound=bound,
         rcon_ready=rcon_ready,
-        probe_ok=probe_ok,
+        probe_ok=live_probe,
         operationally_valid=operationally_valid,
     )

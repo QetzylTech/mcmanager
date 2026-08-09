@@ -34,7 +34,9 @@ from app.services.notifications import NotificationService
 from app.services.operations import OperationService
 from app.services.realtime import LogFanout, RealtimeHub
 from app.services.restore import RestoreService
+from app.services.save_coordination import RconSaveCoordinator
 from app.services.scheduler import SchedulerService
+from app.services.worlds import WorldsService
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,8 @@ class Container:
     restore: RestoreService
     cleanup: CleanupService
     configuration: ConfigurationService
+    worlds: WorldsService
+    save_coordinator: RconSaveCoordinator
 
 
 def _migrations_dir() -> Path:
@@ -105,16 +109,26 @@ def build_container(
     scheduler = SchedulerService(store, clock, operations)
     realtime = RealtimeHub()
     logs = LogFanout(realtime)
-    backups = BackupService(store, clock)
+    save_coordinator = RconSaveCoordinator(store, secrets)
+    backups = BackupService(store, clock, save_coordinator)
     restore = RestoreService(store, clock, operations, backups)
     cleanup = CleanupService(store, clock)
     configuration = ConfigurationService(store, clock)
+    process_adapter = _create_process_adapter()
+    worlds = WorldsService(
+        store=store,
+        clock=clock,
+        operations=operations,
+        process_adapter=process_adapter,
+        secrets=secrets,
+        logs=logs,
+    )
 
     return Container(
         clock=clock,
         store=store,
         secrets=secrets,
-        process_adapter=_create_process_adapter(),
+        process_adapter=process_adapter,
         audit=audit,
         notifications=notifications,
         auth=auth,
@@ -126,4 +140,6 @@ def build_container(
         restore=restore,
         cleanup=cleanup,
         configuration=configuration,
+        worlds=worlds,
+        save_coordinator=save_coordinator,
     )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flask import Blueprint
+from flask import Blueprint, current_app
 
 from app.shell.routes import PAGE_BY_SLUG, PAGE_MODULES
 from app.web.errors import error, ok
@@ -27,14 +27,27 @@ def page_module(slug: str):
     page = PAGE_BY_SLUG.get(slug)
     if page is None:
         return error('NOT_FOUND', 'Page module not found.', status=404)
-    return ok(
-        {
+    container = current_app.extensions['mcmanager_container']
+    try:
+        worlds = container.worlds.list_worlds()
+        running = [w for w in worlds if w['state'] == 'running']
+        sections = _sections_for(page.slug)
+        payload = {
             'slug': page.slug,
             'title': page.title,
             'scope': page.scope,
-            'sections': _sections_for(page.slug),
+            'sections': sections,
         }
-    )
+        if page.slug == 'worlds':
+            payload['worlds'] = worlds
+        elif page.slug == 'home':
+            payload['running_worlds'] = running
+            payload['recent_worlds'] = worlds[:5]
+        elif page.slug == 'world-main':
+            payload['worlds'] = worlds
+        return ok(payload)
+    except Exception:
+        return error('PAGE_UNAVAILABLE', 'Page module failed to load.', status=500)
 
 
 def _sections_for(slug: str) -> list[dict[str, str]]:

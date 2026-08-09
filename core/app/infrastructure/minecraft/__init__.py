@@ -26,6 +26,7 @@ from app.infrastructure.minecraft.java_compatibility import (
     java_compatible,
     recommended_java,
 )
+from app.infrastructure.minecraft.ping import ping_protocol
 from app.infrastructure.minecraft.properties_schema import (
     CORE_MANAGER_PROPERTIES,
     PropertyValidation,

@@ -34,6 +34,13 @@ def create_app(
         clock=clock,
     )
     app.extensions['mcmanager_container'] = container
+
+    # Boot reconciliation (Doc 13 §5.1): re-attach any world with an open
+    # runtime session that survived a previous manager run.
+    try:
+        container.worlds.reconcile()
+    except Exception:  # noqa: BLE001 - a failed reconcile must not block boot
+        pass
     app.register_blueprint(shell_bp)
     register_api_blueprints(app)
     register_stream_blueprints(app)
