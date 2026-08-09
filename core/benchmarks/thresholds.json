@@ -1,0 +1,6 @@
+{
+  "reference_host": "development workstation smoke threshold",
+  "idle_cpu_pct_max": 5.0,
+  "idle_traced_memory_mb_max": 64.0,
+  "idle_window_seconds": 1.0
+}

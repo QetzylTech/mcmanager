@@ -27,7 +27,14 @@ from app.platform.process.windows import WindowsProcessAdapter
 from app.ports.clock import Clock, SystemClock
 from app.services.audit import AuditService
 from app.services.auth import AuthenticationService
+from app.services.backup import BackupService
+from app.services.cleanup import CleanupService
+from app.services.configuration import ConfigurationService
 from app.services.notifications import NotificationService
+from app.services.operations import OperationService
+from app.services.realtime import LogFanout, RealtimeHub
+from app.services.restore import RestoreService
+from app.services.scheduler import SchedulerService
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,14 @@ class Container:
     audit: AuditService
     notifications: NotificationService
     auth: AuthenticationService
+    operations: OperationService
+    scheduler: SchedulerService
+    realtime: RealtimeHub
+    logs: LogFanout
+    backups: BackupService
+    restore: RestoreService
+    cleanup: CleanupService
+    configuration: ConfigurationService
 
 
 def _migrations_dir() -> Path:
@@ -86,6 +101,14 @@ def build_container(
     audit = AuditService(store, clock)
     notifications = NotificationService(store, clock)
     auth = AuthenticationService(store, secrets, clock, audit)
+    operations = OperationService(store, clock)
+    scheduler = SchedulerService(store, clock, operations)
+    realtime = RealtimeHub()
+    logs = LogFanout(realtime)
+    backups = BackupService(store, clock)
+    restore = RestoreService(store, clock, operations, backups)
+    cleanup = CleanupService(store, clock)
+    configuration = ConfigurationService(store, clock)
 
     return Container(
         clock=clock,
@@ -95,4 +118,12 @@ def build_container(
         audit=audit,
         notifications=notifications,
         auth=auth,
+        operations=operations,
+        scheduler=scheduler,
+        realtime=realtime,
+        logs=logs,
+        backups=backups,
+        restore=restore,
+        cleanup=cleanup,
+        configuration=configuration,
     )
