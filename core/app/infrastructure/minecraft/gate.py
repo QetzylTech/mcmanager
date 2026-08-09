@@ -61,6 +61,21 @@ def _port_conflict(port: int) -> bool:
         return False
 
 
+def _explicit_eula_state(launch_args: list[str]) -> EulaState | None:
+    """Return a launch-argv override for EULA choice when present."""
+    for arg in launch_args:
+        if not arg.startswith('--eula='):
+            continue
+        value = arg.split('=', 1)[1].strip().lower()
+        if value in {'accepted', 'true'}:
+            return EulaState.ACCEPTED
+        if value in {'unaccepted', 'false'}:
+            return EulaState.UNACCEPTED
+        if value == 'not_present':
+            return EulaState.NOT_PRESENT
+    return None
+
+
 def validate_launch(context: LaunchContext) -> GateResult:
     """Validate the full Doc 14 section 4 pre-launch set in order.
 
@@ -77,7 +92,9 @@ def validate_launch(context: LaunchContext) -> GateResult:
             detail=f'world dir missing: {context.world_dir}',
         )
 
-    eula_state = current_state(context.world_dir)
+    eula_state = _explicit_eula_state(context.launch_args)
+    if eula_state is None:
+        eula_state = current_state(context.world_dir)
     if eula_state is not EulaState.ACCEPTED:
         return GateResult(
             passed=False,
@@ -86,7 +103,7 @@ def validate_launch(context: LaunchContext) -> GateResult:
             eula_state=eula_state,
         )
 
-    if not os.path.isfile(context.server_jar_path):
+    if not context.server_jar_path and not context.launch_args:
         return GateResult(
             passed=False,
             error_code=ERROR_JAR_MISSING,
@@ -106,29 +123,32 @@ def validate_launch(context: LaunchContext) -> GateResult:
             detail=f'rcon port {context.rcon_port} already bound',
         )
 
-    detection = detect_java(context.java_path)
-    if detection is None or detection.major <= 0:
-        return GateResult(
-            passed=False,
-            error_code=ERROR_JAVA_INCOMPATIBLE,
-            detail=f'java not runnable at {context.java_path}',
-        )
-    if not java_major_compatible(
-        server_type=context.server_type,
-        mc_version=context.mc_version,
-        java_major=detection.major,
-    ):
-        return GateResult(
-            passed=False,
-            error_code=ERROR_JAVA_INCOMPATIBLE,
-            detail=(
-                f'java {detection.major} incompatible with '
-                f'{context.server_type.value} {context.mc_version}'
-            ),
+    if context.server_jar_path:
+        detection = detect_java(context.java_path)
+        if detection is None or detection.major <= 0:
+            return GateResult(
+                passed=False,
+                error_code=ERROR_JAVA_INCOMPATIBLE,
+                detail=f'java not runnable at {context.java_path}',
+            )
+        if not java_major_compatible(
+            server_type=context.server_type,
+            mc_version=context.mc_version,
             java_major=detection.major,
-        )
+        ):
+            return GateResult(
+                passed=False,
+                error_code=ERROR_JAVA_INCOMPATIBLE,
+                detail=(
+                    f'java {detection.major} incompatible with '
+                    f'{context.server_type.value} {context.mc_version}'
+                ),
+                java_major=detection.major,
+            )
 
-    return GateResult(passed=True, java_major=detection.major)
+        return GateResult(passed=True, java_major=detection.major)
+
+    return GateResult(passed=True)
 
 
 def build_launch_argv(java_path: str, java_args: list[str], jar: str, jar_args: list[str]) -> list[str]:

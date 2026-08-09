@@ -140,6 +140,7 @@ class WorldsService:
                 raise WorldConflictError(f'world {world_id} is already {world["state"]}')
 
             context = self._launch_context(world)
+            Path(context.world_dir).mkdir(parents=True, exist_ok=True)
             gate = validate_launch(context)
             if not gate.passed:
                 self._fail_op(op_id, gate.error_code or 'GATE_REJECTED', gate.detail)
@@ -266,6 +267,7 @@ class WorldsService:
         actor_user_id: str | None = None,
     ) -> str:
         """Graceful stop ladder: stdin stop -> RCON stop -> terminate(60s)."""
+        self._world(world_id)
         op = self._operations.create(
             OperationInput(
                 op_type=OperationType.STOP,
@@ -315,6 +317,7 @@ class WorldsService:
         actor_user_id: str | None = None,
     ) -> str:
         """Immediate forced termination (graceful_deadline_s=0, C3)."""
+        self._world(world_id)
         op = self._operations.create(
             OperationInput(
                 op_type=OperationType.KILL,
@@ -434,7 +437,18 @@ class WorldsService:
         if java is None:
             raise WorldLifecycleError(f'java runtime missing: {world["java_runtime_id"]}')
         world_dir = self._world_dir(world)
-        jar = self._find_jar(world_dir)
+        raw = world.get('launch_args')
+        parsed_override: list[str] | None = None
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, list) and parsed and all(isinstance(part, str) for part in parsed):
+                parsed_override = parsed
+
+        launch_args = parsed_override if parsed_override is not None else self._launch_args(world)
+        jar = self._find_jar(world_dir) if parsed_override is None else ''
         return LaunchContext(
             world_id=world['world_id'],
             server_type=ServerType(world['server_type']),
@@ -445,7 +459,7 @@ class WorldsService:
             port=int(world['port']),
             rcon_enabled=True,
             rcon_port=int(world['port']) + _RCON_PORT_OFFSET,
-            launch_args=self._launch_args(world),
+            launch_args=launch_args,
         )
 
     def _world_dir(self, world: dict[str, Any]) -> Path:
