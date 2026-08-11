@@ -109,12 +109,18 @@ class WorldsService:
         """Run the full Start ladder. Returns the handle's session_id."""
         # Fast-fail before consuming the derived world lock.
         pre = self._world(world_id)
-        if pre['state'] in (
+        if pre["state"] in (
             WorldState.STARTING.value,
             WorldState.RUNNING.value,
             WorldState.STOPPING.value,
         ):
             raise WorldConflictError(f'world {world_id} is already {pre["state"]}')
+        pre_context = self._launch_context(pre)
+        pre_gate = validate_launch(pre_context)
+        if not pre_gate.passed:
+            if pre_gate.error_code == "EULA_NOT_ACCEPTED":
+                self._set_world_state(world_id, WorldState.EULA_REQUIRED)
+            raise WorldLifecycleError(f"{pre_gate.error_code}: {pre_gate.detail}")
 
         op = self._operations.create(
             OperationInput(
@@ -124,31 +130,32 @@ class WorldsService:
                 actor_user_id=actor_user_id,
             )
         )
-        op_id = op['op_id']
+        op_id = op["op_id"]
         try:
-            self._operations.transition(op_id, OperationStatus.RUNNING, checkpoint={'stage': 'validating'})
+            self._operations.transition(
+                op_id, OperationStatus.RUNNING, checkpoint={"stage": "validating"}
+            )
             world = self._world(world_id)
-            if world['state'] in (
+            if world["state"] in (
                 WorldState.STARTING.value,
                 WorldState.RUNNING.value,
                 WorldState.STOPPING.value,
             ):
                 # A concurrent transition won the race: release the lock.
                 self._operations.transition(
-                    op_id, OperationStatus.CANCELLED, message='conflict with current state'
+                    op_id, OperationStatus.CANCELLED, message="conflict with current state"
                 )
                 raise WorldConflictError(f'world {world_id} is already {world["state"]}')
 
             context = self._launch_context(world)
-            Path(context.world_dir).mkdir(parents=True, exist_ok=True)
             gate = validate_launch(context)
             if not gate.passed:
-                self._fail_op(op_id, gate.error_code or 'GATE_REJECTED', gate.detail)
-                if gate.error_code == 'EULA_NOT_ACCEPTED':
+                self._fail_op(op_id, gate.error_code or "GATE_REJECTED", gate.detail)
+                if gate.error_code == "EULA_NOT_ACCEPTED":
                     self._set_world_state(world_id, WorldState.EULA_REQUIRED)
                 else:
                     self._set_world_state(world_id, WorldState.ERROR)
-                raise WorldLifecycleError(f'{gate.error_code}: {gate.detail}')
+                raise WorldLifecycleError(f"{gate.error_code}: {gate.detail}")
 
             rcon_port, rcon_password = self._provision_rcon(context, world_id)
             argv = self._launch_command(world, context)
@@ -162,9 +169,9 @@ class WorldsService:
                 )
             )
             if result.handle is None:
-                self._fail_op(op_id, 'SPAWN_FAILED', result.spawn_error)
+                self._fail_op(op_id, "SPAWN_FAILED", result.spawn_error)
                 self._set_world_state(world_id, WorldState.ERROR)
-                raise SpawnFailedError(result.spawn_error or 'spawn failed')
+                raise SpawnFailedError(result.spawn_error or "spawn failed")
 
             session_id = self._open_session(
                 world_id=world_id,
@@ -190,17 +197,17 @@ class WorldsService:
                 op_id,
                 OperationStatus.COMPLETED,
                 checkpoint={
-                    'stage': 'running',
-                    'readiness': readiness,
-                    'session_id': session_id,
+                    "stage": "running",
+                    "readiness": readiness,
+                    "session_id": session_id,
                 },
-                data={'session_id': session_id},
+                data={"session_id": session_id},
             )
             return session_id
         except (WorldConflictError, StartTimeoutError, SpawnFailedError, WorldLifecycleError):
             raise
         except Exception as exc:
-            self._fail_op(op_id, 'START_ERROR', str(exc))
+            self._fail_op(op_id, "START_ERROR", str(exc))
             self._set_world_state(world_id, WorldState.ERROR)
             raise WorldLifecycleError(str(exc)) from exc
 
@@ -213,10 +220,10 @@ class WorldsService:
         rcon_port: int | None,
         rcon_password: str | None,
     ) -> str:
-        server_type = ServerType(world['server_type'])
+        server_type = ServerType(world["server_type"])
         target = target_level_for(server_type)
         caps = capabilities_for(server_type)
-        port = int(world['port'])
+        port = int(world["port"])
         deadline = time.monotonic() + START_READINESS_TIMEOUT_S
         rcon: RconClient | None = None
         rcon_ready = False
@@ -225,7 +232,7 @@ class WorldsService:
             status = self._adapter.poll(handle)
             if not status.alive:
                 raise StartTimeoutError(
-                    f'world {world_id} process exited before ready: {status.exit_class.value}'
+                    f"world {world_id} process exited before ready: {status.exit_class.value}"
                 )
             if rcon_port and rcon_password:
                 if rcon is None:
@@ -255,7 +262,7 @@ class WorldsService:
             time.sleep(0.25)
 
         self._teardown(handle)
-        raise StartTimeoutError(f'world {world_id} did not reach {target.value} in time')
+        raise StartTimeoutError(f"world {world_id} did not reach {target.value} in time")
 
     # ------------------------------------------------------------------- stop
 
@@ -276,36 +283,40 @@ class WorldsService:
                 actor_user_id=actor_user_id,
             )
         )
-        op_id = op['op_id']
+        op_id = op["op_id"]
         try:
-            self._operations.transition(op_id, OperationStatus.RUNNING, checkpoint={'stage': 'stopping'})
+            self._operations.transition(
+                op_id, OperationStatus.RUNNING, checkpoint={"stage": "stopping"}
+            )
             self._set_world_state(world_id, WorldState.STOPPING)
             closed = self._attempt_graceful_stop(world_id)
-            self._close_session(world_id, EndReason.GRACEFUL_STOP if closed else EndReason.FORCED_STOP)
+            self._close_session(
+                world_id, EndReason.GRACEFUL_STOP if closed else EndReason.FORCED_STOP
+            )
             self._set_world_state(world_id, WorldState.OFF)
             self._operations.transition(
-                op_id, OperationStatus.COMPLETED, checkpoint={'stage': 'off', 'graceful': closed}
+                op_id, OperationStatus.COMPLETED, checkpoint={"stage": "off", "graceful": closed}
             )
             return op_id
         except Exception as exc:
-            self._fail_op(op_id, 'STOP_ERROR', str(exc))
+            self._fail_op(op_id, "STOP_ERROR", str(exc))
             raise WorldLifecycleError(str(exc)) from exc
 
     def _attempt_graceful_stop(self, world_id: str) -> bool:
         handle = self._resolve_handle(world_id)
         if handle is None:
             return True
-        if self._adapter.write_stdin(handle, 'stop').delivered:
+        if self._adapter.write_stdin(handle, "stop").delivered:
             if self._wait_exit(handle, STOP_GRACEFUL_DEADLINE_S):
                 return True
         try:
-            self._rcon_command_quiet(world_id, 'stop')
+            self._rcon_command_quiet(world_id, "stop")
             if self._wait_exit(handle, STOP_GRACEFUL_DEADLINE_S):
                 return True
         except RconError:
             pass
         outcome = self._adapter.terminate(handle, graceful_deadline_s=STOP_GRACEFUL_DEADLINE_S)
-        return bool(outcome.resolved and 'grace' in outcome.exit_class.value)
+        return bool(outcome.resolved and "grace" in outcome.exit_class.value)
 
     # ------------------------------------------------------------------- kill
 
@@ -326,19 +337,23 @@ class WorldsService:
                 actor_user_id=actor_user_id,
             )
         )
-        op_id = op['op_id']
+        op_id = op["op_id"]
         try:
-            self._operations.transition(op_id, OperationStatus.RUNNING, checkpoint={'stage': 'killing'})
+            self._operations.transition(
+                op_id, OperationStatus.RUNNING, checkpoint={"stage": "killing"}
+            )
             self._set_world_state(world_id, WorldState.STOPPING)
             handle = self._resolve_handle(world_id)
             if handle is not None:
                 self._adapter.terminate(handle, graceful_deadline_s=0)
             self._close_session(world_id, EndReason.FORCED_STOP)
             self._set_world_state(world_id, WorldState.OFF)
-            self._operations.transition(op_id, OperationStatus.COMPLETED, checkpoint={'stage': 'off'})
+            self._operations.transition(
+                op_id, OperationStatus.COMPLETED, checkpoint={"stage": "off"}
+            )
             return op_id
         except Exception as exc:
-            self._fail_op(op_id, 'KILL_ERROR', str(exc))
+            self._fail_op(op_id, "KILL_ERROR", str(exc))
             raise WorldLifecycleError(str(exc)) from exc
 
     # ------------------------------------------------------- supervisor / boot
@@ -351,7 +366,7 @@ class WorldsService:
         """
         crashed: list[str] = []
         for row in self._open_sessions():
-            world_id = row['world_id']
+            world_id = row["world_id"]
             handle = self._resolve_handle(world_id)
             alive = False
             if handle is not None:
@@ -363,7 +378,7 @@ class WorldsService:
                     op_type=OperationType.CRASH_DETECTED,
                     actor_type=ActorType.SYSTEM,
                     world_id=world_id,
-                    data={'detected_at': self._clock.now()},
+                    data={"detected_at": self._clock.now()},
                 ),
                 allow_world_conflict=True,
             )
@@ -381,15 +396,15 @@ class WorldsService:
         """
         reattached: list[str] = []
         for row in self._open_sessions():
-            world_id = row['world_id']
-            snapshot = json.loads(row['launch_args_snapshot'] or '{}')
+            world_id = row["world_id"]
+            snapshot = json.loads(row["launch_args_snapshot"] or "{}")
             fingerprint = ProbeFingerprint(
-                pid=snapshot.get('pid'),
-                spawn_epoch=snapshot.get('spawn_epoch'),
-                cwd=snapshot.get('cwd'),
-                launch_marker=snapshot.get('launch_marker'),
+                pid=snapshot.get("pid"),
+                spawn_epoch=snapshot.get("spawn_epoch"),
+                cwd=snapshot.get("cwd"),
+                launch_marker=snapshot.get("launch_marker"),
             )
-            probe = self._adapter.probe(world_id, str(row['session_id']), fingerprint=fingerprint)
+            probe = self._adapter.probe(world_id, str(row["session_id"]), fingerprint=fingerprint)
             if probe.found and probe.matched_launch:
                 self._set_world_state(world_id, WorldState.RUNNING)
                 reattached.append(world_id)
@@ -403,92 +418,112 @@ class WorldsService:
     def world_summary(self, world_id: str) -> dict[str, Any]:
         world = self._world(world_id)
         return {
-            'world_id': world['world_id'],
-            'display_name': world['display_name'],
-            'server_type': world['server_type'],
-            'mc_version': world['mc_version'],
-            'port': world['port'],
-            'state': world['state'],
-            'addressing_strategy': world['addressing_strategy'],
-            'addressing_value': world['addressing_value'],
+            "world_id": world["world_id"],
+            "display_name": world["display_name"],
+            "server_type": world["server_type"],
+            "mc_version": world["mc_version"],
+            "port": world["port"],
+            "state": world["state"],
+            "addressing_strategy": world["addressing_strategy"],
+            "addressing_value": world["addressing_value"],
         }
 
     def list_worlds(self) -> list[dict[str, Any]]:
-        rows = self._store.reader().execute(
-            'SELECT * FROM world_instances WHERE deleted_at IS NULL ORDER BY created_at DESC'
-        ).fetchall()
-        return [self.world_summary(row['world_id']) for row in rows]
+        rows = (
+            self._store.reader()
+            .execute(
+                "SELECT * FROM world_instances WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
+            .fetchall()
+        )
+        return [self.world_summary(row["world_id"]) for row in rows]
 
     # ---------------------------------------------------------------- helpers
 
     def _world(self, world_id: str) -> dict[str, Any]:
-        row = self._store.reader().execute(
-            'SELECT * FROM world_instances WHERE world_id = ?', (world_id,)
-        ).fetchone()
+        row = (
+            self._store.reader()
+            .execute("SELECT * FROM world_instances WHERE world_id = ?", (world_id,))
+            .fetchone()
+        )
         if row is None:
             raise WorldNotFoundError(world_id)
         return dict(row)
 
     def _launch_context(self, world: dict[str, Any]) -> LaunchContext:
-        java = self._store.reader().execute(
-            'SELECT executable_path FROM java_runtimes WHERE runtime_id = ?',
-            (world['java_runtime_id'],),
-        ).fetchone()
+        java = (
+            self._store.reader()
+            .execute(
+                "SELECT executable_path FROM java_runtimes WHERE runtime_id = ?",
+                (world["java_runtime_id"],),
+            )
+            .fetchone()
+        )
         if java is None:
             raise WorldLifecycleError(f'java runtime missing: {world["java_runtime_id"]}')
         world_dir = self._world_dir(world)
-        raw = world.get('launch_args')
+        raw = world.get("launch_args")
         parsed_override: list[str] | None = None
         if isinstance(raw, str):
             try:
                 parsed = json.loads(raw)
             except (ValueError, TypeError):
                 parsed = None
-            if isinstance(parsed, list) and parsed and all(isinstance(part, str) for part in parsed):
+            if (
+                isinstance(parsed, list)
+                and parsed
+                and all(isinstance(part, str) for part in parsed)
+            ):
                 parsed_override = parsed
 
         launch_args = parsed_override if parsed_override is not None else self._launch_args(world)
-        jar = self._find_jar(world_dir) if parsed_override is None else ''
+        jar = self._find_jar(world_dir) if parsed_override is None else ""
         return LaunchContext(
-            world_id=world['world_id'],
-            server_type=ServerType(world['server_type']),
-            mc_version=world['mc_version'],
+            world_id=world["world_id"],
+            server_type=ServerType(world["server_type"]),
+            mc_version=world["mc_version"],
             world_dir=str(world_dir),
-            java_path=java['executable_path'],
+            java_path=java["executable_path"],
             server_jar_path=jar,
-            port=int(world['port']),
+            port=int(world["port"]),
             rcon_enabled=True,
-            rcon_port=int(world['port']) + _RCON_PORT_OFFSET,
+            rcon_port=int(world["port"]) + _RCON_PORT_OFFSET,
             launch_args=launch_args,
         )
 
     def _world_dir(self, world: dict[str, Any]) -> Path:
-        if world['addressing_strategy'] == 'path' and world['addressing_value'].startswith(('/')):
-            return Path(world['addressing_value'])
-        root = self._store.reader().execute(
-            'SELECT minecraft_root_path FROM global_settings'
-        ).fetchone()
-        base = Path(root['minecraft_root_path']) if root else Path('worlds')
-        return base / world['display_name']
+        if world["addressing_strategy"] == "path":
+            candidate = Path(world["addressing_value"])
+            if candidate.is_absolute():
+                return candidate
+        root = (
+            self._store.reader()
+            .execute("SELECT minecraft_root_path FROM global_settings")
+            .fetchone()
+        )
+        base = Path(root["minecraft_root_path"]) if root else Path("worlds")
+        return base / world["display_name"]
 
     def _find_jar(self, world_dir: Path) -> str:
-        candidates = sorted(world_dir.glob('*.jar')) if world_dir.exists() else []
+        candidates = sorted(world_dir.glob("*.jar")) if world_dir.exists() else []
         if candidates:
             return str(candidates[0])
-        raise WorldLifecycleError(f'no server jar in {world_dir}')
+        return ""
 
     def _launch_command(self, world: dict[str, Any], context: LaunchContext) -> list[str]:
         """Explicit argv for the spawn. A world row storing a full argv list
         (e.g. a test double or custom launcher) wins; otherwise the gate
         builds ``java -Xmx... -jar jar nogui`` — never a shell string."""
-        raw = world.get('launch_args')
+        raw = world.get("launch_args")
         if isinstance(raw, str):
             try:
                 parsed = json.loads(raw)
             except (ValueError, TypeError):
                 parsed = None
-            if isinstance(parsed, list) and parsed and all(
-                isinstance(part, str) for part in parsed
+            if (
+                isinstance(parsed, list)
+                and parsed
+                and all(isinstance(part, str) for part in parsed)
             ):
                 return parsed
         return build_launch_argv(
@@ -500,21 +535,21 @@ class WorldsService:
 
     def _launch_args(self, world: dict[str, Any]) -> list[str]:
         try:
-            data = json.loads(world['launch_args'] or '{}')
+            data = json.loads(world["launch_args"] or "{}")
         except (ValueError, TypeError):
             return []
         if isinstance(data, list):
             # Full-argv override: nothing extra to append server-side.
             return []
-        return list(data.get('server_args', []))
+        return list(data.get("server_args", []))
 
     def _extra_java_args(self, world: dict[str, Any]) -> list[str]:
         try:
-            data = json.loads(world.get('launch_args') or '{}')
+            data = json.loads(world.get("launch_args") or "{}")
         except (ValueError, TypeError):
             return []
         if isinstance(data, dict):
-            return list(data.get('java_args', []))
+            return list(data.get("java_args", []))
         return []
 
     def _provision_rcon(self, context: LaunchContext, world_id: str) -> tuple[int, str]:
@@ -522,20 +557,20 @@ class WorldsService:
         password = secrets.token_urlsafe(12)
         world_dir = Path(context.world_dir)
         world_dir.mkdir(parents=True, exist_ok=True)
-        props_path = world_dir / 'server.properties'
+        props_path = world_dir / "server.properties"
         props: dict[str, str] = {}
         if props_path.exists():
-            for line in props_path.read_text(encoding='utf-8', errors='replace').splitlines():
+            for line in props_path.read_text(encoding="utf-8", errors="replace").splitlines():
                 stripped = line.strip()
-                if not stripped or stripped.startswith('#') or '=' not in stripped:
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
                     continue
-                key, _, value = stripped.partition('=')
+                key, _, value = stripped.partition("=")
                 props[key.strip()] = value.strip()
-        props['enable-rcon'] = 'true'
-        props['rcon.port'] = str(rcon_port)
-        props['rcon.password'] = password
-        lines = [f'{key}={value}' for key, value in props.items()]
-        props_path.write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
+        props["enable-rcon"] = "true"
+        props["rcon.port"] = str(rcon_port)
+        props["rcon.password"] = password
+        lines = [f"{key}={value}" for key, value in props.items()]
+        props_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         return rcon_port, password
 
     def _open_session(
@@ -549,26 +584,26 @@ class WorldsService:
         rcon_port: int | None,
         rcon_password: str | None,
     ) -> str:
-        session_id = f'rs_{uuid.uuid4().hex[:16]}'
+        session_id = f"rs_{uuid.uuid4().hex[:16]}"
         secret_id = None
         if rcon_port and rcon_password:
             secret_id = self._secrets.store(
                 secret_type=SecretType.RCON_CREDENTIAL,
-                associated_entity_type='runtime_session',
+                associated_entity_type="runtime_session",
                 associated_entity_id=session_id,
                 plaintext=rcon_password,
             )
         launch_marker = next(
-            (part for part in argv if '--marker=' in part or part.endswith('.jar')),
-            argv[-1] if argv else '',
+            (part for part in argv if "--marker=" in part or part.endswith(".jar")),
+            argv[-1] if argv else "",
         )
         snapshot = json.dumps(
             {
-                'argv': argv,
-                'pid': handle.pid,
-                'spawn_epoch': handle.spawn_epoch,
-                'cwd': context.world_dir,
-                'launch_marker': launch_marker,
+                "argv": argv,
+                "pid": handle.pid,
+                "spawn_epoch": handle.spawn_epoch,
+                "cwd": context.world_dir,
+                "launch_marker": launch_marker,
             }
         )
         now = int(self._clock.now())
@@ -586,8 +621,8 @@ class WorldsService:
                 world_id,
                 now,
                 secret_id,
-                int(world['port']),
-                world['java_runtime_id'],
+                int(world["port"]),
+                world["java_runtime_id"],
                 snapshot,
                 rcon_port,
                 now,
@@ -601,7 +636,7 @@ class WorldsService:
             if self._logs is not None:
                 self._logs.append(
                     world_id=world_id,
-                    session_id=session_token or '',
+                    session_id=session_token or "",
                     channel=channel,
                     line=line,
                     ts=int(self._clock.now()),
@@ -610,24 +645,28 @@ class WorldsService:
         self._adapter.tail(handle, sink)
 
     def _resolve_handle(self, world_id: str) -> ProcessHandle | None:
-        probe = self._adapter.probe(world_id, '')
+        probe = self._adapter.probe(world_id, "")
         return probe.handle if probe.found else None
 
     def _rcon_client(self, world_id: str, port: int, password: str) -> RconClient:
-        return RconClient('127.0.0.1', port, password, timeout_s=1.0)
+        return RconClient("127.0.0.1", port, password, timeout_s=1.0)
 
     def _rcon_command_quiet(self, world_id: str, command: str) -> None:
-        row = self._store.reader().execute(
-            """
+        row = (
+            self._store.reader()
+            .execute(
+                """
             SELECT rcon_secret_id, rcon_port FROM runtime_sessions
             WHERE world_id = ? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1
             """,
-            (world_id,),
-        ).fetchone()
-        if row is None or not row['rcon_port'] or not row['rcon_secret_id']:
+                (world_id,),
+            )
+            .fetchone()
+        )
+        if row is None or not row["rcon_port"] or not row["rcon_secret_id"]:
             return
-        password = self._secrets.read(row['rcon_secret_id'])
-        client = RconClient('127.0.0.1', row['rcon_port'], password)
+        password = self._secrets.read(row["rcon_secret_id"])
+        client = RconClient("127.0.0.1", row["rcon_port"], password)
         try:
             client.connect()
             client.command(command)
@@ -652,21 +691,23 @@ class WorldsService:
         now = int(self._clock.now())
         connection = self._store.writer()
         connection.execute(
-            'UPDATE runtime_sessions SET ended_at = ?, end_reason = ? WHERE world_id = ? AND ended_at IS NULL',
+            "UPDATE runtime_sessions SET ended_at = ?, end_reason = ? WHERE world_id = ? AND ended_at IS NULL",
             (now, reason.value, world_id),
         )
         connection.commit()
 
     def _open_sessions(self) -> list[dict[str, Any]]:
-        rows = self._store.reader().execute(
-            'SELECT * FROM runtime_sessions WHERE ended_at IS NULL'
-        ).fetchall()
+        rows = (
+            self._store.reader()
+            .execute("SELECT * FROM runtime_sessions WHERE ended_at IS NULL")
+            .fetchall()
+        )
         return [dict(row) for row in rows]
 
     def _set_world_state(self, world_id: str, state: WorldState) -> None:
         connection = self._store.writer()
         connection.execute(
-            'UPDATE world_instances SET state = ?, updated_at = ? WHERE world_id = ?',
+            "UPDATE world_instances SET state = ?, updated_at = ? WHERE world_id = ?",
             (state.value, int(self._clock.now()), world_id),
         )
         connection.commit()
