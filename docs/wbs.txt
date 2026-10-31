@@ -1,0 +1,249 @@
+================================================================================
+                        MCMANAGER WORK BREAKDOWN STRUCTURE (WBS)
+================================================================================
+
+SYSTEM OVERVIEW:
+mcmanager is a zero-dependency, cross-platform modular monolith designed to 
+supervise and orchestrate independent Minecraft server instances natively 
+across POSIX (Linux/macOS) and Windows operating systems.
+
+--------------------------------------------------------------------------------
+                         1. TEAM ALLOCATION MATRIX
+--------------------------------------------------------------------------------
+
+Team A: Systems & OS Engineering
+  - Primary Scope: Process Supervision, OS Adapters, Minecraft Server Capabilities
+  - Work Packages: WP 1.1 – WP 1.6
+
+Team B: Core Data Persistence & Security
+  - Primary Scope: Relational Database Schema, Argon2id Auth, Settings Engine
+  - Work Packages: WP 2.1 – WP 2.4
+
+Team C: Core Control Plane & Orchestration
+  - Primary Scope: State Machine, Write-Optimized Operations, Supervisor & Scheduler
+  - Work Packages: WP 3.1 – WP 3.4
+
+Team D: Operational Subsystems & Storage
+  - Primary Scope: Native ZIP Backups, Auto-Rollback Restores, Retention Cleanup, Sync
+  - Work Packages: WP 4.1 – WP 4.4
+
+Team E: Web Gateway & Frontend Shell
+  - Primary Scope: Thin Flask API, BroadcastChannel SSE Stream Hub, Web Shell UI
+  - Work Packages: WP 5.1 – WP 5.3
+
+--------------------------------------------------------------------------------
+                   2. RELEASE GATES & DEPENDENCY FLOW
+--------------------------------------------------------------------------------
+
+[Team A: WP 1.1-1.5] ──► GATE 1: Adapter Spike ──┐
+                                                 ├──► [Team C: WP 3.1-3.4] ──► GATE 3: Control Plane ──┐
+[Team B: WP 2.1-2.4] ──► GATE 2: Core Schema ────┘                                                    │
+                                                                                                      ├──► RELEASE
+[Team D: WP 4.1-4.4] ──────────────────────────────────────────► GATE 4: Ops Subsystems──────────────┤
+                                                                                                      │
+[Team E: WP 5.1-5.3] ─────────────────────────────────────────────────────────────────────────────────┘
+
+Gate 1 (Process Control & Adapter Spike):
+  - Requirement: Pass C1–C14 process conformance tests on POSIX and Windows.
+  - Blocker For: Stage 3 Control Plane Orchestration.
+
+Gate 2 (Core Persistence & Schema Integrity):
+  - Requirement: PRAGMA foreign_key_check passes clean; migration rollbacks verified.
+  - Blocker For: Stage 3 Control Plane Orchestration.
+
+Gate 3 (Control Plane Verification):
+  - Requirement: Supervisor survives simulated manager crashes; derived world lock prevents conflicts.
+  - Blocker For: Stage 4 Operational Subsystems & Stage 5 API Integration.
+
+Gate 4 (Operational Subsystems Verification):
+  - Requirement: Pre-restore backups and compensating rollback decision trees pass 100%.
+  - Blocker For: Final System Release.
+
+Gate 5 (Presentation Shell & Performance Benchmark):
+  - Requirement: BroadcastChannel handles multi-tab SSE streaming with 1 active backend connection;
+    passes ISO/IEC 25010 performance benchmarks.
+
+--------------------------------------------------------------------------------
+                       3. DETAILED WORK PACKAGES
+--------------------------------------------------------------------------------
+
+================================================================================
+WP 1.0 PLATFORM PROCESS CONTROL & MINECRAFT ADAPTERS (Team A)
+================================================================================
+Objective: Deliver an OS-agnostic process supervision layer and Minecraft server 
+type capability matrix without relying on systemd, Docker, or platform daemons.
+
+WP 1.1: Process Control Port & Value Objects
+  - File Scope: src/mcmanager/ports/process_control.py
+  - Deliverables: ProcessControlPort protocol definition, immutable SpawnRequest, 
+    ProbeResult, ProcessHandle, and ProcessStatus value objects.
+  - Acceptance Criteria: mypy --strict passes with zero Any types; platform 
+    adapters implement protocol cleanly without importing OS modules into port.
+
+WP 1.2: POSIX Process Supervision Adapter
+  - File Scope: src/mcmanager/platform/process/posix.py
+  - Deliverables: posix_spawn / subprocess.Popen(start_new_session=True) using 
+    POSIX process groups for clean tree termination; /proc start-time validation.
+  - Acceptance Criteria: Game processes survive manager restarts; process group 
+    receives SIGTERM followed by SIGKILL escalation after 10s deadline.
+
+WP 1.3: Windows Process Supervision Adapter
+  - File Scope: src/mcmanager/platform/process/windows.py
+  - Deliverables: Win32 Job Object wrapper created WITHOUT 
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; CTRL_BREAK_EVENT signal escalation.
+  - Acceptance Criteria: Game process remains running if manager is abruptly 
+    killed; job handle re-attaches cleanly upon manager reboot.
+
+WP 1.4: Output Pipe Tailing & Log Filtering Engine
+  - File Scope: src/mcmanager/platform/process/tailing.py
+  - Deliverables: Non-blocking async stdout/stderr tailer with thread-safe 5,000-line 
+    memory ring buffer; VERBOSE_LOGGING environment variable filter.
+  - Acceptance Criteria: Zero line dropped under high console throughput; 
+    VERBOSE_LOGGING=false suppresses debug channels and raw stdout logs on disk.
+
+WP 1.5: Minecraft Server Adapters & Readiness Hierarchy
+  - File Scope: src/mcmanager/infrastructure/minecraft/ (capabilities.py, 
+    readiness.py, properties.py, eula.py)
+  - Deliverables: Capability matrix for Vanilla, Paper, Fabric, Forge; 5-level 
+    Server Readiness Hierarchy evaluator; server.properties parser; eula.txt writer.
+  - Acceptance Criteria: starting -> running transition fires ONLY when server 
+    variant's highest applicable readiness level is confirmed.
+
+WP 1.6: Adapter Conformance Test Suite & Fake Server Harness
+  - File Scope: tests/adapters/fake_server/, tests/conformance/
+  - Deliverables: Standalone fake_server binary supporting --crash-after, 
+    --save-slow, and --eula flags; C1–C14 automated conformance test suite.
+  - Acceptance Criteria: 100% pass rate on C1–C14 suite across POSIX and Windows.
+
+================================================================================
+WP 2.0 CORE DATA PERSISTENCE, DOMAIN MODEL & SECURITY (Team B)
+================================================================================
+Objective: Build the relational database core, 3-tier settings engine, Argon2id 
+security module, and optimism-locked domain entities.
+
+WP 2.1: Relational Schema & SQLite Engine
+  - File Scope: src/mcmanager/infrastructure/sqlite/ (schema.sql, migrations.py, 
+    connection.py)
+  - Deliverables: 27-table SQLite DDL with ON DELETE RESTRICT constraints; migration 
+    runner; single-writer WAL pool with PRAGMA busy_timeout = 5000.
+  - Acceptance Criteria: PRAGMA foreign_key_check passes clean on startup; zero 
+    database locked exceptions under concurrent access.
+
+WP 2.2: Domain Entities & Immutable Value Objects
+  - File Scope: src/mcmanager/domain/ (entities.py, value_objects.py, events.py, 
+    exceptions.py)
+  - Deliverables: Value object enums (WorldState, OperationStatus, ServerReadinessLevel, 
+    EulaState); business invariants (one open session per world, atomic world lock).
+  - Acceptance Criteria: Pure python domain model with zero infrastructure dependencies; 
+    100% unit test coverage for state machine transitions.
+
+WP 2.3: Security, Password Hashing & Secrets Store
+  - File Scope: src/mcmanager/services/auth.py, src/mcmanager/infrastructure/secrets.py
+  - Deliverables: Argon2id password verification; SQLite encrypted secrets store; 
+    client_sessions manager supporting 10-minute step-up auth windows.
+  - Acceptance Criteria: Passwords never stored in plain text; expired step-up 
+    sessions correctly return 401 STEP_UP_REQUIRED.
+
+WP 2.4: 3-Tier Configuration Inheritance Service
+  - File Scope: src/mcmanager/services/configuration.py
+  - Deliverables: Settings resolver (Global Settings -> World Override -> Effective); 
+    version-based optimistic concurrency guard for ConfigEdit.
+  - Acceptance Criteria: Out-of-date updates rejected with 409 CONFIG_VERSION_CONFLICT; 
+    global settings fallback applies when no world override exists.
+
+================================================================================
+WP 3.0 CONTROL PLANE ORCHESTRATION & SUPERVISOR ENGINE (Team C)
+================================================================================
+Objective: Implement operational lifecycle state machine, write-optimized 
+operation queue, scheduler, and process reconciliation.
+
+WP 3.1: Write-Optimized Operation Service & Derived World Locking
+  - File Scope: src/mcmanager/services/operations.py
+  - Deliverables: OperationService managing async operation states; derived 
+    application-level world lock query; milestone-only disk writes for operations.
+  - Acceptance Criteria: Progress updates stream in memory without writing to disk 
+    on every tick; derived locking prevents concurrent destructive actions.
+
+WP 3.2: Runtime Lifecycle Service & Boot Reconciliation
+  - File Scope: src/mcmanager/services/runtime.py
+  - Deliverables: Lifecycle commands (Start, Stop, Kill, CrashDetected); supervisor 
+    loop; startup reconciliation engine for process re-attachment.
+  - Acceptance Criteria: Simulated manager crash re-establishes tracking without 
+    restarting game server; failed startups transition to error state after 120s.
+
+WP 3.3: Background Scheduler & Missed-Run Engine
+  - File Scope: src/mcmanager/services/scheduler.py
+  - Deliverables: 30-second fixed scheduler tick; missed_run_records generator 
+    for skipped jobs (never auto-replayed).
+  - Acceptance Criteria: Scheduled backups dispatch automatically when clear; 
+    conflicting jobs create missed_run_records without crashing scheduler.
+
+WP 3.4: Terminal Audit & Notification Pipelines
+  - File Scope: src/mcmanager/services/audit.py, src/mcmanager/services/notifications.py
+  - Deliverables: Insert-only AuditService pipeline writing ONLY on terminal 
+    operation states, auth events, and config edits; notification dispatcher.
+  - Acceptance Criteria: Zero audit_records written during intermediate progress; 
+    audit history retained even if referenced users are soft-deleted.
+
+================================================================================
+WP 4.0 OPERATIONAL SUBSYSTEMS & DATA SAFETY (Team D)
+================================================================================
+Objective: Deliver native portable backup/restore, age/count retention cleanups, 
+and exponential-backoff offsite synchronization.
+
+WP 4.1: Native Portable Backup Engine
+  - File Scope: src/mcmanager/services/backup.py, 
+    src/mcmanager/infrastructure/backup_engine.py
+  - Deliverables: ZIP + SHA-256 archive engine writing to .part files; RCON save 
+    coordination (save-off -> save-all -> verify mtime -> capture -> save-on).
+  - Acceptance Criteria: Generated ZIP archives pass SHA-256 verification; 
+    backup process restores RCON autosave (save-on) even if compression fails.
+
+WP 4.2: Restore Engine & Automatic Compensating Rollback
+  - File Scope: src/mcmanager/services/restore.py
+  - Deliverables: World restore pipeline with mandatory pre-restore backup; 
+    post-restore boot verification; automatic compensating rollback decision tree.
+  - Acceptance Criteria: If restored world crashes during boot, system automatically 
+    rolls back to pre-restore backup artifact and flags bad artifact as suspect = 1.
+
+WP 4.3: Retention Sweeper & Physical Deletion Floor
+  - File Scope: src/mcmanager/services/cleanup.py
+  - Deliverables: Dry/wet cleanup evaluator enforcing 3-day age and 3-artifact 
+    count floors; safe physical disk cleanup.
+  - Acceptance Criteria: Wet cleanup fails if parameters violate retention floor 
+    (min 3 newest backups per category); physical files deleted ONLY by CleanupService.
+
+WP 4.4: Offsite Sync Engine
+  - File Scope: src/mcmanager/services/sync.py
+  - Deliverables: Async offsite sync worker; exponential backoff retries 
+    (30s / 60s / 120s); global daily transfer cap enforcer; sync_attempts timeline.
+  - Acceptance Criteria: Failed network syncs retry according to backoff policy 
+    without blocking local backup completion; daily cap halts further syncs when hit.
+
+================================================================================
+WP 5.0 API GATEWAY, REALTIME STREAMING & WEB SHELL (Team E)
+================================================================================
+Objective: Construct thin Flask API gateway, multi-tab BroadcastChannel SSE stream 
+hub, and desktop-grade persistent UI shell.
+
+WP 5.1: HTTP API Routes & Security Middleware
+  - File Scope: src/mcmanager/app/web/api/, src/mcmanager/app/web/middleware.py
+  - Deliverables: RESTful Flask blueprints (/api/worlds, /api/operations, 
+    /api/backups, /api/settings); CSRF validator; security headers middleware.
+  - Acceptance Criteria: Invalid CSRF returns 403 CSRF_INVALID; route handlers 
+    contain zero domain logic (thin delegation to services).
+
+WP 5.2: Realtime Stream Hub & Multi-Tab Broadcast Client
+  - File Scope: src/mcmanager/app/web/streams/, src/mcmanager/static/js/stream_client.js
+  - Deliverables: SSE endpoints (/stream/events, /stream/worlds/{id}/logs); client-side 
+    BroadcastChannel leader election module for sharing 1 SSE stream across tabs.
+  - Acceptance Criteria: Opening 10 browser tabs results in exactly 1 active 
+    backend SSE connection; closing leader tab causes seamless leader election.
+
+WP 5.3: Persistent Web Shell & Reusable Component Layouts
+  - File Scope: src/mcmanager/templates/, src/mcmanager/static/css/
+  - Deliverables: Global persistent shell layout adhering to CSS token system and 
+    40px control geometry; Manager Context pages; World Context pages.
+  - Acceptance Criteria: Interface fully navigable without full-page reloads; 
+    CSS styling adheres 100% to global tokens with zero inline style overrides.
+================================================================================
