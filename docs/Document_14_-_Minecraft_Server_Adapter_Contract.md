@@ -58,6 +58,7 @@ Level 5  operationally_valid  server reports an operationally valid state
 - `ServerReadinessLevel` closed enum (Doc 6 §5): `process_alive | port_bound | rcon_ready | probe_ok | operationally_valid`.
 - The readiness evaluator (per type) chooses the best available level: Vanilla default target = `probe_ok`; Paper with API enabled = `operationally_valid`; Forge/Fabric = `probe_ok` (RCON optional).
 - Log strings ("Done (x.xxxs)!") are **advisory evidence only**, never the sole signal (ARCHITECTURE §10, Doc 13 §4.1). A slow log line must not corrupt readiness.
+- With `VERBOSE_LOGGING=false`, raw stdout/stderr storage and streaming may filter ordinary noise, but readiness markers are preserved for advisory evaluation; filtering must never alter the readiness hierarchy or suppress severe errors/crashes. `VERBOSE_LOGGING=true` retains full raw output.
 - The RuntimeSession opens at confirmed `running` only (Doc 6 §2.2).
 
 ## 4 Startup contract
@@ -121,6 +122,7 @@ Everything else. Validity driven by a **capability schema per server type/versio
 - **Safe command allowlist:** RuntimeService only issues commands from a closed allowlist: `save-all`, `save-off`, `save-on`, `stop`, `list`, Paper `tps`/`tick` where the capability exists; anything else refused before reaching RCON (Doc 10 `FORBIDDEN`-class).
 - **Performance query:** Paper `/tps` (or `/tick`) where capability exists; other types return `none` — MetricsService shows what the server can report, never fabricates.
 - **Capability surfacing:** `GET /api/worlds/{world_id}` includes the resolved capability record so the UI renders only actions the server type supports (Doc 5, Doc 10).
+- **Log routing:** adapter output follows the `VERBOSE_LOGGING` contract: deployed false keeps severe errors, crashes, and readiness markers while suppressing routine raw console noise; development true retains full Minecraft-channel output.
 
 ## 9 Shutdown contract
 

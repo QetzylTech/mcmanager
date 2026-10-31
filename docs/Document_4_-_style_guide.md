@@ -88,6 +88,10 @@ Do not: new button look for one page; different dropdowns per pane; different na
 
 One global CSS language: one nav, one pane, one button, one dropdown, one token set, one status indicator system; page-scoped layout classes only under §0. If a control looks different because it lives on a different page, the styling is wrong unless formally added to the global system first.
 
+## §16.1 Live-stream interaction model
+
+Live log panes and status cards consume events from the persistent shell's shared BroadcastChannel dispatcher. Components must not create direct `EventSource` instances; the leader-tab stream manager owns the backend SSE connection and dispatches its payloads through `mcmanager_stream_channel`.
+
 ## §17 Status Indicators
 
 Purpose: badge/pill communicating state at a glance (world run state, backup status, sync outcome) — informational only, never buttons, never onclick, no hover/pressed states.

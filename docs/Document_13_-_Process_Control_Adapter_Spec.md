@@ -70,7 +70,7 @@ Key value objects (defined in `domain/value_objects.py` per Doc 6 / Doc 12):
 - Console/pipe note: servers needing a TTY (some Forge consoles) may get a hidden pseudo-console via Windows Pseudo Console (ConPTY). Default is pipe-based capture (identical to POSIX) to keep resource use minimal.
 
 ### 3.3 Output tailing — `platform/process/tailing.py` (shared)
-- Each spawned process gets two line readers (stdout, stderr) on dedicated reader threads/async tasks. Lines normalized to `\n`, capped (e.g. 64KB per line, remainder dropped with a sentinel marker), emitted to a **bounded ring buffer** (default 5000 lines/world, configurable) + fan-out to attached SSE sinks (Doc 10 `log.line` — server computes once, fans out; no per-client reader).
+- Each spawned process gets two line readers (stdout, stderr) on dedicated reader threads/async tasks. Lines normalized to `\n`, capped (e.g. 64KB per line, remainder dropped with a sentinel marker), then emitted to a **bounded ring buffer** (default 5000 lines/world, configurable) + fan-out to attached SSE sinks (Doc 10 `log.line` — server computes once, fans out; no per-client reader). With `VERBOSE_LOGGING=false`, nonessential raw stdout/stderr noise bypasses disk and buffer writes; severe warnings, errors, crashes, and readiness markers still flow so readiness evaluation remains intact. `VERBOSE_LOGGING=true` retains full output.
 - `tail(since_offset=N)` replays buffered lines after `N` for reconnect hydration (Doc 10 `Last-Event-ID`). When the buffer has trimmed past `N` (slot dropped), the adapter signals `buffer_trimmed` so the client views the on-disk log file instead (Doc 10 `logs/{channel}/tail`).
 - Buffers are memory-only (cache, never sole source of truth). Durability = on-disk log files the manager writes (§4.3); the ring buffer is the fast replay layer.
 - Backpressure: slow SSE sink → drop the slowest sink rather than block the process reader (a dead world process read blocks the supervisor). Slow-sink disconnect surfaced as an alert once per minute per client.
@@ -92,7 +92,7 @@ Key value objects (defined in `domain/value_objects.py` per Doc 6 / Doc 12):
 - Locked 120s Start readiness timeout (Doc 8) enforced by the supervisor; on timeout Start Operation → `TimedOut`, world → `error` (never auto-cleared, Doc 6 §2.3).
 
 ### 4.3 Log durability
-- The adapter's line emission also drives the manager's on-disk world log file writer (per world, per session: `logs/{world_id}/{session_id}.log` + channel-split files). The ring buffer serves the live tail; the on-disk file is the durable, queryable, downloadable channel (Doc 10 files/logs). Both fed from the single line source in §3.3 — no double readers.
+- The adapter's accepted line emission also drives the manager's on-disk world log file writer (per world, per session: `logs/{world_id}/{session_id}.log` + channel-split files). In deployed `VERBOSE_LOGGING=false` mode, filtered noise never reaches these writers or buffers, preventing log churn and buffer thrashing. The ring buffer serves the live tail; the on-disk file is the durable, queryable, downloadable channel (Doc 10 files/logs). Both fed from the single line source in §3.3 — no double readers.
 
 ## 5 Reconciliation & restart behavior
 

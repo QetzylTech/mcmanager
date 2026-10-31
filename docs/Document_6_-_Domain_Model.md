@@ -6,7 +6,8 @@ Users = individual named accounts (own username+password), not shared per-role c
 
 - Every login attempt (success/fail) → audit record: user_id, device_id (or raw IP/device-name if unrecognized), timestamp.
 - User-action AuditRecord snapshots user_id, username, device_id (or raw IP/device-name) **at write time** — never by joining live tables later. username snapshot keeps logs readable after soft-delete/rename.
-- Every state change = durable Operation; each Operation's creation + terminal transition → exactly one `audit_records` row. Corrections/acks = new rows via `annotation_of` (§2.9), never updates.
+- Every state change = durable Operation; only an Operation's terminal transition (`Completed`, `Failed`, `Cancelled`, `TimedOut`) appends an `audit_records` row. Intermediate creation, queue, validation, running, and progress states do not. Corrections/acks = new rows via `annotation_of` (§2.9), never updates.
+- Audit records are also created for security/auth events and explicit `ConfigEdit` operations with before/after diffs.
 - Named accounts = second attribution layer (who) atop device/IP (from what); never replaces it.
 - **Anonymization out of scope by design.** `audit_records`, `notification_reads`, `missed_run_records`, `sync_records`, `sync_attempts` permanent/unmodifiable — no erasure. Only permitted mechanism: data minimization at write time. Gap with law = documented, accepted product limitation; legal review before launch.
 
@@ -76,8 +77,10 @@ off → tombstoned (DeleteWorld completes)
 ### 2.8 Notification
 `Created → Read (per-user) | ActionTaken | Dismissed`. Never deletable through any UI path — only acknowledged/read/addressed; Dismissed clears the dropdown view, row stays permanently queryable on Audit/History. `severity [critical|high|normal|informational]` drives dropdown ordering. Mapping: critical = world crashed, unauthorized attempt, critical low storage; high = backup/restore failed, sync failed (terminal); normal = missed job, sync retry, suspicious activity; informational = started/stopped, backup/cleanup succeeded. Per-user read via `NotificationRead(notification_id, user_id, read_at)` join — never a boolean column; broadcast notifications read independently by multiple users.
 
+Log channel behavior is environment-driven: with `VERBOSE_LOGGING=false`, `debug` is suppressed and `minecraft` retains only severe warnings, errors, crashes, and readiness markers; backup/restore and sync omit step-level traces. With `VERBOSE_LOGGING=true`, all canonical channels retain full output.
+
 ### 2.9 AuditRecord
-`(action occurs) → Created [terminal — insert-only log]`. Corrections/acks = new rows with `annotation_of` self-ref — never updates.
+`(terminal operation transition | security/auth event | ConfigEdit) → Created [terminal — insert-only log]`. Operation audit rows are created only for `Completed`, `Failed`, `Cancelled`, or `TimedOut`; intermediate checkpoints are not audited. Corrections/acks = new rows with `annotation_of` self-ref — never updates.
 
 ### 2.10 Manager (singleton — exactly one row per deployment, hard invariant)
 `Uninitialized → SetupInProgress → Operational`; `Operational → UpdateInProgress → Operational`; `Operational → RollbackInProgress → Operational`. Owns deployed version/commit, setup-completion flag, composition of `global_settings`. **Settings inheritance — exactly three tiers, the ONLY pattern for any world-specific setting:** (1) Manager default = `global_settings` baseline; (2) World override = `world_id`-scoped row in same table; (3) Effective = "override if one exists and is enabled, else Manager default" — never both, never neither-silently-picked. Exception: notification defaults (sound/message templates) Manager-default-only — no per-world override. Future integrations (Discord/Prometheus/Grafana/Home Assistant/webhooks): small purpose-specific port (`NotificationAdapter`, `MetricsExportAdapter`, …) configured with the same global-default-with-world-override shape; no new entities until a concrete requirement. Events: `ManagerSetupCompleted`, `ManagerUpdateStarted/Completed`, `ManagerRolledBack`, `ManagerRestarted`.

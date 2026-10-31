@@ -9,7 +9,7 @@ Four lock classes. None are literal DB row locks — SQLite's own locking is a m
 **1.1 World lock (per-world, blocking)**
 - Scope: one `world_id`. Held by whichever of Start/Stop/Kill/Backup/Restore/Cleanup/DeleteWorld currently has an in-flight Operation against it.
 - Mechanism: **derived, not stored** — "does an in-flight Operation exist?" = query over `operations`: `world_id = ? AND status IN ('Created','Queued','Validating','Running')`, backed by `(world_id, status)` index (Doc 7). No lock column on `world_instances` — former `current_operation_id` column removed to avoid circular FK with `operations.world_id`.
-- Race note: acquire step must be a single transaction — INSERT the new Operation row and re-check that no non-terminal Operation exists for the world in the same transaction. `(world_id, status)` index + SQLite's serialized writes make this atomic.
+- Race note: acquire step must be a single transaction — INSERT the new Operation row and re-check that no non-terminal Operation exists for the world in the same transaction. The lock remains intact with milestone-only persistence because status is still written at `Created`, `Running`, and terminal states. `(world_id, status)` index + SQLite's serialized writes make this atomic.
 - Not reentrant: an Operation cannot nest inside another on the same world. Compensating actions (automatic restore-revert) are new Operations that wait for the original to reach terminal state first.
 
 **1.2 Global storage lock (system-wide, blocking)**
@@ -27,7 +27,7 @@ Four lock classes. None are literal DB row locks — SQLite's own locking is a m
 
 - **Filesystem locks are not a domain-model concept.** BackupService's "pause autosave via RCON, wait for ack, then capture" sequence *is* the domain-level equivalent of a filesystem lock — guarantees the world isn't writing save files during capture, without an OS-level file lock. Platform-adapter implementation detail below this document's line.
 - **RuntimeSession is not separately lockable** — partial unique index (`world_id WHERE ended_at IS NULL`, Doc 7) already makes "one open session per world" a database-enforced invariant, stronger than an application lock.
-- **Notifications and audit records are never lock targets** — insert-only from every writer's perspective, nothing to conflict over.
+- **Notifications and audit records are never lock targets** — terminal-state notifications/audits are insert-only, so no single-writer lock contention is introduced by intermediate progress updates.
 
 ## 3 Mutual-exclusion matrix
 

@@ -8,6 +8,7 @@ Terms: **Server** = host hardware running manager + managed instances. **Manager
 
 Persistent shell. Shared shell responsibilities:
 - current page, selected world, theme, client/session state, reconnect/offline status
+- stream lifecycle: one leader tab opens the backend SSE stream and dispatches received events to all same-origin tabs through `mcmanager_stream_channel`; leader loss triggers follower election and reconnection
 - **Notifications** — persistent bell/dropdown: recent notifications sorted with `critical`/`high` above `normal`/`informational` (Doc 6), unread-count badge (Status Indicator, Doc 4), "mark all read," link to full permanent history on Audit/History page. Items markable read/dismissed from dropdown (per-user, per `notification_reads.dismissed_at`) but never delete the underlying notification — Audit/History always shows the complete permanent record.
 
 World-scoped pages reflect the selected world. Manager-scoped pages must not depend on a world being selected (may show current selection summary).
@@ -53,7 +54,7 @@ World-scoped pages reflect the selected world. Manager-scoped pages must not dep
 
 **World Backup & Restore** — backup list with restore per backup. Each row shows sync status indicator (synced/pending/failed/not configured — Doc 4) reflecting `sync_records.status`; clicking expands per-attempt retry history (`sync_attempts` timeline: attempt number, timestamp, outcome, error message).
 
-**World Logs** — minecraft/debug/crash/backup/restore logs; panes: log file list, live log, file viewer.
+**World Logs** — minecraft/debug/crash/backup/restore logs; panes: log file list, live log, file viewer. Panes consume the shell BroadcastChannel dispatcher, never direct EventSource instances. With `VERBOSE_LOGGING=false`, debug is unavailable and Minecraft output is limited to severe warnings, errors, crashes, and readiness markers; `VERBOSE_LOGGING=true` exposes full channel output.
 
 **File Manager** — guarded folder access for current world (upload 1+ files, delete, rename, move, copy, new folder).
 

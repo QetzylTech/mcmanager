@@ -10,7 +10,7 @@ Concrete service behavior from Doc 6/7 — who does what, in what order, with re
 |---|---|---|---|
 | WorldService | Registry:CRUD, Create:Template, Delete:Tombstone, Rename:Metadata(ConfigEdit), Enforce:ConfigOffOnly | Process:Runtime, Data:Backup/Restore/Cleanup | `world_instances`, `world_settings`, `templates`(R), `java_runtimes`(R) |
 | RuntimeService | Start, Stop, Kill, Session:Open/Close, RCON:RotatePerSession, Health:Probe, Crash:Detect, State:Resolve | Operation wrapper:OperationService/Scheduler | `world_instances`, `runtime_sessions`, `secrets`(RCON only) |
-| OperationService | Op:Create/Status/Checkpoint/Idempotency/Timeout/Cancel, Lock:ReleaseAtTerminal (Doc 9 §1.1) | Domain action:owning service | `operations` |
+| OperationService | Op:Create/Status/Checkpoint/Idempotency/Timeout/Cancel, in-memory progress broadcast, milestone-only persistence, Lock:ReleaseAtTerminal (Doc 9 §1.1) | Domain action:owning service | `operations` |
 | BackupService | Backup:Capture/RegisterArtifact/ResumeAutosave, RCON:NotifyPlayers, Sync:TriggerFollowOn, ManagerBackup(world_id=NULL) | When:Scheduler/User, Transfer:SyncService | `backup_artifacts`, `operations`(checkpoints), `runtime_sessions`(R) |
 | RestoreService | Restore:Validate/PreBackup/Stage/Archive/Switch/RestartIfWasRunning, History:Record | PreBackup:BackupService | `restore_history`, `backup_artifacts`, `world_instances`, `operations` |
 | CleanupService | Retention:Dry/Wet, Delete:HardOnlyPath (any Tier 2 past window) | — | `backup_artifacts`(file+row), stale world dirs, aged-out soft-deleted Tier 2 rows |
@@ -19,7 +19,7 @@ Concrete service behavior from Doc 6/7 — who does what, in what order, with re
 | AuthenticationService | Login:User+Pass, Session:Issue/StepUp, Throttle:PassRetry/Lockout | Authorize:AuthorizationService | `users`, `secrets`(password check), `client_sessions`, `devices`(context) |
 | AuthorizationService | Policy:Eval(actor,role,grant,world,state), Roles:Client/Admin/Superadmin, Delegate:SuperadminOnly (Doc 6 §2.16) | AuthN:AuthService — assumes valid session | `roles`, `role_assignments`, `permissions`(R-heavy) |
 | NotificationService | Notify:Publish(4 severities), Reads:LazyPerUser, Serve:DropdownSorted | — | `notifications`, `notification_reads` |
-| AuditService | Audit:WriteAll(actor/device snapshot at write, Doc 6 §0.1) | — | `audit_records` (insert-only; no UPDATE/DELETE ever) |
+| AuditService | Audit:Write terminal operations, security/auth events, and ConfigEdit diffs (actor/device snapshot at write, Doc 6 §0.1) | — | `audit_records` (insert-only; no UPDATE/DELETE ever) |
 | FileManagerService | Files:Guarded CRUD, Confirmation:Elevated, Audit:Entry | — | world filesystem (via adapter), `audit_records`(write) |
 | TemplateService / JavaRuntimeService | Template:CRUD+Deprecate, JavaRuntime:CRUD+Deprecate, Launches:DataDriven(category free-text) | — | `templates`, `java_runtimes` |
 | ConfigurationService | Config:GuardedEdits(server.properties), ConfigEdit:Orchestrate(never silent), Settings:3-TierInheritance, Version:OptimisticCheck (Doc 9 §4) | Executing the ops themselves | `world_instances`(metadata), `world_settings`, `global_settings`, `schedules`, `cleanup_policies`, `roles`, `permissions`, `role_assignments`, `sync_targets`, `templates`(write via logged ConfigEdit) |
@@ -91,7 +91,8 @@ Ship as defaults in `global_settings`; globally overridable only where the table
 | MetricsCadence | null / **15s** cache / **1Hz** stream | locked, not part of global settings |
 | Storage guard default reserve | **10 GB** absolute | + 10% free-space bound as overflow safety net (Doc 9 §1.2); configurable |
 | Step-up window | **10min** | Doc 6 §2.14; configurable |
-| Log line buffer | **5000 lines** per world | ring buffer (Doc 13 §3.3); configurable |
+| Log line buffer | **5000 lines** per world | ring buffer (Doc 13 §3.3); configurable when `VERBOSE_LOGGING=true`; deployed `VERBOSE_LOGGING=false` processes essential channels only |
+| `VERBOSE_LOGGING` | **false** deployed default | non-secret `.env` flag; false suppresses debug, filters raw Minecraft output, and omits step-level backup/restore and sync traces; true enables full canonical-channel ingestion |
 | Supervisor poll cadence | **1s** running; **15s** idle/all-off | Doc 13 §4.1; not user-configurable |
 | Render interval (live metrics) | **1Hz** | bounded by MetricsCadence |
 | Blast-radius cap | **500 candidates** per cleanup action | beyond this, elevated confirmation required (Doc 10 `CLEANUP_BLAST_RADIUS`); configurable |
@@ -157,7 +158,7 @@ Locked by ARCHITECTURE §16 ruling 14. Applied by AuthenticationService/Authoriz
 
 ## 10 Audit pipeline
 
-- Every Operation's creation + every terminal status transition → exactly one `audit_records` row.
+- Every Operation terminal status transition (`Completed`, `Failed`, `Cancelled`, `TimedOut`) → exactly one `audit_records` row. Creation and intermediate checkpoint/status updates create none.
 - Every `ConfigEdit` → `audit_records` row with before/after diff in `payload`.
 - Every login attempt (success/failure) and every authorization denial → `audit_records` row, with `actor_username_snapshot` + `device_id_snapshot`/`device_name_snapshot` captured at that moment (Doc 6 §0.1).
 - AuditService never updates or deletes; corrections use `annotation_of` (Doc 6 §2.9).

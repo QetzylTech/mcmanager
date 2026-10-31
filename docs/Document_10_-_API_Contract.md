@@ -16,7 +16,7 @@ Error: `{"ok": false, "error": {"code": "WORLD_NOT_OFF", "message": "World must 
 - **CSRF:** every state-changing request (POST/PATCH/DELETE) needs `X-CSRF-Token` (double-submit, session-bound, rotated on session restore); missing/mismatch → `CSRF_INVALID`. SSE GET needs none.
 - **Step-up (S):** requires verified window on session (`client_sessions.step_up_confirmed_at` ≤ default 10 min) or fresh `POST /api/auth/step-up {password}`. S routes additionally require elevated confirmation / scope preview. Password never persisted/pre-filled.
 - **Idempotency:** Operation-creating POSTs accept `Idempotency-Key` (stored on `operations.idempotency_key`, unique per `op_type`). Same key + op_type retry → original Operation (200). Server generates one if omitted → `meta.idempotency_key`.
-- **Async (O):** state changes are durable Operations. Validate preconditions → create → **202** `{meta.op_id, data.operation.status (Created|Queued), meta.queue_position?}`. No polling — progress via SSE `operation.*`, fallback `GET /api/operations/{op_id}`. Rejection-path preconditions (never queued: Restore while running, DeleteWorld not off, stale-version ConfigEdit) → **409**, no Operation. Idempotent replay of completed op → **200** terminal state.
+- **Async (O):** state changes are durable Operations. Validate preconditions → create → **202** `{meta.op_id, data.operation.status (Created|Queued), meta.queue_position?}`. No polling — progress via SSE `operation.*`, fallback `GET /api/operations/{op_id}`; audit records append only at terminal status transitions. Rejection-path preconditions (never queued: Restore while running, DeleteWorld not off, stale-version ConfigEdit) → **409**, no Operation. Idempotent replay of completed op → **200** terminal state.
 - **Paging/filter/sort:** `limit` (default 50, max 500) + `offset` (0) → `meta.pagination {limit, offset, total}`. Filters per-endpoint server-side query params. `sort` = comma list, optional `-` desc (`sort=-created_at`); unsupported field → `VALIDATION_ERROR`.
 
 ## HTTP status summary
@@ -166,7 +166,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | POST | `/api/notifications/{notification_id}/read` | any | per-user read marker |
 | POST | `/api/notifications/{notification_id}/dismiss` | any | per-user dismiss (dropdown only; row permanent) |
 | POST | `/api/notifications/read-all` | any | bulk per-user read |
-| GET | `/api/audit` | any | immutable history; filters `actor_user_id`, `world_id`, `event_type`, `from`/`to`; sort `-created_at` |
+| GET | `/api/audit` | any | immutable terminal-operation, security/auth, and ConfigEdit history; filters `actor_user_id`, `world_id`, `event_type`, `from`/`to`; sort `-created_at` |
 | GET | `/api/audit/{audit_id}` | any | incl. `annotation_of`, `payload` |
 
 ### Files & logs
@@ -185,6 +185,8 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 
 **Log channels (`{channel}`)** — canonical closed set; others → `VALIDATION_ERROR`: `minecraft` (live console/stdout-stderr) · `crash_reports` · `backup_restore` (dedicated live stream `/stream/restore_logs`) · `panel_activity` · `panel_errors` · `debug` / `sync` / `manager_action`
 
+`VERBOSE_LOGGING` is a non-secret runtime `.env` flag. At `false` (deployed default), `debug` is suppressed, raw Minecraft stdout/stderr is filtered to severe warnings, errors, crashes, and readiness markers, and step-level backup/restore or sync traces are omitted; essential channels and terminal outcomes remain available. At `true`, all eight canonical channels receive full retention and live-stream output.
+
 ### System
 | Method | Path | Access | Notes |
 |---|---|---|---|
@@ -194,7 +196,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 
 ## SSE stream contract
 
-**Transport:** `text/event-stream`; WebSocket allowed as future alternative behind the same topic abstraction — never per-tab polling. Each tab opens its own independent connection; server computes each event once and fans out; no election/forwarding. `event:`/`data:`/`id:` format; `id` = per-stream monotonic sequence; reconnect with `Last-Event-ID` replays buffered events (keep last 200/stream); `retry:` 3000ms. Payloads single-line JSON.
+**Transport:** `text/event-stream`; WebSocket allowed as future alternative behind the same topic abstraction — never per-tab polling. Per browser origin, a leader tab opens the backend connection and forwards payloads over the `mcmanager_stream_channel` BroadcastChannel; followers do not connect directly and elect a replacement leader on loss. Server computes each event once and fans out. `event:`/`data:`/`id:` format; `id` = per-stream monotonic sequence; reconnect with `Last-Event-ID` replays buffered events (keep last 200/stream); `retry:` 3000ms. Payloads single-line JSON.
 
 **Delivery semantics (locked; ARCHITECTURE §16, single source):**
 - At-least-once delivery, not best-effort/exactly-once. `snapshot` first event guaranteed (never blank); each event delivered ≥1× per connected client.

@@ -25,7 +25,7 @@ mcmanager/
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── pyproject.toml            # tool config: black, isort, ruff, mypy, pytest (§5)
-├── .env.example              # non-secret runtime config only
+├── .env.example              # non-secret runtime config only; includes VERBOSE_LOGGING=false
 └── README.md
 ```
 
@@ -42,7 +42,7 @@ app/
 │   ├── __init__.py
 │   ├── routes.py             # page routes (HTML), thin — render templates only, no business logic
 │   ├── templates/            # shared shell layout, page fragments (Doc 4)
-│   ├── static/               # shell-level JS (per-tab SSE clients) and CSS build entry
+│   ├── static/               # shell-level JS (BroadcastChannel SSE connection manager and client listeners) and CSS build entry
 │   └── client_stream.py      # shell-owned shared client state + SSE hub client-side contract
 ├── web/                      # HTTP/API + session gateway + realtime streams
 │   ├── __init__.py

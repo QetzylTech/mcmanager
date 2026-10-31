@@ -53,9 +53,10 @@ IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 `session_id` PK | `world_id` FK->world_instances | `started_at` INT // set only at confirmed running (Doc 6 §2.2) | `ended_at` NULL | `end_reason` NULL // graceful_stop/forced_stop/crashed/emergency_stop/reconciled_missing | `rcon_secret_id` FK->secrets | `port_used` INT | `java_runtime_id` FK->java_runtimes // historical, not necessarily current | `launch_args_snapshot` JSON // captured at launch; independent of later edits | `created_at`
 CONSTRAINT: partial UNIQUE `(world_id) WHERE ended_at IS NULL` — exactly one open session per world
 
-**2.9 operations** // durable command-plane record; immutable except status progression
+**2.9 operations** // durable command-plane record; immutable except milestone status progression
 `op_id` PK | `op_type` // CreateWorld/Start/Stop/Kill/Backup/Restore/Cleanup/Sync/ConfigEdit/CrashDetected/DeleteWorld | `world_id` NULL FK->world_instances // null = manager-global | `actor_type` // user/system | `actor_user_id` NULL FK->users // null when actor_type=system | `idempotency_key` NULL | `status` // Created/Queued/Validating/Running/Completed/Failed/Cancelled/TimedOut | `checkpoint` JSON NULL | `attempt` INT | `compensates_operation_id` NULL FK->operations // compensating ops only | `intent_at` | `started_at` NULL | `finished_at` NULL | `error_code` NULL | `message` NULL | `data_json` JSON NULL // type-specific payload incl. cleanup run summaries | `created_at` | `updated_at`
 IDX: `(world_id, status)` — REQUIRED, backs the derived world lock (Doc 9 §1.1); `(idempotency_key)` unique-where-not-null, scoped by op_type
+RULE: progress `checkpoint` payloads are held in OperationService memory and sent over SSE. Persist this row only at initial creation, transition to `Running`, and terminal exit; the persisted terminal row carries the final checkpoint/message.
 
 **2.10 backup_artifacts** // T2, created-on-success-only, Doc 6 §2.5
 `artifact_id` PK | `world_id` NULL FK->world_instances // NULL = ManagerBackup (manager DB/settings/templates/permissions) | `category` // session_end/manual/scheduled/pre_restore/emergency/manager_config | `storage_path` | `size_bytes` INT | `checksum` // SHA-256 over full artifact (Doc 14 §11) | `suspect` INT // 0/1; set when a restore fails structural validation — surfaced, never auto-deleted (Doc 14 §11) | `operation_id` FK->operations // producing Backup op | `deleted_at` NULL // soft; file removed, row retained | `deleted_by` NULL | `created_at`
@@ -82,6 +83,7 @@ IDX: `(world_id, category, created_at)` — shape retention keep-newest-N-per-ca
 **2.17 audit_records** // T1 — permanent, append-only, Doc 6 §2.9/§0.1
 `audit_id` PK | `event_type` | `actor_type` // user/system | `actor_user_id` NULL // plain value, NOT an FK — survives soft-deleted User | `actor_username_snapshot` NULL // captured at write from users.username — keeps logs readable after soft-delete/rename (Doc 6 §0.1) | `device_id_snapshot` NULL // plain value, not an FK | `device_name_snapshot` NULL | `ip_snapshot` NULL | `operation_id` NULL FK->operations | `world_id` NULL FK->world_instances | `payload` JSON NULL | `annotation_of` NULL FK->audit_records // corrections/acknowledgements | `created_at`
 IDX: `(created_at)`, `(actor_user_id)`, `(world_id)`
+RULE: append only for terminal Operation states (`Completed`, `Failed`, `Cancelled`, `TimedOut`), security/auth events, and explicit `ConfigEdit` operations. Intermediate Operation states and checkpoints create no audit row.
 
 **2.18 users** // T2, soft-deleted, Doc 6 §1.1/§2.1
 `user_id` PK IMM | `username` UNIQ_SOFT | `display_name` NULL | `secret_id` FK->secrets // password hash ref | `status` // active/disabled/locked | `failed_login_count` INT | `locked_until` NULL | `created_by` NULL FK->users // self-ref | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
@@ -175,7 +177,7 @@ Worlds in `eula_required` are never probed — no session can be open while `eul
 ## 9 Performance considerations
 
 - Indexes target needed query patterns: active-world lists, per-world operation history, retention evaluation by category, audit filtering by actor/world/time.
-- `operations` + `audit_records` = highest-write-volume (every state change touches both). TEXT IDs, no auto-increment: write throughput depends on index maintenance, acceptable on reference hardware.
+- `operations` + `audit_records` write volume is reduced about 75–80%: operations persist only at creation, `Running`, and terminal exit; audit rows are terminal-only (plus security/auth and ConfigEdit events). Intermediate checkpoints stream from memory, avoiding write amplification and single-writer contention.
 - `runtime_sessions` partial unique index (`world_id WHERE ended_at IS NULL`) is the constraint doing real concurrency enforcement — prevents two simultaneous starts producing two open sessions, not just application locking.
 
 ## 10 SQLite operational contract (normative)

@@ -51,7 +51,7 @@ Binding; a change violating one is rejected. Verification in Doc 11.
 
 Five planes, one process (or two cooperating processes sharing one SQLite store, topology B):
 
-- **Presentation** — persistent web shell; routed page modules; per-tab independent connections to shared server-side streams; no tab election, heartbeats, or client-side forwarding.
+- **Presentation** — persistent web shell; routed page modules; one leader-tab SSE connection per browser origin, shared with follower tabs through the `mcmanager_stream_channel` BroadcastChannel and leader election.
 - **Control** — API/session gateway; authorization/policy; world orchestration; operation coordination; scheduler + background jobs.
 - **Runtime** — world process supervision; RCON sessions; health probes; startup/shutdown detection (Doc 13).
 - **Data** — relational state; append-only audit/events; logs; world files; backups; secrets (Doc 7).
@@ -59,9 +59,9 @@ Five planes, one process (or two cooperating processes sharing one SQLite store,
 
 | § | Subsystem | Ownership / notes |
 |---|---|---|
-| 5.1 | Presentation & shell | Shared client state; per-tab streams; navigation + page-state persistence (Doc 4/5). |
+| 5.1 | Presentation & shell | Shared client state; BroadcastChannel-dispatched leader-tab stream; navigation + page-state persistence (Doc 4/5). |
 | 5.2 | HTTP/API & session gateway | Thin routes; authn/authz/CSRF/step-up; maps to commands/queries (Doc 10). |
-| 5.3 | Realtime streams | SSE default; rehydration snapshot never blank; compute once, fan out (Doc 10). |
+| 5.3 | Realtime streams | SSE default; rehydration snapshot never blank; leader tab fans out through BroadcastChannel; `VERBOSE_LOGGING` filters nonessential channels (Doc 10). |
 | 5.4 | World registry | Canonical list; immutable IDs; editable display name + policies (Doc 7). |
 | 5.5 | World lifecycle | State machine; idempotency/cooldowns/conflicts; durable Operations; reconciliation; EULA + readiness gating (Doc 6, Doc 9, Doc 14). |
 | 5.6 | Runtime session | One contiguous run; per-session RCON rotation; durable metadata survives restart (Doc 6). |
@@ -113,7 +113,7 @@ Applies to every multi-admin-editable config table.
 
 ## 10 Operations
 
-- All state changes = durable Operations; audit + domain events; restart-safe where practical (Doc 6/8).
+- All state changes = durable Operations; terminal transitions and security/config events append audits, while intermediate checkpoints stay in memory and broadcast over SSE; restart-safe where practical (Doc 6/8).
 - Runtime status **never** from a single log line. State resolver = process state + health probes + startup signals + operation checkpoints + crash markers. Log strings advisory (Doc 13). Readiness per Doc 14 hierarchy; listening port alone ≠ `running` (ruling 13).
 - Queue/reject/preempt (Doc 9): Backup/Restore/Cleanup duplicates queued single-flight (auto-dispatch, position via live stream — never rejected, never polled); Start duplicates ignored; DeleteWorld/ConfigEdit conflicts rejected. Priority between waiting ops contextual (manual/safety-critical first).
 - Storage guards contextual (job size + configurable absolute reserve, default 10 GB; 10% free-space only as overflow safety net) — never a flat 10% rule.
@@ -129,7 +129,7 @@ Applies to every multi-admin-editable config table.
 - Doc 4 style + Doc 5 nav.
 - One shared visual system; page-scoped CSS only under Doc 4 §0 (layout-only, shared tokens, promoted when a second page needs it).
 - Reuse shared components — incl. Status Indicator (Doc 4) for any state display; no invented one-off badges.
-- Multi-tab: each tab owns an independent connection to shared server-side streams; no election/TTL heartbeats/BroadcastChannel forwarding; failing tab never disrupts others.
+- Multi-tab: a leader tab owns the primary SSE connection and forwards events through `mcmanager_stream_channel`; follower tabs elect a replacement leader when it closes.
 - Step-up: session-scoped, time-bounded (default 10 min); one success authorizes subsequent sensitive actions in the window.
 
 ## 13 Coding Standards
@@ -191,3 +191,4 @@ Standing table of every resolved disagreement. The **only** place a new conflict
 | 14 | **Security finishes: Argon2id** hashing; session-ID rotation on login/elevation/password change; HTTPS mandatory for non-loopback; security-header contract (CSP, X-Content-Type-Options, Referrer-Policy, frame-ancestors, cache control); no password-reset mechanism by design; secrets encrypted at rest in `secrets`. | Doc 7 §2.21a/§2.24; Doc 8 (Auth/Security); Doc 10 |
 | 15 | **Backup artifact format locked: ZIP** (deflate, streaming) + **SHA-256** checksum; `.part` atomic write + fsync + rename; post-write verification before registration; structural verification before restore. | Doc 14 §11; Doc 7 §2.10 |
 | 16 | **ManagerBackup uses SQLite backup API** (online consistent snapshot), never a plain file copy of a live `.db`. | Doc 14 §11; Doc 7 SQLite operational contract |
+| 17 | **Multi-tab stream sharing uses client-side BroadcastChannel.** A leader tab holds the primary SSE connection and forwards events via `mcmanager_stream_channel`; followers elect a replacement on leader loss. | Doc 4/5/10/11/12 |

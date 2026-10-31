@@ -39,6 +39,9 @@ Scope:
 - Security contract (Doc 8 §9): Argon2id used (assert hash prefix, no raw SHA/bcrypt-md5); session-ID rotation after login/elevation/password change (old revoked, new issued); HTTPS-mandatory for non-loopback; security headers present; secrets never in any response serialization.
 - SSE delivery semantics (Doc 10): at-least-once reconnect replay within window; ordering per stream; replay-past-window → snapshot + rehydration; duplicate event application idempotent.
 
+- `VERBOSE_LOGGING`: unit and integration suites verify `false` suppresses debug and filters raw Minecraft noise without breaking readiness parsing; `true` retains all canonical channels.
+- Write-amplification benchmark: intermediate checkpoints produce no audit rows and no operation writes beyond creation, `Running`, and terminal milestones.
+
 ### 1.3 E2E (~5%)
 
 Scope:
@@ -56,9 +59,9 @@ Every characteristic maps to a concrete, gated verification. Mandatory: a change
 | Characteristic | Product behavior | How tested | Gate |
 |---|---|---|---|
 | **Functional suitability** | Operation preconditions, lifecycle state machines, conflict matrix, retention floors, permission model (Doc 6, Doc 9) | Unit §1.1 + integration matrix §1.2; every op type has happy-path + rejected-path test | All pass before merge |
-| **Performance efficiency** | Idle CPU below documented threshold (5-min window); baseline memory range; stream fan-out without per-client loops (MetricsCadence + broadcast set, Doc 10) | Benchmark suite vs reference-hardware profile: idle 5-min CPU avg, RSS baseline, 50 simultaneous SSE clients fan-out, 1000 log lines/sec ingestion | Benchmark regression vs documented baseline fails release (§4.2) |
+| **Performance efficiency** | Idle CPU below documented threshold (5-min window); baseline memory range; leader-tab stream sharing and reduced operation/audit writes (Doc 10) | Benchmark suite vs reference-hardware profile: idle 5-min CPU avg, RSS baseline, multi-tab one-SSE fan-out, 1000 log lines/sec ingestion, terminal-only audit write volume | Benchmark regression vs documented baseline fails release (§4.2) |
 | **Compatibility** | Runs on each supported OS; adapters replaceable (Doc 12, Doc 13) | Adapter conformance suite (Doc 13) on every supported OS in CI; storage/backend-agnostic core never imports platform code | Full suite green on ≥2 OSes for release |
-| **Interaction capability** | Shell rehydration, multi-tab independent streams, offline/reconnect, queue-position surfacing (Doc 10) | E2E SSE suite: reconnect replay, dual-tab independent streams (no election), blank-state prohibition asserted on connect | E2E suite green |
+| **Interaction capability** | Shell rehydration, BroadcastChannel multi-tab sharing, offline/reconnect, queue-position surfacing (Doc 10) | E2E SSE suite: reconnect replay, dual-tab single leader connection, leader-election failover, blank-state prohibition asserted on connect | E2E suite green |
 | **Reliability** | Startup reconciliation, restart-safe ops, restore checkpointing, crash detection (Doc 7 §6, Doc 8) | Integration: reconciliation scenarios (§1.2), kill-mid-restore at every stage, process-exit-mid-backup, kill-supersedes-stop atomicity | All pass before merge |
 | **Security** | Zero-trust authn/authz, step-up windows, secret isolation, throttle/lockout, CSRF, audit immutability (Doc 6) | Dedicated security suite: auth bypass (direct route calls without session), role escalation (Client calling SA routes), CSRF missing token, step-up expiry, throttle lockout, secrets not in any response, audit immutability (UPDATE/DELETE on audit tables fails) | All pass before merge; security suite = own CI job |
 | **Maintainability** | Modular ports/adapters, no platform imports in core, service boundaries (Doc 8, Doc 12) | Static analysis gate: `ports/` boundaries, circular-import checker, lint + format + type gates (§3.2); design-structure tests assert core imports no adapter packages | Static gate green |
