@@ -23,6 +23,8 @@ class SpawnRequest:
     env: dict[str, str] = field(default_factory=dict)
     stdout_channel: str = 'stdout'
     stderr_channel: str = 'stderr'
+    session_id: str = ''
+    log_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,11 @@ class ProcessStatus:
     @property
     def alive(self) -> bool:
         return self.state is ProcessState.RUNNING
+
+    @property
+    def state_class(self) -> ExitClass:
+        """Gate 1 pseudocode name for ``exit_class``."""
+        return self.exit_class
 
 
 @dataclass(frozen=True)
@@ -76,22 +83,22 @@ class ProbeResult:
 class ProcessHandle(Protocol):
     """Opaque per-platform handle to a supervised process tree.
 
-    The identity-isolation point: ``pid``/identity are captured at spawn and
-    re-verified before every signal decision (PID-reuse guard, Doc 13 C7).
+    Documented fields match gate1 Module 1. ``spawn_epoch`` is a float so it
+    can be compared to ``psutil.Process.create_time()`` (C7 PID-reuse guard);
+    integer epoch seconds are too coarse for that check.
     """
 
     world_id: str
     pid: int
     spawn_epoch: float
+    process_group_id: int | None
+    job_handle: object | None
 
     def identity_matches(self) -> bool:
         """True when the recorded PID still maps to the spawned process.
 
         Rejects PID-reuse collisions that would otherwise deliver signals to
         an innocent process."""
-
-    def process_group_id(self) -> int | None:
-        """Windows: job-object id; POSIX: process-group id (None if n/a)."""
 
 
 @dataclass(frozen=True)
@@ -147,7 +154,7 @@ class ProcessControlPort(Protocol):
     def write_stdin(self, handle: ProcessHandle, text: str) -> SendResult: ...
 
     def terminate(
-        self, handle: ProcessHandle, *, graceful_deadline_s: int
+        self, handle: ProcessHandle, graceful_deadline_s: int = 10
     ) -> TerminateResult: ...
 
     def tail(

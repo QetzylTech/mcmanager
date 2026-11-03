@@ -228,7 +228,7 @@ class BaseProcessAdapter:
 
     # -- terminate (escalation ladder) ------------------------------------------
 
-    def terminate(self, handle: ProcessHandle, *, graceful_deadline_s: int) -> TerminateResult:
+    def terminate(self, handle: ProcessHandle, graceful_deadline_s: int = 10) -> TerminateResult:
         """Escalation ladder (Doc 13 section 3 / Doc 8 section 5.0).
 
         TERMINATE -> wait for graceful_deadline_s -> KILL. A zero deadline

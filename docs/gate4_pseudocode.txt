@@ -1,0 +1,307 @@
+================================================================================
+MCMANAGER SPECIFICATION — STAGE 4 (GATE 4) PSEUDOCODE
+================================================================================
+Scope: Operational Subsystems (Work Package 4.0: WP 4.1 - WP 4.4)
+Focus: Backup Engine, Restore & Compensating Rollback, Retention Cleanup, Offsite Sync
+================================================================================
+
+MODULE 1: NATIVE BACKUP ENGINE & RCON COORDINATION
+File Scope: src/mcmanager/services/backup.py & src/mcmanager/infrastructure/backup_engine.py
+
+```python
+import os
+import zipfile
+import hashlib
+from typing import Optional, Dict, Any
+
+class NativeBackupEngine:
+    """Portable ZIP + SHA-256 archive engine with atomic staging."""
+
+    def create_archive(self, world_dir: str, target_zip_path: str) -> Dict[str, Any]:
+        part_path = f"{target_zip_path}.part"
+        sha256 = hashlib.sha256()
+        total_size = 0
+
+        # Atomic Staging: Write to .part file first
+        with zipfile.ZipFile(part_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+            for root, _, files in os.walk(world_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, world_dir)
+                    zipf.write(full_path, arcname=rel_path)
+
+        # Calculate SHA-256 checksum over completed .part file
+        with open(part_path, 'rb') as f:
+            while chunk := f.read(65536):
+                sha256.update(chunk)
+                total_size += len(chunk)
+
+        # Atomic Rename to final .zip destination
+        os.replace(part_path, target_zip_path)
+
+        return {
+            "checksum": sha256.hexdigest(),
+            "size_bytes": os.path.getsize(target_zip_path),
+            "storage_path": target_zip_path
+        }
+
+
+class BackupService:
+    """Backup Service with RCON save coordination and database artifact registration."""
+
+    def __init__(self, db_conn, rcon_port, backup_engine: NativeBackupEngine):
+        self.db = db_conn
+        self.rcon = rcon_port
+        self.engine = backup_engine
+
+    def execute_backup(self, op_id: str, world_id: Optional[str], category: str) -> str:
+        # Precondition check: Storage guard & conflicting locks (Doc 9 §3.1)
+        if not storage_guard_passes():
+            raise PreconditionFailedError("STORAGE_GUARD_FAILED", "Insufficient disk headroom")
+
+        world = get_world_or_raise(self.db, world_id) if world_id else None
+        
+        # Step 1: RCON Save Coordination (if world is RUNNING)
+        if world and world.state == "running":
+            self.rcon.execute(world_id, "save-off")
+            self.rcon.execute(world_id, "save-all")
+            verify_level_dat_flush(world.directory) # Verify level.dat mtime inside capture window
+
+        try:
+            # Step 2: Capture ZIP archive
+            target_path = generate_backup_path(world_id, category)
+            archive_meta = self.engine.create_archive(world.directory if world else get_manager_dir(), target_path)
+
+            # Step 3: Register in backup_artifacts (Tier 2, created-on-success-only)
+            artifact_id = generate_id("art")
+            self.db.execute("""
+                INSERT INTO backup_artifacts (
+                    artifact_id, world_id, category, storage_path, size_bytes, 
+                    checksum, suspect, operation_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+            """, (
+                artifact_id, world_id, category, archive_meta["storage_path"],
+                archive_meta["size_bytes"], archive_meta["checksum"], op_id, current_timestamp()
+            ))
+
+            return artifact_id
+
+        finally:
+            # HARD INVARIANT: Always restore autosave (save-on) even if archive fails
+            if world and world.state == "running":
+                self.rcon.execute(world_id, "save-on")
+```
+
+================================================================================
+MODULE 2: RESTORE ENGINE & AUTOMATIC COMPENSATING ROLLBACK
+File Scope: src/mcmanager/services/restore.py
+
+```python
+class RestoreService:
+    """Restore service with mandatory pre-restore backup and compensating rollback tree."""
+
+    def __init__(self, db_conn, backup_service: BackupService, runtime_service):
+        self.db = db_conn
+        self.backup_service = backup_service
+        self.runtime_service = runtime_service
+
+    def execute_restore(self, op_id: str, world_id: str, source_artifact_id: str, operator_user_id: str) -> None:
+        world = get_world_or_raise(self.db, world_id)
+        
+        # Precondition: World must be OFF
+        if world.state != "off":
+            raise PreconditionFailedError("WORLD_NOT_OFF", "Restore requires world to be in OFF state")
+
+        # Step 1: MANDATORY Pre-Restore Backup Artifact Creation
+        pre_restore_artifact_id = self.backup_service.execute_backup(
+            op_id=op_id, world_id=world_id, category="pre_restore"
+        )
+
+        # Step 2: Extract & Switch World Files
+        source_artifact = get_artifact(self.db, source_artifact_id)
+        verify_checksum(source_artifact.storage_path, source_artifact.checksum)
+        
+        safe_extract_zip(source_artifact.storage_path, world.directory)
+
+        # Step 3: Log in restore_history
+        restore_id = generate_id("rst")
+        self.db.execute("""
+            INSERT INTO restore_history (
+                restore_id, world_id, operation_id, source_artifact_id,
+                pre_restore_artifact_id, restored_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """, (restore_id, world_id, op_id, source_artifact_id, pre_restore_artifact_id, current_timestamp()))
+
+        # Step 4: Verification Boot & Compensating Rollback Decision Tree
+        if world.was_running_before_restore:
+            boot_success = self.runtime_service.attempt_verification_boot(world_id, timeout=60)
+            
+            if not boot_success:
+                # COMPENSATING ROLLBACK: Post-restore boot failed
+                # 1. Flag source artifact as suspect
+                self.db.execute("UPDATE backup_artifacts SET suspect = 1 WHERE artifact_id = ?", (source_artifact_id,))
+                
+                # 2. Revert world files using mandatory pre-restore backup
+                pre_restore_artifact = get_artifact(self.db, pre_restore_artifact_id)
+                safe_extract_zip(pre_restore_artifact.storage_path, world.directory)
+                
+                # 3. Raise domain error (Operation status -> Failed)
+                raise RestoreVerificationError("POST_RESTORE_BOOT_FAILED", "Restored world failed boot verification. Automatically rolled back to pre-restore state.")
+```
+
+================================================================================
+MODULE 3: RETENTION CLEANUP SWEEPER & PHYSICAL DELETION BOUNDARY
+File Scope: src/mcmanager/services/cleanup.py
+
+```python
+class CleanupService:
+    """Retention cleanup sweeper enforcing safety floors and physical file deletion boundary."""
+
+    MIN_NEWEST_KEEP = 3  # Hard safety floor: keep at least 3 newest per category
+    MIN_AGE_DAYS = 3      # Hard safety floor: retain all backups < 3 days old
+
+    def __init__(self, db_conn):
+        self.db = db_conn
+
+    def evaluate_and_execute_cleanup(self, op_id: str, world_id: Optional[str], dry_run: bool) -> Dict[str, Any]:
+        candidates = self.find_cleanup_candidates(world_id)
+        valid_targets = []
+
+        for artifact in candidates:
+            # Enforce Retention Policy Floors (Doc 11 & Doc 14)
+            if artifact.age_days < self.MIN_AGE_DAYS:
+                continue # Retain recent backups
+            if artifact.rank_in_category <= self.MIN_NEWEST_KEEP:
+                continue # Protect newest N backups per category
+            
+            valid_targets.append(artifact)
+
+        if dry_run:
+            return {"mode": "dry_run", "target_count": len(valid_targets), "targets": [a.artifact_id for a in valid_targets]}
+
+        # Wet Cleanup: SINGLE PHYSICAL DELETION BOUNDARY in the system
+        deleted_count = 0
+        freed_bytes = 0
+
+        for artifact in valid_targets:
+            # 1. Soft-delete row in database
+            self.db.execute("""
+                UPDATE backup_artifacts 
+                SET deleted_at = ?, deleted_by = 'system_cleanup'
+                WHERE artifact_id = ?
+            """, (current_timestamp(), artifact.artifact_id))
+
+            # 2. Remove physical archive file from disk
+            if os.path.exists(artifact.storage_path):
+                size = os.path.getsize(artifact.storage_path)
+                os.remove(artifact.storage_path)
+                freed_bytes += size
+                deleted_count += 1
+
+        # Summary stored in operations.data_json
+        return {
+            "mode": "wet_run",
+            "deleted_count": deleted_count,
+            "freed_bytes": freed_bytes
+        }
+```
+
+================================================================================
+MODULE 4: OFFSITE SYNC ENGINE & EXPONENTIAL BACKOFF
+File Scope: src/mcmanager/services/sync.py
+
+```python
+class OffsiteSyncService:
+    """Async offsite sync dispatcher with exponential backoff and transfer cap."""
+
+    BACKOFF_DELAYS = [30, 60, 120]  # Seconds retry backoff
+    DAILY_TRANSFER_CAP_BYTES = 50 * 1024 * 1024 * 1024  # 50 GB daily limit
+
+    def __init__(self, db_conn, storage_adapter):
+        self.db = db_conn
+        self.storage = storage_adapter
+
+    def dispatch_sync(self, artifact_id: str, target_id: str) -> None:
+        # Check global daily transfer cap
+        today_bytes = self.get_bytes_transferred_today()
+        if today_bytes >= self.DAILY_TRANSFER_CAP_BYTES:
+            raise PreconditionFailedError("SYNC_CAP_EXCEEDED", "Daily offsite transfer limit reached")
+
+        sync_record_id = generate_id("syn")
+        self.db.execute("""
+            INSERT INTO sync_records (sync_record_id, artifact_id, target_id, status, created_at)
+            VALUES (?, ?, ?, 'Pending', ?)
+        """, (sync_record_id, artifact_id, target_id, current_timestamp()))
+
+        self.execute_sync_with_retry(sync_record_id, artifact_id, target_id)
+
+    def execute_sync_with_retry(self, sync_record_id: str, artifact_id: str, target_id: str) -> None:
+        artifact = get_artifact(self.db, artifact_id)
+        
+        for attempt in range(1, 4):
+            attempt_id = generate_id("att")
+            start_ts = current_timestamp()
+            
+            try:
+                # Upload to remote storage adapter
+                self.storage.upload_file(target_id, artifact.storage_path)
+                
+                # Log successful attempt
+                self.record_attempt(attempt_id, sync_record_id, attempt, "Success", start_ts, None)
+                self.db.execute("UPDATE sync_records SET status = 'Completed' WHERE sync_record_id = ?", (sync_record_id,))
+                return
+
+            except Exception as err:
+                self.record_attempt(attempt_id, sync_record_id, attempt, "Failed", start_ts, str(err))
+                if attempt < 3:
+                    time.sleep(self.BACKOFF_DELAYS[attempt - 1])
+
+        # Exhausted retries -> Terminal Failed state
+        self.db.execute("UPDATE sync_records SET status = 'Failed' WHERE sync_record_id = ?", (sync_record_id,))
+
+    def record_attempt(self, attempt_id, sync_record_id, attempt_num, status, start_ts, error_msg):
+        self.db.execute("""
+            INSERT INTO sync_attempts (attempt_id, sync_record_id, attempt_number, status, started_at, finished_at, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (attempt_id, sync_record_id, attempt_num, status, start_ts, current_timestamp(), error_msg))
+```
+
+================================================================================
+MODULE 5: INTEGRATION TEST SUITE FOR STAGE 4
+File Scope: tests/integration/test_stage4.py
+
+```python
+import pytest
+
+def test_backup_sha256_verification(backup_service, tmp_path):
+    """Assert generated backup passes SHA-256 integrity verification."""
+    world_dir = tmp_path / "world"
+    world_dir.mkdir()
+    (world_dir / "level.dat").write_bytes(b"dummy world data")
+
+    artifact_id = backup_service.execute_backup(op_id="op_1", world_id="w_1", category="manual")
+    artifact = get_artifact(backup_service.db, artifact_id)
+
+    assert os.path.exists(artifact.storage_path)
+    assert artifact.checksum == calculate_file_sha256(artifact.storage_path)
+    assert artifact.suspect == 0
+
+def test_restore_compensating_rollback_on_boot_failure(restore_service, db):
+    """Assert restore failure triggers compensating rollback and flags suspect artifact."""
+    world_id = "w_test"
+    corrupt_artifact_id = "art_bad"
+    
+    # Configure mock runtime to fail verification boot
+    restore_service.runtime_service.should_fail_boot = True
+
+    with pytest.raises(RestoreVerificationError):
+        restore_service.execute_restore(
+            op_id="op_rst", world_id=world_id, 
+            source_artifact_id=corrupt_artifact_id, operator_user_id="u_admin"
+        )
+
+    # Assert bad artifact flagged as suspect
+    artifact = get_artifact(db, corrupt_artifact_id)
+    assert artifact.suspect == 1
+```
+================================================================================

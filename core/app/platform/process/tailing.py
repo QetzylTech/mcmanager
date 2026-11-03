@@ -15,13 +15,98 @@ reconnect hydration; when the buffer has trimmed past N the adapter signals
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 from collections import deque
 from collections.abc import Callable
+from pathlib import Path
+
+from app.domain.tuning import LOG_LINE_BUFFER_LINES
 
 _SUBSCRIBER_QUEUE_CAPACITY = 256
 _SUBSCRIBER_WORKER_IDLE_S = 0.2
+
+
+def verbose_logging_enabled() -> bool:
+    """VERBOSE_LOGGING defaults to false (gate1 Module 3 / Doc 12 .env.example)."""
+    return os.environ.get('VERBOSE_LOGGING', 'false').strip().lower() in {
+        '1',
+        'true',
+        'yes',
+        'on',
+    }
+
+
+def is_debug_log_line(channel: str, line: str) -> bool:
+    return channel == 'debug' or '[DEBUG]' in line
+
+
+class DurableSessionLog:
+    """Append-only per-session log file (C12 durability)."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._mutex = threading.Lock()
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    def write(self, channel: str, line: str) -> None:
+        with self._mutex:
+            with open(self.path, 'a', encoding='utf-8') as handle:
+                handle.write(f'[{channel}] {line}\n')
+                handle.flush()
+
+
+def session_log_for(log_dir: str | None, session_id: str) -> DurableSessionLog | None:
+    if not log_dir or not session_id:
+        return None
+    return DurableSessionLog(str(Path(log_dir) / f'{session_id}.log'))
+
+
+def ingest_log_line(
+    buffer: 'LogRingBuffer | RingBuffer',
+    channel: str,
+    line: str,
+    *,
+    durable_log: DurableSessionLog | None = None,
+) -> bool:
+    """Filter, ring-buffer, and optionally persist one line.
+
+    Returns False when VERBOSE_LOGGING=false suppressed a debug line.
+    """
+    if is_debug_log_line(channel, line) and not verbose_logging_enabled():
+        return False
+    if isinstance(buffer, LogRingBuffer):
+        buffer.append(channel, line)
+    else:
+        buffer.append(line)
+    if durable_log is not None:
+        durable_log.write(channel, line)
+    return True
+
+
+class LogStreamTailer:
+    """Gate 1 Module 3 tailer: 5000-line ring + VERBOSE_LOGGING + session file."""
+
+    def __init__(self, world_id: str, session_id: str, log_dir: str | None) -> None:
+        self.world_id = world_id
+        self.ring_buffer: deque[dict[str, object]] = deque(maxlen=LOG_LINE_BUFFER_LINES)
+        self.log_file_path = (
+            os.path.join(log_dir, f'{session_id}.log') if log_dir else None
+        )
+        self.verbose_logging = verbose_logging_enabled()
+        self._durable = session_log_for(log_dir, session_id)
+
+    def process_pipe_output(self, channel_name: str, line_str: str) -> bool:
+        is_debug = is_debug_log_line(channel_name, line_str)
+        if is_debug and not self.verbose_logging:
+            return False
+        self.ring_buffer.append(
+            {'world_id': self.world_id, 'channel': channel_name, 'line': line_str}
+        )
+        if self._durable is not None:
+            self._durable.write(channel_name, line_str)
+        return True
 
 
 class Subscription:
@@ -73,7 +158,7 @@ class Subscription:
 class RingBuffer:
     """Thread-safe bounded deque of ``(line_no, line)`` with subscribers."""
 
-    def __init__(self, maxlen: int = 5000) -> None:
+    def __init__(self, maxlen: int = LOG_LINE_BUFFER_LINES) -> None:
         self._buffer: deque[tuple[int, str]] = deque(maxlen=maxlen)
         self._mutex = threading.Lock()
         self._next_line_no = 0
@@ -124,7 +209,7 @@ class RingBuffer:
 class LogRingBuffer:
     """Per-world ring buffers keyed by channel."""
 
-    def __init__(self, maxlen: int = 5000) -> None:
+    def __init__(self, maxlen: int = LOG_LINE_BUFFER_LINES) -> None:
         self._maxlen = maxlen
         self._channels: dict[str, RingBuffer] = {}
         self._mutex = threading.Lock()
@@ -155,6 +240,7 @@ class ProcessLineReader:
         buffer: RingBuffer,
         sink: Callable[..., None] | None,
         max_line_bytes: int = 64 * 1024,
+        durable_log: DurableSessionLog | None = None,
     ) -> None:
         self._stream = stream
         self._world_id = world_id
@@ -163,6 +249,7 @@ class ProcessLineReader:
         self._buffer = buffer
         self._sink = sink
         self._max_line_bytes = max_line_bytes
+        self._durable_log = durable_log
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -197,7 +284,10 @@ class ProcessLineReader:
             line = line.rstrip('\r\n')
             if len(line) > self._max_line_bytes:
                 line = line[: self._max_line_bytes] + ' ...[line truncated]'
-            self._buffer.append(line)
+            if not ingest_log_line(
+                self._buffer, self._channel, line, durable_log=self._durable_log
+            ):
+                continue
             sink = self._sink
             if sink is not None:
                 sink(

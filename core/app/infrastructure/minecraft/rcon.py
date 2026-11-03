@@ -6,6 +6,8 @@ import socket
 import struct
 import threading
 
+from app.ports.minecraft import MinecraftRconError
+
 # Minecraft RCON protocol constants
 _TYPE_AUTH = 3
 _TYPE_RESPONSE = 0
@@ -16,7 +18,7 @@ _TYPE_AUTH_RESPONSE = 2
 SAFE_COMMANDS = frozenset({'save-all', 'save-off', 'save-on', 'stop', 'list', 'tps', 'tick'})
 
 
-class RconError(Exception):
+class RconError(MinecraftRconError):
     """Raised on RCON protocol/transport failures."""
 
 

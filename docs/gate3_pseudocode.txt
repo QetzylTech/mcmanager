@@ -1,0 +1,527 @@
+# ==============================================================================
+# MCMANAGER ARCHITECTURE SPECIFICATION: STAGE 3 (GATE 3) PSEUDOCODE
+# Package Scope: Work Package 3.0 (WP 3.1 - WP 3.4)
+# Focus: Control Plane Orchestration, Supervisor Loop & Audit Optimization
+# ==============================================================================
+
+"""
+STAGE 3 ARCHITECTURAL CONTRACT:
+1. Write-Optimized Operation Pipeline: Operations perform milestone-only SQLite
+   writes (Created -> Running -> Terminal). Intermediate progress percentage ticks
+   are cached in memory and pushed directly to real-time streams.
+2. Terminal-Only Audit Pipeline: audit_records rows are created ONLY upon terminal
+   operation transitions (Completed, Failed, Cancelled, TimedOut), auth events, and
+   ConfigEdit actions. No audit records are written during intermediate progress.
+3. Derived World Locking: Application-level world locks are derived via SQL query:
+   SELECT COUNT(*) FROM operations WHERE world_id = ? AND status IN ('Created','Queued','Validating','Running')
+4. Manager Crash Survival & Reconciliation: On startup, RuntimeService probes OS
+   processes to re-attach running worlds or reconcile missing sessions.
+5. 30s Scheduler Tick: Skips conflicting jobs and logs missed_run_records without
+   auto-replaying missed runs.
+"""
+
+import time
+import json
+from typing import Optional, Dict, Any, List
+from enum import Enum
+
+# ==============================================================================
+# MODULE 1: WRITE-OPTIMIZED OPERATION SERVICE & DERIVED LOCKING
+# File: src/mcmanager/services/operations.py
+# ==============================================================================
+
+class OperationStatus(str, Enum):
+    CREATED = "Created"
+    QUEUED = "Queued"
+    VALIDATING = "Validating"
+    RUNNING = "Running"
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
+    TIMED_OUT = "TimedOut"
+
+class OperationService:
+    def __init__(self, db_conn, sse_publisher, audit_service):
+        self.db = db_conn
+        self.sse = sse_publisher
+        self.audit_service = audit_service
+        # In-memory progress cache to prevent DB write amplification
+        self._progress_cache: Dict[str, Dict[str, Any]] = {}
+
+    def is_world_locked(self, world_id: str) -> bool:
+        """
+        DERIVED WORLD LOCK (Doc 9 §1.1):
+        Query over operations table. No stored 'is_locked' column exists on world_instances.
+        """
+        cursor = self.db.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM operations
+            WHERE world_id = ?
+              AND status IN ('Created', 'Queued', 'Validating', 'Running')
+        """, (world_id,))
+        count = cursor.fetchone()[0]
+        return count > 0
+
+    def create_operation(
+        self,
+        op_type: str,
+        world_id: Optional[str],
+        actor_type: str,
+        actor_user_id: Optional[str],
+        idempotency_key: Optional[str] = None,
+        data_json: Optional[dict] = None
+    ) -> str:
+        """
+        MILESTONE 1 WRITE: Create Operation (Status = Created / Queued)
+        """
+        op_id = generate_ulid()
+        now = int(time.time())
+
+        # Enforce single-flight / derived lock check if world-scoped
+        if world_id and self.is_world_locked(world_id):
+            status = OperationStatus.QUEUED.value
+        else:
+            status = OperationStatus.CREATED.value
+
+        # SQLite Write 1: Initial Creation
+        with self.db.transaction():
+            self.db.execute("""
+                INSERT INTO operations (
+                    op_id, op_type, world_id, actor_type, actor_user_id,
+                    idempotency_key, status, attempt, intent_at, data_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            """, (
+                op_id, op_type, world_id, actor_type, actor_user_id,
+                idempotency_key, status, now, json.dumps(data_json or {}), now, now
+            ))
+
+        # Broadcast SSE event without writing audit record yet
+        self.sse.publish_event("operation_status", {
+            "op_id": op_id, "world_id": world_id, "status": status, "progress": 0
+        })
+        return op_id
+
+    def update_progress_in_memory(self, op_id: str, progress_pct: int, step_name: str) -> None:
+        """
+        REDUNDANCY FIX: In-memory checkpoint update.
+        Does NOT execute SQLite UPDATE statement per percentage tick!
+        Pushes state directly to real-time stream consumers.
+        """
+        checkpoint = {"progress_pct": progress_pct, "step": step_name, "ts": int(time.time())}
+        self._progress_cache[op_id] = checkpoint
+
+        # Push to SSE stream hub immediately
+        self.sse.publish_event("operation_progress", {
+            "op_id": op_id,
+            "progress_pct": progress_pct,
+            "step": step_name
+        })
+
+    def transition_status(
+        self,
+        op_id: str,
+        new_status: OperationStatus,
+        error_code: Optional[str] = None,
+        message: Optional[str] = None,
+        data_json: Optional[dict] = None
+    ) -> None:
+        """
+        MILESTONE WRITES: Executes DB UPDATE only on key state changes:
+        1. State == RUNNING (Milestone 2)
+        2. State is TERMINAL (Completed, Failed, Cancelled, TimedOut) (Milestone 3)
+        """
+        now = int(time.time())
+        is_terminal = new_status in [
+            OperationStatus.COMPLETED,
+            OperationStatus.FAILED,
+            OperationStatus.CANCELLED,
+            OperationStatus.TIMED_OUT
+        ]
+
+        # Extract latest in-memory checkpoint if available
+        checkpoint_data = self._progress_cache.get(op_id)
+        checkpoint_json = json.dumps(checkpoint_data) if checkpoint_data else None
+
+        with self.db.transaction():
+            if new_status == OperationStatus.RUNNING:
+                self.db.execute("""
+                    UPDATE operations
+                    SET status = ?, started_at = ?, checkpoint = ?, updated_at = ?
+                    WHERE op_id = ?
+                """, (new_status.value, now, checkpoint_json, now, op_id))
+            elif is_terminal:
+                self.db.execute("""
+                    UPDATE operations
+                    SET status = ?, finished_at = ?, error_code = ?, message = ?,
+                        checkpoint = ?, data_json = COALESCE(?, data_json), updated_at = ?
+                    WHERE op_id = ?
+                """, (new_status.value, now, error_code, message, checkpoint_json,
+                      json.dumps(data_json) if data_json else None, now, op_id))
+                
+                # Clear from memory cache on terminal exit
+                self._progress_cache.pop(op_id, None)
+
+        # AUDIT PIPELINE FIX: Write to audit_records ONLY on terminal transition!
+        if is_terminal:
+            op_row = self.get_operation(op_id)
+            self.audit_service.record_operation_terminal(op_row)
+
+        # Stream update to connected clients
+        self.sse.publish_event("operation_status", {
+            "op_id": op_id,
+            "status": new_status.value,
+            "error_code": error_code,
+            "message": message
+        })
+
+    def get_operation(self, op_id: str) -> dict:
+        cursor = self.db.cursor()
+        cursor.execute("SELECT * FROM operations WHERE op_id = ?", (op_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise KeyError(f"Operation {op_id} not found")
+        return dict(row)
+
+
+# ==============================================================================
+# MODULE 2: RUNTIME LIFECYCLE SERVICE & RECONCILIATION
+# File: src/mcmanager/services/runtime.py
+# ==============================================================================
+
+class RuntimeService:
+    START_TIMEOUT_SECONDS = 120
+    KILL_DEADLINE_SECONDS = 10
+
+    def __init__(self, db_conn, process_adapter, readiness_evaluator, op_service, notification_service):
+        self.db = db_conn
+        self.process_adapter = process_adapter
+        self.readiness_evaluator = readiness_evaluator
+        self.op_service = op_service
+        self.notifier = notification_service
+
+    def start_world(self, world_id: str, actor_user_id: str) -> str:
+        """Starts a Minecraft world instance following Doc 8 preconditions."""
+        # 1. Precondition checks
+        cursor = self.db.cursor()
+        cursor.execute("SELECT state, eula_state FROM world_instances WHERE world_id = ?", (world_id,))
+        world = cursor.fetchone()
+        if not world:
+            raise ValueError(f"World {world_id} not found")
+
+        if world["state"] != "off":
+            raise RuntimeError(f"World {world_id} cannot start from state {world['state']}")
+
+        if world["eula_state"] != "accepted":
+            raise RuntimeError("EULA must be accepted before world startup (Doc 14 §5)")
+
+        # 2. Create Start Operation (Milestone 1 Write)
+        op_id = self.op_service.create_operation(
+            op_type="Start",
+            world_id=world_id,
+            actor_type="user",
+            actor_user_id=actor_user_id
+        )
+
+        # 3. Transition Operation to RUNNING (Milestone 2 Write)
+        self.op_service.transition_status(op_id, OperationStatus.RUNNING)
+
+        # Update World State -> starting
+        with self.db.transaction():
+            self.db.execute("UPDATE world_instances SET state = 'starting', updated_at = ? WHERE world_id = ?",
+                            (int(time.time()), world_id))
+
+        # 4. Spawn Process via Platform Adapter
+        spawn_req = SpawnRequest(
+            world_id=world_id,
+            launch_command=["java", "-Xmx2G", "-jar", "server.jar", "nogui"],
+            cwd=f"/var/mcmanager/worlds/{world_id}",
+            env={"WORLD_ID": world_id}
+        )
+        spawn_res = self.process_adapter.spawn(spawn_req)
+
+        if not spawn_res.handle:
+            # Spawn failed immediately
+            with self.db.transaction():
+                self.db.execute("UPDATE world_instances SET state = 'off', updated_at = ? WHERE world_id = ?",
+                                (int(time.time()), world_id))
+            self.op_service.transition_status(op_id, OperationStatus.FAILED,
+                                              error_code="SPAWN_FAILED", message=spawn_res.spawn_error)
+            return op_id
+
+        # 5. Record starting state for supervisor loop polling
+        return op_id
+
+    def supervisor_tick(self) -> None:
+        """
+        Supervisor loop (runs every 1s when active, 15s idle).
+        Polls process status and evaluates readiness hierarchy (Doc 14 §3).
+        """
+        cursor = self.db.cursor()
+        cursor.execute("""
+            SELECT w.world_id, w.state, o.op_id, o.started_at
+            FROM world_instances w
+            LEFT JOIN operations o ON w.world_id = o.world_id AND o.status = 'Running'
+            WHERE w.state IN ('starting', 'running', 'stopping')
+        """)
+        active_worlds = cursor.fetchall()
+        now = int(time.time())
+
+        for row in active_worlds:
+            world_id = row["world_id"]
+            state = row["state"]
+            op_id = row["op_id"]
+            started_at = row["started_at"] or now
+
+            # Probe process status via platform adapter
+            probe = self.process_adapter.probe(world_id=world_id, session_token="")
+
+            if state == "starting":
+                # Check locked 120s Start timeout
+                if (now - started_at) > self.START_TIMEOUT_SECONDS:
+                    # Timeout reached: World -> error, Operation -> TimedOut
+                    with self.db.transaction():
+                        self.db.execute("UPDATE world_instances SET state = 'error', updated_at = ? WHERE world_id = ?",
+                                        (now, world_id))
+                    if op_id:
+                        self.op_service.transition_status(
+                            op_id, OperationStatus.TIMED_OUT,
+                            error_code="START_TIMEOUT", message="Start readiness timed out after 120s"
+                        )
+                    self.notifier.notify("world_error", "high", f"World {world_id} start timed out", world_id=world_id)
+                    continue
+
+                # Evaluate Readiness Level Hierarchy
+                readiness = self.readiness_evaluator.evaluate_readiness(
+                    handle=probe.handle, target_port=25565, rcon_config={"enabled": True}
+                )
+
+                # Gate transition to RUNNING on highest applicable readiness level
+                if readiness >= 4: # PROBE_OK or OPERATIONALLY_VALID
+                    with self.db.transaction():
+                        self.db.execute("UPDATE world_instances SET state = 'running', updated_at = ? WHERE world_id = ?",
+                                        (now, world_id))
+                        # Open RuntimeSession (Doc 7 §2.8)
+                        self.db.execute("""
+                            INSERT INTO runtime_sessions (session_id, world_id, started_at, port_used, created_at)
+                            VALUES (?, ?, ?, 25565, ?)
+                        """, (generate_ulid(), world_id, now, now))
+
+                    if op_id:
+                        self.op_service.transition_status(op_id, OperationStatus.COMPLETED)
+
+            elif state == "running":
+                # Detect sudden unexpected crash
+                if not probe.found or not probe.matched_launch:
+                    with self.db.transaction():
+                        self.db.execute("UPDATE world_instances SET state = 'crashed', updated_at = ? WHERE world_id = ?",
+                                        (now, world_id))
+                        self.db.execute("""
+                            UPDATE runtime_sessions SET ended_at = ?, end_reason = 'crashed'
+                            WHERE world_id = ? AND ended_at IS NULL
+                        """, (now, world_id))
+
+                    # Create CrashDetected Operation & Notification
+                    crash_op = self.op_service.create_operation("CrashDetected", world_id, "system", None)
+                    self.op_service.transition_status(crash_op, OperationStatus.COMPLETED)
+                    self.notifier.notify("crash_detected", "critical", f"World {world_id} crashed unexpectedly!", world_id=world_id)
+
+    def reconcile_on_startup(self) -> None:
+        """
+        STARTUP RECONCILIATION ENGINE (Doc 7 §6):
+        Reconstructs in-memory handle state and reconciles orphaned runtime_sessions.
+        Survives manager restarts seamlessly without killing running game worlds.
+        """
+        cursor = self.db.cursor()
+        cursor.execute("SELECT session_id, world_id FROM runtime_sessions WHERE ended_at IS NULL")
+        open_sessions = cursor.fetchall()
+        now = int(time.time())
+
+        for session in open_sessions:
+            session_id = session["session_id"]
+            world_id = session["world_id"]
+
+            # Probe underlying OS process
+            probe = self.process_adapter.probe(world_id=world_id, session_token=session_id)
+
+            if probe.found and probe.matched_launch:
+                # Process survived manager restart! Keep running state, re-attach handle.
+                print(f"[RECONCILE] Re-attached running world {world_id} (PID {probe.handle.pid})")
+            else:
+                # Process died while manager was down. Clean up session and set state to off/error.
+                with self.db.transaction():
+                    self.db.execute("""
+                        UPDATE runtime_sessions SET ended_at = ?, end_reason = 'reconciled_missing'
+                        WHERE session_id = ?
+                    """, (now, session_id))
+                    self.db.execute("UPDATE world_instances SET state = 'off', updated_at = ? WHERE world_id = ?",
+                                    (now, world_id))
+                print(f"[RECONCILE] Closed orphaned session for world {world_id}")
+
+
+# ==============================================================================
+# MODULE 3: BACKGROUND SCHEDULER & MISSED-RUN ENGINE
+# File: src/mcmanager/services/scheduler.py
+# ==============================================================================
+
+class SchedulerService:
+    TICK_INTERVAL_SECONDS = 30
+
+    def __init__(self, db_conn, op_service):
+        self.db = db_conn
+        self.op_service = op_service
+
+    def scheduler_tick(self) -> None:
+        """
+        Scheduler tick executes every 30 seconds.
+        Evaluates active schedules and dispatches operations if world lock is clear.
+        """
+        now = int(time.time())
+        cursor = self.db.cursor()
+        cursor.execute("""
+            SELECT schedule_id, world_id, job_type, cron_expression, next_run_at
+            FROM schedules
+            WHERE enabled = 1 AND next_run_at <= ?
+        """, (now,))
+        due_schedules = cursor.fetchall()
+
+        for sched in due_schedules:
+            sched_id = sched["schedule_id"]
+            world_id = sched["world_id"]
+            job_type = sched["job_type"]
+
+            # Check if world is currently locked by an in-flight operation
+            if self.op_service.is_world_locked(world_id):
+                # CONFLICT: Record missed run. DO NOT AUTO-REPLAY (Doc 8 §4)!
+                with self.db.transaction():
+                    self.db.execute("""
+                        INSERT INTO missed_run_records (
+                            missed_run_id, schedule_id, world_id, missed_at, reason, status, created_at
+                        ) VALUES (?, ?, ?, ?, 'operation_in_progress', 'pending', ?)
+                    """, (generate_ulid(), sched_id, world_id, now, now))
+                print(f"[SCHEDULER] World {world_id} locked. Recorded missed run for schedule {sched_id}")
+            else:
+                # Clear to run: Create scheduled operation
+                self.op_service.create_operation(
+                    op_type=job_type,
+                    world_id=world_id,
+                    actor_type="system",
+                    actor_user_id=None
+                )
+
+            # Update next_run_at timestamp regardless of conflict
+            next_run = now + 86400  # Simplified interval calculation
+            with self.db.transaction():
+                self.db.execute("UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE schedule_id = ?",
+                                (next_run, now, sched_id))
+
+
+# ==============================================================================
+# MODULE 4: TERMINAL-ONLY AUDIT & NOTIFICATION PIPELINES
+# File: src/mcmanager/services/audit.py & notifications.py
+# ==============================================================================
+
+class AuditService:
+    def __init__(self, db_conn):
+        self.db = db_conn
+
+    def record_operation_terminal(self, operation: dict) -> None:
+        """
+        AUDIT INVARIANT (Doc 6 §2.9):
+        Only terminal state transitions (Completed, Failed, Cancelled, TimedOut) produce audit entries.
+        Denormalizes actor username snapshot for historical audit immutability.
+        """
+        audit_id = generate_ulid()
+        now = int(time.time())
+
+        # Resolve actor username snapshot if user actor
+        actor_username = "system"
+        if operation["actor_user_id"]:
+            cursor = self.db.cursor()
+            cursor.execute("SELECT username FROM users WHERE user_id = ?", (operation["actor_user_id"],))
+            user_row = cursor.fetchone()
+            if user_row:
+                actor_username = user_row["username"]
+
+        event_type = f"operation.{operation['op_type'].lower()}.{operation['status'].lower()}"
+
+        with self.db.transaction():
+            self.db.execute("""
+                INSERT INTO audit_records (
+                    audit_id, event_type, actor_type, actor_user_id, actor_username_snapshot,
+                    world_id, op_id, status, details_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                audit_id, event_type, operation["actor_type"], operation["actor_user_id"],
+                actor_username, operation["world_id"], operation["op_id"], operation["status"],
+                json.dumps({"message": operation.get("message"), "error_code": operation.get("error_code")}),
+                now
+            ))
+
+
+class NotificationService:
+    def __init__(self, db_conn, sse_publisher):
+        self.db = db_conn
+        self.sse = sse_publisher
+
+    def notify(self, event_type: str, severity: str, message: str, world_id: Optional[str] = None) -> None:
+        notif_id = generate_ulid()
+        now = int(time.time())
+
+        with self.db.transaction():
+            self.db.execute("""
+                INSERT INTO notifications (notification_id, event_type, severity, world_id, message, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (notif_id, event_type, severity, world_id, message, now))
+
+        self.sse.publish_event("notification", {
+            "notification_id": notif_id, "severity": severity, "message": message, "world_id": world_id
+        })
+
+
+# ==============================================================================
+# MODULE 5: INTEGRATION TEST SUITE (STAGE 3 GATES)
+# File: tests/integration/test_stage3.py
+# ==============================================================================
+
+def test_operation_progress_does_not_write_audit_records(db_conn, op_service, audit_service):
+    """Asserts that progress updates do not produce audit records; terminal transition produces 1."""
+    # Given an operation
+    op_id = op_service.create_operation("Backup", "w_01", "user", "u_admin")
+
+    # When updating progress 5 times
+    for pct in [10, 30, 50, 70, 90]:
+        op_service.update_progress_in_memory(op_id, pct, "compressing")
+
+    # Then zero audit records must exist
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM audit_records WHERE op_id = ?", (op_id,))
+    assert cursor.fetchone()[0] == 0
+
+    # When operation reaches terminal state (Completed)
+    op_service.transition_status(op_id, OperationStatus.COMPLETED)
+
+    # Then exactly 1 audit record exists
+    cursor.execute("SELECT COUNT(*) FROM audit_records WHERE op_id = ?", (op_id,))
+    assert cursor.fetchone()[0] == 1
+
+
+def test_derived_world_lock_blocks_concurrent_operations(op_service):
+    """Asserts derived world lock query returns True when an operation is running."""
+    # Given an active running operation
+    op_id = op_service.create_operation("Start", "w_02", "user", "u_admin")
+    op_service.transition_status(op_id, OperationStatus.RUNNING)
+
+    # Then world_id 'w_02' is reported as locked
+    assert op_service.is_world_locked("w_02") is True
+
+    # When operation completes
+    op_service.transition_status(op_id, OperationStatus.COMPLETED)
+
+    # Then world_id 'w_02' lock is released
+    assert op_service.is_world_locked("w_02") is False
+
+
+def generate_ulid() -> str:
+    """Helper mock generating ordered 26-char ULID strings."""
+    import uuid
+    return str(uuid.uuid4()).replace("-", "")[:26].upper()

@@ -1,0 +1,211 @@
+================================================================================
+MCMANAGER SPECIFICATION — STAGE 5 (GATE 5) PSEUDOCODE
+================================================================================
+Scope: Presentation Shell, Thin API Gateway & Realtime Broadcast Hub (Work Package 5.0)
+Focus: Flask REST Blueprints, CSRF Double-Submit, BroadcastChannel SSE Multi-Tab Client, CSS Shell
+================================================================================
+
+MODULE 1: HTTP API ROUTES & CSRF MIDDLEWARE GATEWAY
+File Scope: src/mcmanager/app/web/api/ & src/mcmanager/app/web/middleware.py
+
+```python
+from flask import Blueprint, request, jsonify, g
+import hmac
+
+api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+# --- MIDDLEWARE & SECURITY HEADERS ---
+@api_bp.before_request
+def validate_csrf_and_session():
+    """CSRF Double-Submit Token Enforcement for state-changing routes."""
+    if request.method in ["POST", "PATCH", "DELETE"]:
+        header_token = request.headers.get("X-CSRF-Token")
+        cookie_token = request.cookies.get("csrf_token")
+        
+        if not header_token or not cookie_token or not hmac.compare_digest(header_token, cookie_token):
+            return jsonify({
+                "error": {
+                    "code": "CSRF_INVALID",
+                    "message": "CSRF token validation failed"
+                }
+            }), 403
+
+@api_bp.after_request
+def set_security_headers(response):
+    """Enforce strict Content-Security-Policy & Frame options."""
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self';"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+# --- THIN CONTROLLER ROUTE DELEGATION ---
+@api_bp.route("/worlds/<world_id>/start", methods=["POST"])
+def start_world_route(world_id: str):
+    """POST /api/worlds/{id}/start -> Thin Controller -> RuntimeService."""
+    actor_id = g.current_user_id
+    idempotency_key = request.headers.get("Idempotency-Key")
+
+    # Delegate to domain service layer
+    op_id = g.runtime_service.start_world(
+        world_id=world_id, 
+        actor_id=actor_id, 
+        idempotency_key=idempotency_key
+    )
+
+    # Return standard async 202 Accepted envelope
+    return jsonify({
+        "data": {
+            "operation": {
+                "op_id": op_id,
+                "status": "Queued"
+            }
+        },
+        "meta": {"op_id": op_id}
+    }), 202
+```
+
+================================================================================
+MODULE 2: BROADCASTCHANNEL SSE CLIENT & LEADER ELECTION
+File Scope: src/mcmanager/static/js/stream_client.js
+
+```javascript
+/**
+ * Single Shared Server-Sent Events (SSE) Client using BroadcastChannel Leader Election.
+ * Prevents multiple open browser tabs from saturating server connection limits.
+ */
+class StreamClientManager {
+    constructor() {
+        this.channel = new BroadcastChannel("mcmanager_stream_channel");
+        this.isLeader = false;
+        this.leaderHeartbeatTimer = null;
+        this.eventSource = null;
+        
+        this.initLeaderElection();
+    }
+
+    initLeaderElection() {
+        // Elect single leader tab across same-origin browser context
+        this.claimLeadership();
+
+        this.channel.onmessage = (event) => {
+            const { type, payload } = event.data;
+
+            if (type === "HEARTBEAT_CLAIM" && !this.isLeader) {
+                // Another tab is active leader; stay follower
+                this.resetLeaderTimeout();
+            } else if (type === "STREAM_EVENT" && !this.isLeader) {
+                // Follower Tab: Consume broadcasted stream payload
+                this.dispatchLocalEvent(payload.topic, payload.data);
+            }
+        };
+    }
+
+    claimLeadership() {
+        this.isLeader = true;
+        console.log("[StreamClient] Claimed BroadcastChannel leadership.");
+        
+        // Start single shared SSE connection to backend
+        this.connectBackendSSE();
+
+        // Broadcast heartbeat to followers every 3 seconds
+        this.leaderHeartbeatTimer = setInterval(() => {
+            this.channel.postMessage({ type: "HEARTBEAT_CLAIM" });
+        }, 3000);
+    }
+
+    connectBackendSSE() {
+        this.eventSource = new EventSource("/stream/events");
+
+        this.eventSource.onmessage = (event) => {
+            const parsed = JSON.parse(event.data);
+
+            // 1. Dispatch locally in leader tab
+            this.dispatchLocalEvent(parsed.topic, parsed.data);
+
+            // 2. Broadcast payload to all follower tabs
+            this.channel.postMessage({
+                type: "STREAM_EVENT",
+                payload: parsed
+            });
+        };
+    }
+
+    dispatchLocalEvent(topic, data) {
+        const customEvent = new CustomEvent(`sse:${topic}`, { detail: data });
+        window.dispatchEvent(customEvent);
+    }
+}
+
+// Initialize on page shell load
+const streamManager = new StreamClientManager();
+```
+
+================================================================================
+MODULE 3: PERSISTENT WEB SHELL & UI COMPONENT GEOMETRY
+File Scope: src/mcmanager/templates/shell.html & src/mcmanager/static/css/tokens.css
+
+```html
+<!-- Persistent Single-Page Shell Layout (Doc 4 & Doc 5) -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>mcmanager — Control Plane</title>
+    <link rel="stylesheet" href="/static/css/tokens.css">
+</head>
+<body class="theme-dark">
+    <!-- Top Nav Landmark Header -->
+    <nav class="nav-shell">
+        <div class="brand-title">mcmanager</div>
+        <div class="world-selector">
+            <select id="activeWorldSelect" onchange="switchWorldContext(this.value)">
+                <option value="">-- Manager Overview --</option>
+            </select>
+        </div>
+        <div class="user-profile-badge" id="userBadge">Operator</div>
+    </nav>
+
+    <!-- Main Content Shell -->
+    <main class="main-layout">
+        <article class="pane" id="mainPane">
+            <header class="pane-title-card">
+                <h1 id="paneTitle">Dashboard</h1>
+                <div class="pane-actions" id="paneActions"></div>
+            </header>
+
+            <section class="pane-content-card" id="paneContent">
+                <!-- Dynamically rendered page view modules (Main, Files, Logs, Properties) -->
+            </section>
+        </article>
+    </main>
+</body>
+</html>
+```
+
+================================================================================
+MODULE 4: E2E TEST SUITE & PERFORMANCE BENCHMARKS FOR STAGE 5
+File Scope: tests/e2e/test_stage5.py
+
+```python
+import pytest
+
+def test_csrf_double_submit_protection(client):
+    """Assert POST requests without matching CSRF tokens are rejected with 403."""
+    response = client.post(
+        "/api/worlds/w_1/start",
+        headers={"X-CSRF-Token": "invalid_token"},
+        cookies={"csrf_token": "valid_token"}
+    )
+    assert response.status_code == 403
+    assert response.json["error"]["code"] == "CSRF_INVALID"
+
+def test_iso25010_idle_performance_thresholds(metrics_service):
+    """Verify system remains under CPU and memory thresholds during idle state."""
+    metrics = metrics_service.get_idle_metrics(window_minutes=5)
+    
+    # Assert idle CPU usage < 2.0% reference threshold
+    assert metrics.cpu_5min_avg < 2.0
+    # Assert baseline RAM usage within documented range
+    assert metrics.ram_mb < 150.0
+```
+================================================================================

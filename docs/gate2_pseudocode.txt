@@ -1,0 +1,466 @@
+================================================================================
+MCMANAGER STAGE 2 (GATE 2) PSEUDOCODE SPECIFICATION
+================================================================================
+Target Scope: WP 2.0 (Core Data Persistence, Domain Model & Security — Team B)
+Gate 2 Release Condition:
+  1. `PRAGMA foreign_key_check` passes 100% clean on fresh migrations and schema updates.
+  2. All enforced FKs use `ON DELETE RESTRICT`. Historical records use plain-value snapshots.
+  3. Argon2id password verification and 10-minute step-up token auth pass security validation.
+  4. 3-tier configuration inheritance resolves correctly and out-of-date writes trigger `409 CONFIG_VERSION_CONFLICT`.
+
+--------------------------------------------------------------------------------
+MODULE 1: Relational Schema DDL & SQLite Engine (`infrastructure/sqlite/`)
+--------------------------------------------------------------------------------
+
+### 1.1 `infrastructure/sqlite/schema.sql`
+```sql
+-- SQLite Pragma Setup (Normative per Doc 7 §10)
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+PRAGMA synchronous = NORMAL;
+
+-- Table 2.1: manager
+CREATE TABLE IF NOT EXISTS manager (
+    manager_id TEXT PRIMARY KEY,
+    instance_name TEXT NOT NULL,
+    created_at INT NOT NULL,
+    updated_at INT NOT NULL
+);
+
+-- Table 2.2: global_settings
+CREATE TABLE IF NOT EXISTS global_settings (
+    key TEXT PRIMARY KEY,
+    value_json JSON NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    updated_at INT NOT NULL,
+    updated_by_user_id TEXT,
+    FOREIGN KEY (updated_by_user_id) REFERENCES users(user_id) ON DELETE RESTRICT
+);
+
+-- Table 2.3: users
+CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL, -- Argon2id encoded string
+    status TEXT NOT NULL, -- Active, Suspended, Tombstoned
+    created_at INT NOT NULL,
+    updated_at INT NOT NULL,
+    deleted_at INT
+);
+
+-- Table 2.4: roles & permissions
+CREATE TABLE IF NOT EXISTS roles (
+    role_id TEXT PRIMARY KEY,
+    role_name TEXT NOT NULL UNIQUE,
+    description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS permissions (
+    permission_id TEXT PRIMARY KEY,
+    perm_key TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS role_assignments (
+    assignment_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    world_id TEXT, -- NULL = manager-global scope
+    created_at INT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT,
+    FOREIGN KEY (role_id) REFERENCES roles(role_id) ON DELETE RESTRICT,
+    FOREIGN KEY (world_id) REFERENCES world_instances(world_id) ON DELETE RESTRICT
+);
+
+-- Table 2.5: world_instances
+CREATE TABLE IF NOT EXISTS world_instances (
+    world_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    server_type TEXT NOT NULL, -- Vanilla, Paper, Fabric, Forge
+    minecraft_version TEXT NOT NULL,
+    state TEXT NOT NULL, -- off, starting, running, stopping, backing_up, restoring, eula_required, crashed, error, deleted
+    eula_accepted INT NOT NULL DEFAULT 0, -- 0/1
+    version INT NOT NULL DEFAULT 1, -- Optimistic concurrency lock counter
+    created_at INT NOT NULL,
+    updated_at INT NOT NULL,
+    deleted_at INT
+);
+
+-- Table 2.6: world_settings
+CREATE TABLE IF NOT EXISTS world_settings (
+    world_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value_json JSON NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    updated_at INT NOT NULL,
+    PRIMARY KEY (world_id, key),
+    FOREIGN KEY (world_id) REFERENCES world_instances(world_id) ON DELETE RESTRICT
+);
+
+-- Table 2.8: runtime_sessions
+CREATE TABLE IF NOT EXISTS runtime_sessions (
+    session_id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    started_at INT NOT NULL,
+    ended_at INT,
+    end_reason TEXT, -- graceful_stop, forced_stop, crashed, emergency_stop, reconciled_missing
+    rcon_secret_id TEXT,
+    port_used INT NOT NULL,
+    java_runtime_id TEXT,
+    launch_args_snapshot JSON NOT NULL,
+    created_at INT NOT NULL,
+    FOREIGN KEY (world_id) REFERENCES world_instances(world_id) ON DELETE RESTRICT,
+    FOREIGN KEY (rcon_secret_id) REFERENCES secrets(secret_id) ON DELETE RESTRICT
+);
+-- Partial unique index enforcing: exactly ONE open runtime session per world
+CREATE UNIQUE INDEX IF NOT EXISTS idx_active_runtime_session 
+ON runtime_sessions (world_id) WHERE ended_at IS NULL;
+
+-- Table 2.9: operations (Milestone-only disk writes)
+CREATE TABLE IF NOT EXISTS operations (
+    op_id TEXT PRIMARY KEY,
+    op_type TEXT NOT NULL, -- CreateWorld, Start, Stop, Kill, Backup, Restore, Cleanup, Sync, ConfigEdit, CrashDetected, DeleteWorld
+    world_id TEXT, -- NULL = manager-global scope
+    actor_type TEXT NOT NULL, -- user, system
+    actor_user_id TEXT,
+    idempotency_key TEXT,
+    status TEXT NOT NULL, -- Created, Queued, Validating, Running, Completed, Failed, Cancelled, TimedOut
+    checkpoint JSON,
+    attempt INT NOT NULL DEFAULT 1,
+    compensates_operation_id TEXT,
+    intent_at INT NOT NULL,
+    started_at INT,
+    finished_at INT,
+    error_code TEXT,
+    message TEXT,
+    data_json JSON,
+    created_at INT NOT NULL,
+    updated_at INT NOT NULL,
+    FOREIGN KEY (world_id) REFERENCES world_instances(world_id) ON DELETE RESTRICT,
+    FOREIGN KEY (actor_user_id) REFERENCES users(user_id) ON DELETE RESTRICT,
+    FOREIGN KEY (compensates_operation_id) REFERENCES operations(op_id) ON DELETE RESTRICT
+);
+-- Required index backing the derived world lock (Doc 9 §1.1)
+CREATE INDEX IF NOT EXISTS idx_operations_world_status 
+ON operations (world_id, status);
+
+-- Table 2.17: audit_records (T1 — Append-only, Terminal & Auth events only)
+CREATE TABLE IF NOT EXISTS audit_records (
+    audit_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    actor_type TEXT NOT NULL, -- user, system
+    actor_user_id TEXT, -- Plain-value or FK; deletability boundary uses snapshot
+    actor_username_snapshot TEXT NOT NULL,
+    device_id_snapshot TEXT,
+    world_id TEXT,
+    op_id TEXT,
+    payload_json JSON NOT NULL,
+    created_at INT NOT NULL
+    -- No foreign keys on snapshots so audit records survive user soft-deletion
+);
+
+-- Table 2.24: secrets (Encrypted store)
+CREATE TABLE IF NOT EXISTS secrets (
+    secret_id TEXT PRIMARY KEY,
+    secret_type TEXT NOT NULL, -- rcon_password, sync_token, api_key
+    encrypted_value TEXT NOT NULL,
+    created_at INT NOT NULL,
+    updated_at INT NOT NULL
+);
+```
+
+### 1.2 `infrastructure/sqlite/connection.py`
+```python
+import sqlite3
+import os
+from typing import Generator
+
+class SQLiteConnectionFactory:
+    """Single-writer connection manager for SQLite in WAL mode."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    def get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        # Apply mandatory pragmas on every connection
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def check_foreign_keys(self, conn: sqlite3.Connection) -> None:
+        """Verify schema foreign key integrity."""
+        cursor = conn.execute("PRAGMA foreign_key_check;")
+        violations = cursor.fetchall()
+        if violations:
+            raise RuntimeError(f"Foreign key violations detected: {violations}")
+```
+
+---
+
+--------------------------------------------------------------------------------
+MODULE 2: Domain Model & Value Objects (`domain/`)
+--------------------------------------------------------------------------------
+
+### 2.1 `domain/value_objects.py`
+```python
+from enum import Enum
+
+class WorldState(str, Enum):
+    OFF = "off"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    BACKING_UP = "backing_up"
+    RESTORING = "restoring"
+    EULA_REQUIRED = "eula_required"
+    CRASHED = "crashed"
+    ERROR = "error"
+    DELETED = "deleted"
+
+class OperationStatus(str, Enum):
+    CREATED = "Created"
+    QUEUED = "Queued"
+    VALIDATING = "Validating"
+    RUNNING = "Running"
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
+    TIMED_OUT = "TimedOut"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (
+            OperationStatus.COMPLETED,
+            OperationStatus.FAILED,
+            OperationStatus.CANCELLED,
+            OperationStatus.TIMED_OUT,
+        )
+
+class ServerType(str, Enum):
+    VANILLA = "Vanilla"
+    PAPER = "Paper"
+    FABRIC = "Fabric"
+    FORGE = "Forge"
+
+class LogChannel(str, Enum):
+    MINECRAFT = "minecraft"
+    CRASH_REPORTS = "crash_reports"
+    BACKUP_RESTORE = "backup_restore"
+    PANEL_ACTIVITY = "panel_activity"
+    PANEL_ERRORS = "panel_errors"
+    DEBUG = "debug"
+    SYNC = "sync"
+    MANAGER_ACTION = "manager_action"
+```
+
+### 2.2 `domain/exceptions.py`
+```python
+class DomainError(Exception):
+    """Base domain exception."""
+    def __init__(self, message: str, error_code: str):
+        super().__init__(message)
+        self.message = message
+        self.error_code = error_code
+
+class PreconditionFailedError(DomainError):
+    def __init__(self, message: str, error_code: str = "PRECONDITION_FAILED"):
+        super().__init__(message, error_code)
+
+class ConfigVersionConflictError(DomainError):
+    def __init__(self, message: str = "Configuration version conflict"):
+        super().__init__(message, error_code="CONFIG_VERSION_CONFLICT")
+
+class StepUpRequiredError(DomainError):
+    def __init__(self, message: str = "Step-up authentication required"):
+        super().__init__(message, error_code="STEP_UP_REQUIRED")
+```
+
+---
+
+--------------------------------------------------------------------------------
+MODULE 3: Security, Auth & Secrets Store (`services/auth.py`, `infrastructure/secrets.py`)
+--------------------------------------------------------------------------------
+
+### 3.1 `services/auth.py`
+```python
+import time
+from typing import Optional
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from mcmanager.domain.exceptions import StepUpRequiredError, PreconditionFailedError
+
+class AuthService:
+    def __init__(self, user_repo, session_repo):
+        self.user_repo = user_repo
+        self.session_repo = session_repo
+        self.ph = PasswordHasher(
+            time_cost=3, memory_cost=65536, parallelism=4  # Argon2id RFC 9106 standards
+        )
+
+    def hash_password(self, plain_password: str) -> str:
+        return self.ph.hash(plain_password)
+
+    def verify_password(self, plain_password: str, password_hash: str) -> bool:
+        try:
+            return self.ph.verify(password_hash, plain_password)
+        except VerifyMismatchError:
+            return False
+
+    def authenticate_login(self, username: str, plain_password: str, device_id: str) -> dict:
+        user = self.user_repo.find_by_username(username)
+        if not user or user.status != "Active":
+            # Write failed audit record
+            self.write_login_audit(username, success=False, device_id=device_id)
+            raise PreconditionFailedError("Invalid credentials", error_code="AUTH_FAILED")
+
+        if not self.verify_password(plain_password, user.password_hash):
+            self.write_login_audit(username, success=False, device_id=device_id)
+            raise PreconditionFailedError("Invalid credentials", error_code="AUTH_FAILED")
+
+        # Create session
+        session = self.session_repo.create_session(user_id=user.user_id, device_id=device_id)
+        self.write_login_audit(username, success=True, device_id=device_id)
+        return {"session_token": session.token, "user_id": user.user_id}
+
+    def verify_step_up(self, session_token: str, max_age_seconds: int = 600) -> bool:
+        """Validate 10-minute step-up authentication window for sensitive routes."""
+        session = self.session_repo.find_by_token(session_token)
+        if not session:
+            raise StepUpRequiredError()
+
+        now = int(time.time())
+        if session.last_step_up_at is None or (now - session.last_step_up_at) > max_age_seconds:
+            raise StepUpRequiredError("Operation requires fresh re-authentication within 10 minutes")
+
+        return True
+
+    def reset_user_password(self, operator_user_id: str, target_user_id: str, new_password: str):
+        """Superadmin operator path to reset another user's password."""
+        operator = self.user_repo.find_by_id(operator_user_id)
+        if not operator.is_superadmin:
+            raise PreconditionFailedError("Only Superadmins can reset user passwords", "FORBIDDEN")
+
+        new_hash = self.hash_password(new_password)
+        self.user_repo.update_password(target_user_id, new_hash)
+```
+
+---
+
+--------------------------------------------------------------------------------
+MODULE 4: 3-Tier Configuration Inheritance Service (`services/configuration.py`)
+--------------------------------------------------------------------------------
+
+### 4.1 `services/configuration.py`
+```python
+import json
+from typing import Any, Dict
+from mcmanager.domain.exceptions import ConfigVersionConflictError
+
+class ConfigurationService:
+    """3-Tier Configuration Resolver & Optimistic Concurrency Manager."""
+
+    def __init__(self, global_settings_repo, world_settings_repo):
+        self.global_repo = global_settings_repo
+        self.world_repo = world_settings_repo
+
+    def resolve_effective_settings(self, world_id: str) -> Dict[str, Any]:
+        """
+        3-Tier Resolution Logic:
+        Tier 1: Global baseline defaults
+        Tier 2: World-specific overrides (if present)
+        Tier 3: Effective merged settings
+        """
+        global_settings = self.global_repo.get_all_as_dict()
+        world_overrides = self.world_repo.get_all_for_world(world_id)
+
+        effective = dict(global_settings)
+        # Apply world overrides over global defaults
+        for key, override in world_overrides.items():
+            if override.get("value") is not None:
+                effective[key] = override["value"]
+
+        return effective
+
+    def update_world_setting(
+        self, world_id: str, key: str, value: Any, submitted_version: int, user_id: str
+    ) -> int:
+        """
+        Compare-and-Swap Optimistic Version Lock Update.
+        Mismatch between submitted_version and DB version -> 409 CONFIG_VERSION_CONFLICT.
+        """
+        current_setting = self.world_repo.get(world_id, key)
+        current_version = current_setting.version if current_setting else 0
+
+        if submitted_version != current_version:
+            raise ConfigVersionConflictError(
+                f"Config update failed for '{key}'. Submitted version {submitted_version} "
+                f"does not match current version {current_version}."
+            )
+
+        new_version = current_version + 1
+        self.world_repo.upsert(
+            world_id=world_id,
+            key=key,
+            value_json=json.dumps(value),
+            version=new_version,
+            updated_by=user_id
+        )
+        return new_version
+```
+
+---
+
+--------------------------------------------------------------------------------
+MODULE 5: Integration & Migration Tests (`tests/integration/test_stage2.py`)
+--------------------------------------------------------------------------------
+
+```python
+import pytest
+import sqlite3
+from mcmanager.infrastructure.sqlite.connection import SQLiteConnectionFactory
+from mcmanager.services.auth import AuthService
+from mcmanager.services.configuration import ConfigurationService
+from mcmanager.domain.exceptions import ConfigVersionConflictError
+
+def test_sqlite_foreign_key_enforcement(tmp_path):
+    db_file = str(tmp_path / "test_mcmanager.db")
+    factory = SQLiteConnectionFactory(db_file)
+    conn = factory.get_connection()
+    
+    # Initialize schema
+    with open("src/mcmanager/infrastructure/sqlite/schema.sql") as f:
+        conn.executescript(f.read())
+    
+    # Assert PRAGMA foreign_key_check passes cleanly
+    factory.check_foreign_keys(conn)
+    
+    # Assert ON DELETE RESTRICT prevents deleting referenced user
+    conn.execute(
+        "INSERT INTO users (user_id, username, password_hash, status, created_at, updated_at) "
+        "VALUES ('u1', 'admin', 'hash', 'Active', 1000, 1000);"
+    )
+    conn.execute(
+        "INSERT INTO global_settings (key, value_json, version, updated_at, updated_by_user_id) "
+        "VALUES ('port', '25565', 1, 1000, 'u1');"
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM users WHERE user_id = 'u1';")
+
+def test_optimistic_version_lock_conflict(config_service: ConfigurationService):
+    # Seed initial setting at v1
+    v1 = config_service.update_world_setting(
+        world_id="w1", key="ram_mb", value=2048, submitted_version=0, user_id="u1"
+    )
+    assert v1 == 1
+
+    # Concurrent edit attempt submitting stale v0 should fail with 409 conflict
+    with pytest.raises(ConfigVersionConflictError):
+        config_service.update_world_setting(
+            world_id="w1", key="ram_mb", value=4096, submitted_version=0, user_id="u2"
+        )
+```

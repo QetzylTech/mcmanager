@@ -8,7 +8,8 @@ adapters implement. Services depend on this interface.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Protocol
 
 from app.domain.value_objects import EulaState, ServerReadinessLevel, ServerType
 
@@ -75,11 +76,13 @@ def detect_eula(world_dir: str, file_name: str = 'eula.txt') -> EulaState:
     return EulaState.UNACCEPTED
 
 
-def write_eula_acceptance(world_dir: str, file_name: str = 'eula.txt') -> None:
+def write_eula_acceptance(
+    world_dir: str, file_name: str = 'eula.txt', *, operator_id: str | None = None
+) -> None:
     """Write an accepted ``eula.txt`` — the ONLY ``eula=true`` writer.
 
     Called exclusively after explicit audited operator acceptance
-    (ConfigEdit Entity=eula, Doc 14 section 5).
+    (ConfigEdit Entity=eula, Doc 14 section 5 / gate1 Module 4).
     """
     path = os.path.join(world_dir, file_name)
     with open(path, 'w', encoding='utf-8', newline='\n') as handle:
@@ -88,6 +91,9 @@ def write_eula_acceptance(world_dir: str, file_name: str = 'eula.txt') -> None:
             'agreement to our EULA.\n'
         )
         handle.write('# https://aka.ms/MinecraftEULA\n')
+        if operator_id:
+            handle.write('# Explicitly accepted via mcmanager audit pipeline\n')
+            handle.write(f'# Accepted by Operator: {operator_id}\n')
         handle.write('eula=true\n')
 
 
@@ -259,3 +265,90 @@ def java_major_compatible(
     if record is None:
         return False
     return java_major in record.supported_major
+
+
+@dataclass(frozen=True)
+class LaunchContext:
+    """Launch-time inputs the pre-spawn gate validates (Doc 14 §4)."""
+
+    world_id: str
+    server_type: ServerType
+    mc_version: str
+    world_dir: str
+    java_path: str
+    server_jar_path: str
+    port: int
+    rcon_enabled: bool = False
+    rcon_port: int = 0
+    launch_args: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GateResult:
+    """Outcome of the pre-launch gate."""
+
+    passed: bool
+    error_code: str | None = None
+    detail: str | None = None
+    eula_state: EulaState | None = None
+    java_major: int | None = None
+
+
+class MinecraftRconError(Exception):
+    """RCON transport/protocol/allowlist failure (port-level)."""
+
+
+class MinecraftRconPort(Protocol):
+    """Session-scoped RCON client (Doc 14 §8)."""
+
+    def connect(self) -> None: ...
+
+    def ping(self) -> bool: ...
+
+    def command(self, command: str) -> str: ...
+
+    def close(self) -> None: ...
+
+
+class MinecraftServerPort(Protocol):
+    """Minecraft adapter port injected at the composition root (Doc 12 / G1-1)."""
+
+    def capabilities_for(self, server_type: ServerType) -> MinecraftCapabilities: ...
+
+    def target_readiness_level(self, server_type: ServerType) -> ServerReadinessLevel: ...
+
+    def evaluate_readiness(
+        self,
+        *,
+        server_type: ServerType,
+        caps: MinecraftCapabilities,
+        state: ReadinessState,
+        rcon_enabled: bool = True,
+    ) -> ServerReadinessLevel: ...
+
+    def build_readiness_state(
+        self,
+        *,
+        process_alive: bool,
+        port: int,
+        rcon_ready: bool = False,
+        probe_ok: bool = False,
+        operationally_valid: bool = False,
+        host: str = '127.0.0.1',
+        port_timeout_s: float = 1.0,
+        host_is_minecraft: bool = True,
+    ) -> ReadinessState: ...
+
+    def validate_launch(self, context: LaunchContext) -> GateResult: ...
+
+    def build_launch_argv(
+        self, java_path: str, java_args: list[str], jar: str, jar_args: list[str]
+    ) -> list[str]: ...
+
+    def detect_eula(self, world_dir: str) -> EulaState: ...
+
+    def accept_eula(self, world_dir: str, operator_id: str | None = None) -> None: ...
+
+    def open_rcon(
+        self, host: str, port: int, password: str, timeout_s: float = 5.0
+    ) -> MinecraftRconPort: ...

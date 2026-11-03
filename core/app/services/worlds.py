@@ -31,14 +31,17 @@ from app.domain.value_objects import (
     ServerType,
     WorldState,
 )
-from app.infrastructure.minecraft.capabilities import capabilities_for
-from app.infrastructure.minecraft.gate import LaunchContext, build_launch_argv, validate_launch
-from app.infrastructure.minecraft.rcon import RconClient, RconError
-from app.infrastructure.minecraft.readiness import build_state, evaluate, target_level_for
 from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
+from app.ports.minecraft import (
+    LaunchContext,
+    MinecraftRconError,
+    MinecraftRconPort,
+    MinecraftServerPort,
+)
 from app.ports.process_control import (
     ProbeFingerprint,
+    ProcessControlPort,
     ProcessHandle,
     SpawnRequest,
 )
@@ -86,15 +89,17 @@ class WorldsService:
         store: SqliteStore,
         clock: Clock,
         operations: OperationService,
-        process_adapter: object,
+        process_adapter: ProcessControlPort,
         secrets: SecretsStore,
+        minecraft: MinecraftServerPort,
         logs: object | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._operations = operations
-        self._adapter = process_adapter  # ProcessControlPort
+        self._adapter = process_adapter
         self._secrets = secrets
+        self._minecraft = minecraft
         self._logs = logs  # LogFanout | None
 
     # ------------------------------------------------------------------ start
@@ -116,7 +121,7 @@ class WorldsService:
         ):
             raise WorldConflictError(f'world {world_id} is already {pre["state"]}')
         pre_context = self._launch_context(pre)
-        pre_gate = validate_launch(pre_context)
+        pre_gate = self._minecraft.validate_launch(pre_context)
         if not pre_gate.passed:
             if pre_gate.error_code == "EULA_NOT_ACCEPTED":
                 self._set_world_state(world_id, WorldState.EULA_REQUIRED)
@@ -148,7 +153,7 @@ class WorldsService:
                 raise WorldConflictError(f'world {world_id} is already {world["state"]}')
 
             context = self._launch_context(world)
-            gate = validate_launch(context)
+            gate = self._minecraft.validate_launch(context)
             if not gate.passed:
                 self._fail_op(op_id, gate.error_code or "GATE_REJECTED", gate.detail)
                 if gate.error_code == "EULA_NOT_ACCEPTED":
@@ -159,6 +164,7 @@ class WorldsService:
 
             rcon_port, rcon_password = self._provision_rcon(context, world_id)
             argv = self._launch_command(world, context)
+            session_id = f"rs_{uuid.uuid4().hex[:16]}"
             self._set_world_state(world_id, WorldState.STARTING)
             result = self._adapter.spawn(
                 SpawnRequest(
@@ -166,6 +172,8 @@ class WorldsService:
                     launch_command=argv,
                     cwd=context.world_dir,
                     env={},
+                    session_id=session_id,
+                    log_dir=str(self._log_root()),
                 )
             )
             if result.handle is None:
@@ -181,6 +189,7 @@ class WorldsService:
                 argv=argv,
                 rcon_port=rcon_port,
                 rcon_password=rcon_password,
+                session_id=session_id,
             )
             if self._logs is not None:
                 self._attach_log_sink(world_id, result.handle)

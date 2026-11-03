@@ -31,7 +31,7 @@ import psutil
 
 from app.domain.value_objects import Signal
 from app.platform.process.base import BaseProcessAdapter, LiveRegistry, RegistryEntry
-from app.platform.process.tailing import ProcessLineReader
+from app.platform.process.tailing import ProcessLineReader, session_log_for
 from app.ports.process_control import (
     ProbeFingerprint,
     ProbeResult,
@@ -169,18 +169,16 @@ def _pid_matches(pid: int, spawn_epoch: float) -> bool:
 
 @dataclass(frozen=True)
 class WindowsHandle:
-    """Opaque Windows process-tree handle."""
+    """Opaque Windows process-tree handle (gate1 Module 1 fields)."""
 
     world_id: str
     pid: int
     spawn_epoch: float
-    job_handle: int
+    process_group_id: int | None = None
+    job_handle: object | None = None
 
     def identity_matches(self) -> bool:
         return _pid_matches(self.pid, self.spawn_epoch)
-
-    def process_group_id(self) -> int | None:
-        return self.job_handle
 
 
 class WindowsProcessAdapter(BaseProcessAdapter):
@@ -245,6 +243,7 @@ class WindowsProcessAdapter(BaseProcessAdapter):
         popen = entry.popen
         if popen is None:
             return
+        durable = session_log_for(request.log_dir, request.session_id or request.world_id)
         for channel, stream in (
             (request.stdout_channel, popen.stdout),
             (request.stderr_channel, popen.stderr),
@@ -255,10 +254,11 @@ class WindowsProcessAdapter(BaseProcessAdapter):
             reader = ProcessLineReader(
                 stream,
                 world_id=entry.handle.world_id,
-                session_token='',
+                session_token=request.session_id,
                 channel=channel,
                 buffer=buffer,
                 sink=None,
+                durable_log=durable,
             )
             reader.start()
             entry.readers.append(reader)

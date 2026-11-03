@@ -50,9 +50,20 @@ def evaluate(
     a port-bound-only check is the minimum; the hierarchy is authoritative.
     """
     target = target_level_for(server_type)
-    # A capability the type doesn't have cannot be claimed.
-    if not rcon_enabled and target is not ServerReadinessLevel.PROCESS_ALIVE:
-        target = ServerReadinessLevel.PORT_BOUND
+    rcon_applicable = bool(caps.rcon and rcon_enabled)
+    if not rcon_applicable:
+        # RCON is not an applicable ladder rung (gate1 Module 4: skip level 3).
+        state = ReadinessState(
+            process_alive=state.process_alive,
+            port_bound=state.port_bound,
+            rcon_ready=True,
+            probe_ok=state.probe_ok,
+            operationally_valid=state.operationally_valid,
+        )
+        if target is ServerReadinessLevel.OPERATIONALLY_VALID:
+            target = ServerReadinessLevel.PROBE_OK
+    if target is ServerReadinessLevel.OPERATIONALLY_VALID and not caps.paper_api:
+        target = ServerReadinessLevel.PROBE_OK
     return evaluate_readiness(state, target)
 
 

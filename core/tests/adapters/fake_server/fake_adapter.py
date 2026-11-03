@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 
 from app.domain.value_objects import ExitClass, ProcessState, Signal
-from app.platform.process.tailing import LogRingBuffer
+from app.platform.process.tailing import LogRingBuffer, ingest_log_line, session_log_for
 from app.ports.process_control import (
     ProbeFingerprint,
     ProbeResult,
@@ -78,13 +78,12 @@ class FakeHandle:
     world_id: str
     pid: int
     spawn_epoch: float
+    process_group_id: int | None = None
+    job_handle: object | None = None
     exit_class: ExitClass = ExitClass.RUNNING
 
     def identity_matches(self) -> bool:
         return True
-
-    def process_group_id(self) -> int | None:
-        return self.pid
 
 
 class _VirtualProcess:
@@ -120,6 +119,9 @@ class _VirtualProcess:
         self._started = time.monotonic()
         self._listener: socket.socket | None = None
         self._rcon_listener: socket.socket | None = None
+        self._durable = session_log_for(
+            request.log_dir, request.session_id or request.world_id
+        )
 
         # Last-wins like argparse: build_request prepends its own marker and
         # tests append a more specific one (C12) that must win.
@@ -144,7 +146,7 @@ class _VirtualProcess:
     # -- output ---------------------------------------------------------------
 
     def _emit(self, line: str) -> None:
-        self.buffer.append('stdout', line)
+        ingest_log_line(self.buffer, 'stdout', line, durable_log=self._durable)
 
     # -- sockets --------------------------------------------------------------
 
@@ -291,6 +293,8 @@ class _VirtualProcess:
                     world_id=self.handle.world_id,
                     pid=self.handle.pid,
                     spawn_epoch=self.handle.spawn_epoch,
+                    process_group_id=self.handle.process_group_id,
+                    job_handle=self.handle.job_handle,
                     exit_class=ExitClass.CRASHED,
                 )
                 return
@@ -334,7 +338,12 @@ class FakeProcessAdapter:
         with self._mutex:
             self._next_pid += 1
             pid = self._next_pid
-        handle = FakeHandle(world_id=request.world_id, pid=pid, spawn_epoch=time.time())
+        handle = FakeHandle(
+            world_id=request.world_id,
+            pid=pid,
+            spawn_epoch=time.time(),
+            process_group_id=pid,
+        )
         process = _VirtualProcess(request, handle)
         with self._mutex:
             self._processes[request.world_id] = process
@@ -460,7 +469,7 @@ class FakeProcessAdapter:
         with self._mutex:
             self._processes.pop(world_id, None)
 
-    def terminate(self, handle: ProcessHandle, *, graceful_deadline_s: int) -> TerminateResult:
+    def terminate(self, handle: ProcessHandle, graceful_deadline_s: int = 10) -> TerminateResult:
         # PID-reuse guard (C7): a forged handle must never reach the process.
         process = self._resolve(handle)
         if process is None:
@@ -485,6 +494,8 @@ class FakeProcessAdapter:
             world_id=handle.world_id,
             pid=handle.pid,
             spawn_epoch=handle.spawn_epoch,
+            process_group_id=getattr(handle, 'process_group_id', handle.pid),
+            job_handle=getattr(handle, 'job_handle', None),
             exit_class=ExitClass.FORCED,
         )
         return TerminateResult(

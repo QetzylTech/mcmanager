@@ -1,0 +1,289 @@
+================================================================================
+GATE 1 PSEUDOCODE SPECIFICATION: PROCESS CONTROL & PLATFORM ADAPTERS (WP 1.0)
+================================================================================
+
+MODULE 1: PROCESS CONTROL PORT & VALUE OBJECTS (ports/process_control.py)
+--------------------------------------------------------------------------------
+from enum import Enum
+from dataclasses import dataclass
+from typing import Protocol, List, Dict, Optional
+
+class ExitClass(str, Enum):
+    """Closed enum representing process exit classifications."""
+    RUNNING = "running"
+    GRACEFUL = "graceful"
+    FORCED = "forced"
+    CRASHED = "crashed"
+    RECONCILED_MISSING = "reconciled_missing"
+    SPAWN_FAILED = "spawn_failed"
+
+@dataclass(frozen=True)
+class ProcessHandle:
+    world_id: str
+    pid: int
+    spawn_epoch: int
+    process_group_id: Optional[int] = None
+    job_handle: Optional[object] = None  # Windows Job Object handle
+
+@dataclass(frozen=True)
+class SpawnRequest:
+    world_id: str
+    launch_command: List[str]  # Data-driven argv list (shell=False mandatory)
+    cwd: str
+    env: Dict[str, str]
+
+@dataclass(frozen=True)
+class SpawnResult:
+    handle: Optional[ProcessHandle]
+    started_at: int
+    spawn_error: Optional[str] = None
+
+@dataclass(frozen=True)
+class ProcessStatus:
+    alive: bool
+    exit_code: Optional[int]
+    exit_ts: Optional[int]
+    state_class: ExitClass
+
+@dataclass(frozen=True)
+class ProbeResult:
+    found: bool
+    handle: Optional[ProcessHandle]
+    matched_launch: bool
+
+class ProcessControlPort(Protocol):
+    """Abstract port interface for platform-agnostic process supervision."""
+    
+    def spawn(self, request: SpawnRequest) -> SpawnResult: ...
+    def probe(self, world_id: str, session_token: str) -> ProbeResult: ...
+    def send_signal(self, handle: ProcessHandle, signal_num: int) -> bool: ...
+    def terminate(self, handle: ProcessHandle, graceful_deadline_s: int) -> bool: ...
+    def poll(self, handle: ProcessHandle) -> ProcessStatus: ...
+
+
+MODULE 2: OS PROCESS ADAPTERS (platform/process/posix.py & windows.py)
+--------------------------------------------------------------------------------
+# --- POSIX ADAPTER (posix.py) ---
+import os
+import signal
+import subprocess
+
+class POSIXProcessAdapter:
+    def spawn(self, request: SpawnRequest) -> SpawnResult:
+        # Guarantee wrapper-less direct spawn without shell interpolation
+        try:
+            process = subprocess.Popen(
+                request.launch_command, # Explicit argv list
+                cwd=request.cwd,
+                env=request.env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True  # Creates independent process group (setsid)
+            )
+            handle = ProcessHandle(
+                world_id=request.world_id,
+                pid=process.pid,
+                spawn_epoch=current_timestamp(),
+                process_group_id=process.pid
+            )
+            return SpawnResult(handle=handle, started_at=current_timestamp())
+        except Exception as err:
+            return SpawnResult(handle=None, started_at=current_timestamp(), spawn_error=str(err))
+
+    def terminate(self, handle: ProcessHandle, graceful_deadline_s: int) -> bool:
+        # Step 1: Attempt graceful shutdown via RCON / SIGTERM to group
+        os.killpg(handle.process_group_id, signal.SIGTERM)
+        
+        # Step 2: Wait up to deadline; if tree survives, escalate to forced SIGKILL
+        if not wait_for_exit(handle, timeout=graceful_deadline_s):
+            os.killpg(handle.process_group_id, signal.SIGKILL) # Reaches all subprocesses
+        return True
+
+
+# --- WINDOWS ADAPTER (windows.py) ---
+class WindowsProcessAdapter:
+    def spawn(self, request: SpawnRequest) -> SpawnResult:
+        # Create Win32 Job Object to track the process tree
+        job_handle = CreateJobObject()
+        
+        # HARD INVARIANT: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE is NOT set
+        # Ensures Minecraft worlds survive manager restarts identically to POSIX
+        SetJobObjectLimits(job_handle, kill_on_close=False)
+        
+        process = subprocess.Popen(
+            request.launch_command,
+            cwd=request.cwd,
+            env=request.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+        AssignProcessToJobObject(job_handle, process.pid)
+        
+        handle = ProcessHandle(
+            world_id=request.world_id,
+            pid=process.pid,
+            spawn_epoch=current_timestamp(),
+            job_handle=job_handle
+        )
+        return SpawnResult(handle=handle, started_at=current_timestamp())
+
+    def terminate(self, handle: ProcessHandle, graceful_deadline_s: int) -> bool:
+        # Send CTRL_BREAK_EVENT signal to console group
+        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, handle.pid)
+        
+        if not wait_for_exit(handle, timeout=graceful_deadline_s):
+            # Escalation: Force terminate entire Job Object tree
+            TerminateJobObject(handle.job_handle, exit_code=1)
+        return True
+
+
+MODULE 3: OUTPUT PIPE TAILING & LOG FILTERING (platform/process/tailing.py)
+--------------------------------------------------------------------------------
+import collections
+import os
+
+class LogStreamTailer:
+    def __init__(self, world_id: str, session_id: str, log_dir: str):
+        self.world_id = world_id
+        # Bounded 5000-line memory buffer for fast SSE replay
+        self.ring_buffer = collections.deque(maxlen=5000)
+        self.log_file_path = os.path.join(log_dir, f"{session_id}.log")
+        self.verbose_logging = os.getenv("VERBOSE_LOGGING", "false").lower() == "true"
+
+    def process_pipe_output(self, stream, channel_name: str):
+        with open(self.log_file_path, "a", encoding="utf-8") as disk_log:
+            for line in iter(stream.readline, ""):
+                line_str = line.strip()
+                
+                # Filter debug channels if VERBOSE_LOGGING is disabled
+                is_debug = channel_name == "debug" or "[DEBUG]" in line_str
+                if is_debug and not self.verbose_logging:
+                    continue  # Suppress debug lines in production mode
+
+                log_entry = {
+                    "world_id": self.world_id,
+                    "channel": channel_name,
+                    "line": line_str,
+                    "timestamp": current_timestamp()
+                }
+
+                # 1. Store in memory ring buffer for live SSE fan-out
+                self.ring_buffer.append(log_entry)
+                
+                # 2. Write to durable on-disk log file
+                disk_log.write(f"[{channel_name}] {line_str}\n")
+                disk_log.flush()
+
+
+MODULE 4: SERVER READINESS EVALUATOR & EULA GATE (infrastructure/minecraft/)
+--------------------------------------------------------------------------------
+# --- READINESS EVALUATOR (readiness.py) ---
+from enum import IntEnum
+
+class ServerReadinessLevel(IntEnum):
+    PROCESS_ALIVE = 1
+    PORT_BOUND = 2
+    RCON_READY = 3
+    PROBE_OK = 4
+    OPERATIONALLY_VALID = 5
+
+class ReadinessEvaluator:
+    def evaluate_readiness(self, handle: ProcessHandle, target_port: int, rcon_config: dict) -> ServerReadinessLevel:
+        # Level 1: Process is alive past quick-crash window
+        if not is_process_alive(handle):
+            return ServerReadinessLevel.PROCESS_ALIVE
+
+        # Level 2: Target TCP port is bound and listening
+        if not is_tcp_port_listening(target_port):
+            return ServerReadinessLevel.PROCESS_ALIVE
+        
+        # Level 3: RCON connection & ping succeeds (if enabled)
+        if rcon_config.get("enabled"):
+            if not rcon_ping_success(rcon_config):
+                return ServerReadinessLevel.PORT_BOUND
+        
+        # Level 4: Minecraft Protocol Probe succeeds
+        if not minecraft_protocol_ping(target_port):
+            return ServerReadinessLevel.RCON_READY
+            
+        # Level 5: Operationally valid (e.g. RCON 'list' command succeeds)
+        if rcon_config.get("enabled") and execute_rcon_command("list"):
+            return ServerReadinessLevel.OPERATIONALLY_VALID
+
+        # Log lines ("Done!") serve only as advisory evidence, never sole signal
+        return ServerReadinessLevel.PROBE_OK
+
+
+# --- EULA MANAGEMENT (eula.py) ---
+class EulaManager:
+    def check_eula_state(self, world_dir: str) -> str:
+        eula_path = os.path.join(world_dir, "eula.txt")
+        if not os.path.exists(eula_path):
+            return "not_present"
+        
+        with open(eula_path, "r") as f:
+            content = f.read()
+            if "eula=true" in content:
+                return "accepted"
+        return "unaccepted"
+
+    def write_explicit_acceptance(self, world_dir: str, operator_id: str):
+        # HARD INVARIANT: Written ONLY after explicit audited POST /api/worlds/{id}/eula/accept
+        eula_path = os.path.join(world_dir, "eula.txt")
+        with open(eula_path, "w") as f:
+            f.write("# Explicitly accepted via mcmanager audit pipeline\n")
+            f.write(f"# Accepted by Operator: {operator_id}\n")
+            f.write("eula=true\n")
+
+
+MODULE 5: FAKE SERVER HARNESS & CONFORMANCE RUNNER (tests/adapters/)
+--------------------------------------------------------------------------------
+# --- FAKE SERVER HARNESS (fake_server.py) ---
+import sys, time, socket, argparse
+
+def run_fake_server():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=25565)
+    parser.add_argument("--crash-after", type=int, default=0)
+    parser.add_argument("--save-slow", action="store_true")
+    parser.add_argument("--eula", choices=["not_present", "unaccepted", "accepted"], default="accepted")
+    args = parser.parse_args()
+
+    # Enforce EULA gating check
+    if args.eula != "accepted":
+        print("[ERROR] EULA not accepted. Exiting.")
+        sys.exit(1)
+
+    print(f"[INFO] Starting fake Minecraft server on port {args.port}...")
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind(("127.0.0.1", args.port))
+    server_socket.listen(1)
+    
+    print("[INFO] Done (2.100s)! For help, type 'help'")
+
+    start_time = time.time()
+    while True:
+        if args.crash_after > 0 and (time.time() - start_time) > args.crash_after:
+            print("[FATAL] Fake server internal crash!")
+            sys.exit(2) # Abnormal exit for C4 crash test
+        time.sleep(0.5)
+
+# --- CONFORMANCE SUITE RUNNER (test_conformance.py) ---
+class TestAdapterConformance:
+    def test_c11_restart_reattach(self, adapter: ProcessControlPort):
+        """C11: Asserts server processes survive manager restarts and re-attach cleanly."""
+        # 1. Spawn fake server process
+        request = SpawnRequest(world_id="w_test", launch_command=["python3", "fake_server.py", "--port", "25565"], cwd="/tmp", env={})
+        result = adapter.spawn(request)
+        assert result.handle is not None
+        
+        # 2. Simulate Manager Process Death (drop in-memory handle reference)
+        handle_snapshot = result.handle
+        
+        # 3. Simulate Manager Boot Reconciliation: Probe OS for matching process
+        probe_res = adapter.probe(world_id="w_test", session_token="s_test")
+        
+        # 4. Assert process was discovered and re-attached
+        assert probe_res.found is True
+        assert probe_res.handle.pid == handle_snapshot.pid

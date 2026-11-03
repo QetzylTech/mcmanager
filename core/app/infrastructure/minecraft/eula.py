@@ -38,9 +38,11 @@ def current_state(world_dir: str, file_name: str = 'eula.txt') -> EulaState:
     return detect_eula(world_dir, file_name)
 
 
-def accept(world_dir: str, file_name: str = 'eula.txt') -> None:
+def accept(
+    world_dir: str, file_name: str = 'eula.txt', *, operator_id: str | None = None
+) -> None:
     """Write an accepted eula.txt — the ONLY ``eula=true`` writer.
 
     Call only after the audited operator-acceptance flow completes.
     """
-    write_eula_acceptance(world_dir, file_name)
+    write_eula_acceptance(world_dir, file_name, operator_id=operator_id)

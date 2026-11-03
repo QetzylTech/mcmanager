@@ -7,12 +7,10 @@ error codes; no process is ever spawned past a failed gate.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-
 from app.domain.value_objects import EulaState, ServerType
 from app.infrastructure.minecraft.eula import current_state
 from app.infrastructure.minecraft.java_compatibility import detect_java
-from app.ports.minecraft import java_major_compatible
+from app.ports.minecraft import GateResult, LaunchContext, java_major_compatible
 
 ERROR_JAVA_INCOMPATIBLE = 'JAVA_INCOMPATIBLE'
 ERROR_EULA_NOT_ACCEPTED = 'EULA_NOT_ACCEPTED'
@@ -20,32 +18,17 @@ ERROR_JAR_MISSING = 'JAR_MISSING'
 ERROR_WORLD_DIR_MISSING = 'WORLD_DIR_MISSING'
 ERROR_PORT_CONFLICT = 'WORLD_PORT_CONFLICT'
 
-
-@dataclass(frozen=True)
-class LaunchContext:
-    """The launch-time inputs the gate validates."""
-
-    world_id: str
-    server_type: ServerType
-    mc_version: str
-    world_dir: str
-    java_path: str
-    server_jar_path: str
-    port: int
-    rcon_enabled: bool = False
-    rcon_port: int = 0
-    launch_args: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class GateResult:
-    """Outcome of the pre-launch gate."""
-
-    passed: bool
-    error_code: str | None = None
-    detail: str | None = None
-    eula_state: EulaState | None = None
-    java_major: int | None = None
+__all__ = [
+    'ERROR_EULA_NOT_ACCEPTED',
+    'ERROR_JAVA_INCOMPATIBLE',
+    'ERROR_JAR_MISSING',
+    'ERROR_PORT_CONFLICT',
+    'ERROR_WORLD_DIR_MISSING',
+    'GateResult',
+    'LaunchContext',
+    'build_launch_argv',
+    'validate_launch',
+]
 
 
 def _port_conflict(port: int) -> bool:
