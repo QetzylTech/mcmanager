@@ -30,12 +30,18 @@ CREATE TABLE IF NOT EXISTS manager (
 
 -- Table 2.2: global_settings
 CREATE TABLE IF NOT EXISTS global_settings (
-    key TEXT PRIMARY KEY,
-    value_json JSON NOT NULL,
+    settings_id TEXT PRIMARY KEY,
+    timezone TEXT NOT NULL,
+    idle_countdown_seconds INT NULL,
+    notification_defaults TEXT NULL,
+    minecraft_root_path TEXT NOT NULL,
+    backup_root_path TEXT NOT NULL,
+    log_root_path TEXT NOT NULL,
+    offsite_sync_defaults TEXT NULL,
     version INT NOT NULL DEFAULT 1,
     updated_at INT NOT NULL,
-    updated_by_user_id TEXT,
-    FOREIGN KEY (updated_by_user_id) REFERENCES users(user_id) ON DELETE RESTRICT
+    updated_by TEXT NOT NULL,
+    FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE RESTRICT
 );
 
 -- Table 2.3: users

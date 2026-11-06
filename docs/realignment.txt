@@ -354,180 +354,176 @@ Later
 ================================================================================
 4. GATE 4 — OPERATIONAL SUBSYSTEMS
    Spec: wbs WP 4.1–4.4, gate4_pseudocode.txt, Doc 14 §§10–12, Doc 8
-   Verdict: BACKUP ZIP PATH AND CLEANUP FLOORS EXIST. RESTORE ROLLBACK IS
-            PARTIAL. OFFSITE SYNC IS SCHEMA-ONLY. NO PUBLIC API.
+   Verdict: G4-1..G4-7 IMPLEMENTED. The operational services are wired in the
+            core container; Gate 5 public API routes remain out of scope.
 ================================================================================
 
 4.1 Files vs expected
 
-  services/backup.py              PARTIAL (engine inlined in the service)
-  infrastructure/backup_engine.py MISSING
-  ports/backup_engine.py          MISSING
-  services/save_coordination.py   PARTIAL (RCON save-off/all/on)
-  services/restore.py             PARTIAL
-  services/cleanup.py             PARTIAL (backups only; no stale-world/logs)
-  services/sync.py                MISSING
-  ports/sync_transport.py         MISSING
-  infrastructure/sync_transport/  MISSING
-  ports/filesystem.py             MISSING
-  STORAGE_GUARD_* in tuning.py    unused by backup/restore
+  services/backup.py              PRESENT (orchestration / registration)
+  infrastructure/backup_engine.py PRESENT (NativeBackupEngine)
+  ports/backup_engine.py          PRESENT
+  services/save_coordination.py   PRESENT (RCON save-off/all/on)
+  services/restore.py             PRESENT (off-only, pre-backup, rollback)
+  services/cleanup.py             PRESENT (backup artifact scope)
+  services/sync.py                PRESENT (bounded retry / transfer cap)
+  ports/sync_transport.py         PRESENT
+  infrastructure/sync_transport/ PRESENT (mounted-NAS adapter)
+  ports/filesystem.py             PRESENT (capacity / mtime / path policy)
+  STORAGE_GUARD_* in tuning.py    ENFORCED before capture
 
 4.2 Pseudocode compliance
 
-MODULE 1 Native backup — PARTIAL
-  MATCH: ZIP_DEFLATED compresslevel=6, write .part, SHA-256, os.replace,
-         register backup_artifacts only on success, save-on in finally
-         when running=True.
-  MISSING: storage_guard_passes() using 10 GB reserve + 10% overflow
-           (tuning constants exist, never called).
-  MISSING: verify level.dat mtime inside the capture window after save-all
-           (gate4 / Doc 14 §10). Coordinator exposes flush() but backup
-           does not verify mtime.
-  MISSING: extracted NativeBackupEngine behind BackupEnginePort.
-  MISSING: manager-backup path (world_id null) as a first-class operation.
+MODULE 1 Native backup — IMPLEMENTED
+  ZIP_DEFLATED compresslevel=6, .part staging, SHA-256, atomic rename, and
+  registration-after-verification are in NativeBackupEngine/BackupService.
+  The contextual storage guard uses estimated capture size plus the 10 GB
+  reserve/10% overflow allowance before save coordination. Running captures
+  verify a fresh level.dat after save-all and always attempt save-on in finally.
 
-MODULE 2 Restore + compensating rollback — PARTIAL
-  MATCH: validate artifact, mandatory pre_restore backup, stage, switch,
-         restart probe, compensating restore from pre-restore artifact,
-         restore_history rows.
-  MISSING: flag the failed source artifact suspect=1 on crash-during-boot
-           (gate4 / Doc 14 §12). Current rollback does not call
-           BackupService._flag_suspect on the original artifact.
-  MISSING: restart_probe is optional and not injected in bootstrap
-           (RestoreService(..., restart_probe=None) in build_container).
-           Failed-restart rollback therefore cannot run in the wired app.
-  DIVERGENT: restore of a running world — Doc 9/10 says 409 unless off.
-           Service accepts was_running and tries restart.
+MODULE 2 Restore + compensating rollback — IMPLEMENTED
+  Restore rejects any non-off world before artifact validation or file/DB
+  side effects; pre-restore backup is mandatory. Bootstrap injects
+  RuntimeService as the restart probe. A failed probe marks the source suspect
+  and runs a compensating restore from the pre-restore artifact; failed
+  compensation leaves the world in error.
 
-MODULE 3 Cleanup — PARTIAL
-  MATCH: 3-day age floor, 3-artifact count floor, physical unlink only here.
-  MISSING: dry-run vs wet as Operations; blast-radius 500; stale-world and
-           log scopes; API dry-run preview required before execute.
+MODULE 3 Cleanup — IMPLEMENTED for backup artifacts
+  Dry-run and wet runs are durable Cleanup Operations; wet execution requires
+  a matching preview, enforces the 3-day/3-artifact floors and the 500-target
+  blast-radius confirmation, and is the only physical artifact deletion path.
+  Stale-world/log scopes and the HTTP preview/execute routes remain later
+  product work, outside WP 4.1–4.4's backup-artifact implementation.
 
-MODULE 4 Offsite sync — MISSING
-  Tables sync_targets / sync_records / sync_attempts exist.
-  No SyncService, no 30/60/120 backoff, no daily cap, no worker.
-  WP 4.4 is unimplemented.
+MODULE 4 Offsite sync — IMPLEMENTED
+  SyncService records write-once attempt timelines, retries after 30/60/120
+  seconds, enforces the 50 GiB daily cap, and has a mounted-NAS transport.
+  It is dispatched separately from local backup creation, so network failures
+  do not block or invalidate the local artifact.
 
 4.3 Gate 4 actions
 
 Must-fix
-  G4-1  Extract NativeBackupEngine to infrastructure/backup_engine.py +
-        ports/backup_engine.py. BackupService orchestrates only.
-  G4-2  Enforce storage guard before capture. Verify level.dat mtime after
-        save-all before zipping. Keep save-on in finally.
-  G4-3  Inject restart_probe from RuntimeService. On failed post-restore
-        boot: rollback to pre_restore artifact AND set source
-        backup_artifacts.suspect = 1.
-  G4-4  Reject Restore unless world is off (409, no Operation) per Doc 9/10.
-  G4-5  Cleanup dry-run/wet as Operations with floor + blast-radius checks.
-
-Later (Gate 4 close requires this before "ops subsystems verified")
-  G4-6  Implement SyncService: exponential backoff 30/60/120, daily cap,
-        sync_attempts timeline, NAS transport stub. Local backup must
-        complete even if sync fails.
-  G4-7  FilesystemPort for path policy + disk-usage (needed by storage
-        guard and file manager).
+  G4-1  DONE — NativeBackupEngine extracted behind BackupEnginePort.
+  G4-2  DONE — contextual storage guard, level.dat freshness check, save-on
+        finally path.
+  G4-3  DONE — RuntimeService restart probe wired; suspect marking and
+        compensating rollback are active.
+  G4-4  DONE — restore service fails closed unless the world is off.
+  G4-5  DONE — Cleanup Operations implement preview, wet execution, floors,
+        and blast-radius enforcement.
+  G4-6  DONE — SyncService implements retry timeline, daily cap, and NAS
+        transport without coupling remote sync to local backup completion.
+  G4-7  DONE — FilesystemPort and local adapter provide path policy, file
+        freshness, tree-size estimation, and disk usage.
 
 ================================================================================
 5. GATE 5 — API, SSE, WEB SHELL
    Spec: wbs WP 5.1–5.3, gate5_pseudocode.txt, Docs 4, 5, 10, 11, 12
-   Verdict: LARGEST GAP. Shell is a 17-slug scaffold. API catalog is a
-            handful of routes. CSRF, BroadcastChannel, and command layer
-            are absent.
+   Verdict: G5-1..G5-5 FOUNDATION IMPLEMENTED. Authentication/session routes,
+            operation reads, and authenticated world reads are present.
+            The full Doc 10 catalog, real page workflows, and calibrated
+            performance release gate remain incomplete.
 ================================================================================
 
 5.1 HTTP API / CSRF (gate5 Module 1)
 
-Present routes:
+Implemented:
   GET  /
   GET  /pages/<slug>
   GET  /api/pages, /api/pages/<slug>
   GET  /api/health, /api/diagnostics, /api/system/stats
+  GET  /api/session
+  POST /api/auth/login|logout|step-up
+  GET  /api/worlds, /api/worlds/<id>
+  GET  /api/operations/<op_id>
   POST /api/worlds/<id>/start|stop|kill
   POST /api/supervisor/tick
-  GET  /stream/events
-  GET  /stream/worlds/<id>/events
-  GET  /stream/worlds/<id>/logs
-  GET  /stream/restore_logs
-  GET  /stream/metrics
+  GET  /stream/events, /stream/worlds/<id>/events|logs
+  GET  /stream/restore_logs, /stream/metrics
 
-MISSING: essentially the entire Doc 10 catalog (auth, worlds CRUD, EULA
-accept, operations, backups, restores, cleanup, sync, schedules,
-settings, templates, java-runtimes, admin, notifications, audit, files,
-logs, manager/setup).
+Middleware enforces a SameSite session cookie, CSRF cookie/header equality on
+POST/PATCH/DELETE, administrator role checks on privileged world mutations,
+the AuthenticationService step-up window for stop/kill, and security headers.
+Except for public shell/static/health/login paths, API reads and all SSE
+routes require a live session. The login/step-up endpoints rotate the session
+cookie; the CSRF cookie is readable by the browser for the double-submit
+header and derived from the opaque session token, so arbitrary equal tokens
+and tokens copied across sessions are rejected.
 
-DIVERGENT vs gate5 + Doc 10:
-  Start/Stop/Kill call WorldsService and return 200 ok({state}) instead of
-  202 {data.operation, meta.op_id}.
-  No CSRF double-submit (X-CSRF-Token vs csrf_token cookie) → 403 CSRF_INVALID.
-  No security-header after_request (CSP, X-Frame-Options, nosniff).
-  No session cookie mcmanager_session; routes are unauthenticated.
-  Envelope is {ok, data, error, meta} — close to Doc 10 but Start is not
-  async-Operation shaped.
-  Routes contain lifecycle calls (acceptable only until commands/ exists;
-  they are not "thin dispatch").
+The lifecycle routes dispatch through the commands layer and return 202
+operation envelopes; GET /api/operations/<op_id> reads persisted state.
+However, the existing WorldsService lifecycle methods still execute through
+their service call before the HTTP response. A durable background dispatcher
+is still needed for truly prompt asynchronous acceptance and idempotency
+handling.
+
+Not implemented: remaining Doc 10 catalog (world creation/update/delete,
+EULA/runtime-config, backup/restore/cleanup, settings/schedules, templates,
+java-runtimes, admin, notifications/audit/files/logs, sync, and setup).
 
 5.2 BroadcastChannel SSE (gate5 Module 2)
 
-MISSING
-  shell.js only fetches /api/pages/{slug} and innerHTML-replaces sections.
-  No BroadcastChannel("mcmanager_stream_channel"), no leader election,
-  no EventSource, no heartbeat claim.
-  Server SSE routes emit a one-shot snapshot Response, not a long-lived
-  compute-once hub subscription (RealtimeHub exists but manager_events
-  does not subscribe to it except world logs replay).
+Implemented: shell/static/stream_client.js elects one same-origin tab over
+BroadcastChannel("mcmanager_stream_channel"), opens /stream/events in the
+leader, fans events out to followers, sends heartbeats, and re-elects after
+leader departure. SSE routes now subscribe to RealtimeHub, deliver a snapshot,
+replay after Last-Event-ID, fan out live events, and release subscribers when
+the response closes.
+
+Remaining: browser-driven server integration with authenticated sessions and
+long-running reconnect/replay behavior is not yet a release E2E suite.
 
 5.3 Persistent shell (gate5 Module 3)
 
-PARTIAL
-  One HTML shell + 17 Doc 5 module slugs is the right skeleton.
-  Nav uses full page loads (/pages/<slug> anchors), not in-shell routing.
-  No tokens.css; one shell.css. Geometry/token compliance vs Doc 4 is not
-  demonstrated (40px controls, no inline styles — needs a Doc 4 pass).
-  No world-selector switching manager vs world context as specified.
-  Pages return placeholder section titles, not working workflows.
+Implemented: the 17-slug shell intercepts navigation, fetches page fragments,
+updates browser history, and keeps a 40px shared button geometry, existing
+shared color tokens, and no inline style overrides.
+
+Remaining: page modules still render scaffold content; world selection,
+context switching, functional workflows, and the complete Doc 4 component
+system are not implemented.
 
 5.4 Tests / performance (gate5 Module 4)
 
-PARTIAL
-  test_phase5_presentation_hardening.py: 17 nav modules, page API, health
-  probes, SSE non-blank snapshot, performance smoke.
-  benchmarks/thresholds.json + performance_acceptance.py exist.
-MISSING
-  tests/e2e/test_stage5.py CSRF 403 CSRF_INVALID.
-  Idle CPU/RAM assertion wired as a release gate (Doc 11), not only smoke.
-  Tooling: pyproject has black/isort/ruff/mypy/import-linter;
-  requirements-dev.txt installs them; test_project_tooling_contract.py
-  only checks files exist. CI does not yet fail on import-linter
-  (and would fail today because app.commands is missing).
+Gate 5 acceptance/browser tests cover CSRF, session/step-up, operation
+envelopes/reads, SSE replay/fan-out, 17-module in-place navigation, and
+10-tab leader failover. Existing Gate 3/4 lifecycle and composition changes
+remain intact.
+
+The checked-in thresholds.json is still a 1-second CPU/traced-memory smoke
+file. Doc 11 requires a measured reference host profile, a 300-second idle
+window, RSS, 50-client/1Hz stream fan-out, and 1000-lines/sec log ingestion
+with a documented tail-latency limit. Those calibrated values/profile are not
+available here; do not claim a performance release pass or fabricate them.
+The current acceptance contract also calls the same manager stream both
+anonymous-rejected and anonymous-open; keep the stream authenticated and
+resolve that test expectation before claiming the full suite green.
 
 5.5 Gate 5 actions
 
-Must-fix (foundation, before filling the route catalog)
-  G5-1  web/middleware.py: session cookie, CSRF double-submit on
-        POST/PATCH/DELETE, step-up window, security headers.
-  G5-2  commands/ layer: each Doc 10 mutating route = Command that
-        preconditions -> Operation -> service. Routes stay thin.
-  G5-3  Convert start/stop/kill to 202 Operation envelopes. Add
-        GET /api/operations/{op_id}.
-  G5-4  StreamClientManager in static JS: BroadcastChannel
-        mcmanager_stream_channel, leader SSE to /stream/events, follower
-        fan-out. Keep one backend connection per browser origin.
-  G5-5  Make SSE routes long-lived subscriptions on RealtimeHub with
-        non-blank snapshot on connect (already sketched).
-
-Then, in Doc 10 catalog order (do not skip auth)
-  G5-6  Auth & session routes.
-  G5-7  Worlds CRUD, EULA accept, runtime-config (off-only).
-  G5-8  Backups / restores / rollback / cleanup dry+wet.
-  G5-9  Settings, schedules, missed-runs (version on every ConfigEdit).
-  G5-10 Templates, java-runtimes, admin, notifications, audit, files, logs.
-  G5-11 Sync routes after G4-6.
-  G5-12 Replace scaffold page modules with real fragments (Doc 4/5):
-        persistent shell, 40px geometry, tokens, no full reload.
-  G5-13 E2E: CSRF_INVALID, multi-tab single SSE, idle performance vs
-        benchmarks/thresholds.json.
+  G5-1  PARTIAL — session-bound CSRF, step-up, role guard, and security
+        headers are enforced; remaining authz/grant coverage is incomplete.
+  G5-2  PARTIAL — command dispatch exists for start/stop/kill only; remaining
+        mutating catalog routes/commands are not present.
+  G5-3  PARTIAL — lifecycle routes return 202 operation envelopes and the
+        operation read exists, but service execution is still synchronous.
+  G5-4  DONE — BroadcastChannel leader/follower sharing and failover client.
+  G5-5  DONE — long-lived hub subscription, snapshot, replay, and cleanup.
+  G5-6  PARTIAL — login/logout/step-up/session endpoints; full identity,
+        grants, device approval, and session management remain.
+  G5-7  PARTIAL — authenticated world list/detail reads and lifecycle
+        mutations; CRUD, EULA accept, and off-only runtime-config remain.
+  G5-8  NOT STARTED — backup/restore/rollback/cleanup HTTP catalog.
+  G5-9  NOT STARTED — settings/schedules/missed-runs HTTP catalog.
+  G5-10 NOT STARTED — templates, Java runtimes, admin, notifications,
+        audit, files, and logs HTTP catalog.
+  G5-11 NOT STARTED — sync HTTP catalog.
+  G5-12 PARTIAL — persistent no-reload navigation, shared tokens, and
+        40px controls; page fragments and world context remain scaffolds.
+  G5-13 PARTIAL — browser contracts are implemented, but the SSE auth
+        expectations conflict and Doc 11 performance profile/thresholds
+        are not calibrated.
 
 ================================================================================
 6. CROSS-CUTTING DEFECTS (do these as G0 before expanding features)

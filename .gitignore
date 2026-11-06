@@ -65,6 +65,12 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# Local manager state and Minecraft installations (never commit credentials,
+# databases, runtime binaries, or world/server data).
+/app/data/
+/app/runtimes/
+/dev_artifacts/
+
 # Scrapy stuff:
 .scrapy
 
