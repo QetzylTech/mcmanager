@@ -38,7 +38,7 @@ from app.ports.process_control import (
     TailHandle,
 )
 
-_IDENTITY_TOLERANCE_S = 30.0
+_IDENTITY_TOLERANCE_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -83,13 +83,14 @@ class PosixProcessAdapter(BaseProcessAdapter):
             start_new_session=True,
             shell=False,  # mandatory: no shell interpolation of launch args
         )
+        process = psutil.Process(popen.pid)
         handle = PosixHandle(
             world_id=request.world_id,
             pid=popen.pid,
-            spawn_epoch=time.time(),
+            spawn_epoch=process.create_time(),
             process_group_id=os.getpgid(popen.pid),
         )
-        return psutil.Process(popen.pid), handle
+        return process, handle
 
     def spawn(self, request: SpawnRequest) -> SpawnResult:
         """Override to stash the ``Popen`` for the stdin channel + readers."""
@@ -110,15 +111,16 @@ class PosixProcessAdapter(BaseProcessAdapter):
         except OSError as exc:
             return SpawnResult(handle=None, started_at=time.time(), spawn_error=str(exc))
 
+        process = psutil.Process(popen.pid)
         handle = PosixHandle(
             world_id=request.world_id,
             pid=popen.pid,
-            spawn_epoch=time.time(),
+            spawn_epoch=process.create_time(),
             process_group_id=os.getpgid(popen.pid),
         )
         entry = RegistryEntry(
             handle=handle,
-            process=psutil.Process(popen.pid),
+            process=process,
             args_snapshot=list(argv),
             spawn_epoch=handle.spawn_epoch,
             popen=popen,
@@ -153,15 +155,21 @@ class PosixProcessAdapter(BaseProcessAdapter):
 
     # -- signals -------------------------------------------------------------
 
-    def _signal_tree_impl(self, process: psutil.Process, signal_: Signal) -> SendResult:
+    def _signal_tree_impl(
+        self, process: psutil.Process, handle: ProcessHandle, signal_: Signal
+    ) -> SendResult:
         if signal_ is Signal.KILL:
             return SendResult(delivered=False, error='use_terminate_for_kill')
-        pgid = os.getpgid(process.pid)
+        pgid = handle.process_group_id
+        if pgid is None:
+            pgid = os.getpgid(process.pid)
         os.killpg(pgid, signal.SIGTERM)
         return SendResult(delivered=True)
 
-    def _kill_tree_impl(self, process: psutil.Process) -> None:
-        pgid = os.getpgid(process.pid)
+    def _kill_tree_impl(self, process: psutil.Process, handle: ProcessHandle) -> None:
+        pgid = handle.process_group_id
+        if pgid is None:
+            pgid = os.getpgid(process.pid)
         os.killpg(pgid, signal.SIGKILL)
 
     # -- probe / boot reconciliation (C11) -------------------------------------

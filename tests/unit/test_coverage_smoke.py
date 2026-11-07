@@ -13,6 +13,7 @@ from app.domain.value_objects import (
     NotificationSeverity,
     OperationStatus,
     OperationType,
+    ServerType,
     TriggerType,
 )
 from app.infrastructure.minecraft.capabilities import capabilities_for
@@ -32,10 +33,13 @@ from app.platform.paths import (
     default_root,
     ensure_default_dirs,
 )
+from app.ports.filesystem import DiskUsage
+from app.ports.secrets_store import SecretType
 from app.services.audit import AuditService, ActorSnapshot
 from app.services.backup import BackupService
 from app.services.cleanup import CleanupService
 from app.services.configuration import ConfigurationService, VersionedUpdate
+from app.services.diagnostics import DiagnosticsService
 from app.services.notifications import NotificationInput, NotificationService
 from app.services.operations import OperationInput, OperationService
 from app.services.realtime import LogFanout, RealtimeHub
@@ -58,6 +62,50 @@ def _container(tmp_path: Path):
     db = tmp_path / 'manager.sqlite'
     keyfile = tmp_path / 'secrets.key'
     return build_container(database_path=db, keyfile_path=keyfile, clock=DummyClock())
+
+
+def _seed_world(container, world_id: str) -> None:
+    template_id = f'tpl-{world_id}'
+    runtime_id = f'java-{world_id}'
+    writer = container.store.writer()
+    writer.execute(
+        'INSERT INTO templates (template_id, name, category, default_version, config_defaults, source, deprecated, version, deleted_at, deleted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 1, NULL, NULL, 1, 1)',
+        (template_id, f'template-{world_id}', 'standard', '1.21', '{}', 'built_in'),
+    )
+    writer.execute(
+        'INSERT INTO java_runtimes (runtime_id, label, executable_path, version_detected, status, deleted_at, deleted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, 1, 1)',
+        (runtime_id, f'java-{world_id}', 'java', '21', 'verified'),
+    )
+    writer.execute(
+        'INSERT INTO world_instances (world_id, display_name, template_id, server_type, mc_version, java_runtime_id, port, addressing_strategy, addressing_value, state, pre_backup_state, launch_args, metadata_version, deleted_at, deleted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, NULL, NULL, 1, 1)',
+        (
+            world_id,
+            f'world-{world_id}',
+            template_id,
+            ServerType.VANILLA.value,
+            '1.21',
+            runtime_id,
+            25565,
+            'port',
+            '25565',
+            'off',
+        ),
+    )
+    writer.commit()
+
+
+def _seed_user(container, user_id: str, username: str) -> None:
+    secret_id = container.secrets.store(
+        secret_type=SecretType.USER_PASSWORD,
+        associated_entity_type='user',
+        associated_entity_id=user_id,
+        plaintext='smoke-test-password',
+    )
+    container.store.writer().execute(
+        'INSERT INTO users (user_id, username, secret_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1)',
+        (user_id, username, secret_id, 'active'),
+    )
+    container.store.writer().commit()
 
 
 def test_platform_and_bootstrap_smoke(tmp_path):
@@ -93,7 +141,7 @@ def test_infra_helpers_and_gate_smoke(tmp_path):
     assert validate_launch(
         LaunchContext(
             world_id='w1',
-            server_type='vanilla',
+            server_type=ServerType.VANILLA,
             mc_version='1.21',
             world_dir=str(world),
             java_path='java',
@@ -106,7 +154,7 @@ def test_infra_helpers_and_gate_smoke(tmp_path):
     gate = validate_launch(
         LaunchContext(
             world_id='w1',
-            server_type='vanilla',
+            server_type=ServerType.VANILLA,
             mc_version='1.21',
             world_dir=str(world),
             java_path='java',
@@ -121,12 +169,20 @@ def test_infra_helpers_and_gate_smoke(tmp_path):
     assert 'server.jar' in argv[-2]
 
     assert parse_java_major('21.0.1+12-LTS') == 21
-    assert capabilities_for('vanilla').save_coordination == 'rcon'
-    assert target_level_for('vanilla') is not None
+    assert capabilities_for(ServerType.VANILLA).save_coordination == 'rcon'
+    assert target_level_for(ServerType.VANILLA) is not None
     state = build_state(process_alive=True, port=25565, rcon_ready=True, host_is_minecraft=True, port_timeout_s=0.1)
-    assert evaluate(server_type='vanilla', caps=capabilities_for('vanilla'), state=state) is not None
+    assert evaluate(
+        server_type=ServerType.VANILLA,
+        caps=capabilities_for(ServerType.VANILLA),
+        state=state,
+    ) is not None
     assert ping_protocol('127.0.0.1', 1, timeout_s=0.01) in {True, False}
-    assert validate_properties({'server-port': 25565, 'max-players': 20}, 'vanilla', '1.21').valid
+    assert validate_properties(
+        properties={'server-port': 25565, 'max-players': 20},
+        server_type=ServerType.VANILLA,
+        mc_version='1.21',
+    ).valid
     assert 'server-port' in CORE_MANAGER_PROPERTIES
 
 
@@ -136,7 +192,7 @@ def test_store_secrets_and_operation_smoke(tmp_path):
     assert provision_keyfile(keyfile).exists()
     secrets = SqliteSecretsStore(container.store, keyfile)
     secret_id = secrets.store(
-        secret_type='user_password',
+        secret_type=SecretType.USER_PASSWORD,
         associated_entity_type='user',
         associated_entity_id='u1',
         plaintext='secret',
@@ -145,6 +201,7 @@ def test_store_secrets_and_operation_smoke(tmp_path):
     rotated = secrets.rotate(secret_id, new_plaintext='new-secret', associated_entity_type='user', associated_entity_id='u1')
     assert secrets.read(rotated) == 'new-secret'
 
+    _seed_world(container, 'w1')
     op = container.operations.create(
         OperationInput(
             op_type=OperationType.START,
@@ -160,24 +217,42 @@ def test_store_secrets_and_operation_smoke(tmp_path):
     assert container.operations.list_incomplete() == []
 
 
-def test_backup_cleanup_and_config_smoke(tmp_path):
+def test_backup_cleanup_and_config_smoke(tmp_path, monkeypatch):
     container = _container(tmp_path)
+    _seed_world(container, 'w1')
+    _seed_user(container, 'u1', 'alice')
     source = tmp_path / 'world-src'
     source.mkdir()
     (source / 'level.dat').write_text('data', encoding='utf-8')
     backup_dir = tmp_path / 'backups'
+    monkeypatch.setattr(
+        'app.infrastructure.filesystem.LocalFilesystem.disk_usage',
+        lambda _self, _path: DiskUsage(
+            total=20 * 1024**3,
+            used=0,
+            free=20 * 1024**3,
+        ),
+    )
+    backup_operation = container.operations.create(
+        OperationInput(
+            op_type=OperationType.BACKUP,
+            actor_type=ActorType.SYSTEM,
+            world_id='w1',
+            idempotency_key='op-backup',
+        )
+    )
     result = container.backups.create_world_backup(
         world_id='w1',
         world_dir=source,
         backup_dir=backup_dir,
-        operation_id='op-backup',
+        operation_id=backup_operation['op_id'],
         category=TriggerType.MANUAL,
     )
     assert result.artifact_id.startswith('ba_')
     assert result.storage_path.endswith('.zip')
     assert container.backups.validate_artifact(result.artifact_id)['artifact_id'] == result.artifact_id
 
-    candidates = container.cleanup.backup_candidates(older_than_days=1)
+    candidates = container.cleanup.backup_candidates(older_than_days=3)
     if candidates:
         deleted = container.cleanup.execute_backup_cleanup(candidates)
         assert deleted >= 0
@@ -212,6 +287,8 @@ def test_backup_cleanup_and_config_smoke(tmp_path):
 
 def test_notifications_realtime_and_shell_smoke(tmp_path):
     container = _container(tmp_path)
+    _seed_user(container, 'u1', 'alice')
+    _seed_user(container, 'u2', 'bob')
     notification_id = container.notifications.publish(
         NotificationInput(
             category='security',
@@ -231,7 +308,10 @@ def test_notifications_realtime_and_shell_smoke(tmp_path):
     assert 'log.line' in event.event
     assert hub.replay('world:w1:logs', last_event_id=None)  # smoke only
 
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        template_folder=str(Path(__file__).resolve().parents[2] / 'app' / 'shell' / 'templates'),
+    )
     app.config['TESTING'] = True
     app.extensions['mcmanager_container'] = container
     register_api_blueprints(app)
@@ -287,4 +367,4 @@ def test_runtime_world_and_diag_smoke(tmp_path):
     audit_id = container.audit.write(event_type='user_login_success', actor=ActorSnapshot(actor_type=ActorType.USER, user_id='u1', username='alice'), payload={'ok': True})
     assert audit_id.startswith('au_')
     assert container.scheduler.tick() is not None
-    assert container.diagnostics.health()['status'] == 'ok'
+    assert DiagnosticsService(container).health()['status'] == 'ok'

@@ -21,6 +21,7 @@ from pathlib import Path
 from app.infrastructure.backup_engine import NativeBackupEngine
 from app.infrastructure.filesystem import LocalFilesystem
 from app.infrastructure.minecraft.adapter import MinecraftServerAdapter
+from app.infrastructure.minecraft.rcon import RconClient
 from app.infrastructure.secrets import SqliteSecretsStore, provision_keyfile
 from app.infrastructure.sqlite.connection import SqliteStore
 from app.infrastructure.sqlite.migrations import run_migrations
@@ -29,6 +30,7 @@ from app.platform.process.base import LiveRegistry
 from app.platform.process.posix import PosixProcessAdapter
 from app.platform.process.windows import WindowsProcessAdapter
 from app.ports.clock import Clock, SystemClock
+from app.ports.minecraft import MinecraftServerPort
 from app.ports.process_control import ProcessControlPort
 from app.services.audit import AuditService
 from app.services.auth import AuthenticationService
@@ -56,7 +58,7 @@ class Container:
     store: SqliteStore
     secrets: SqliteSecretsStore
     process_adapter: ProcessControlPort
-    minecraft_adapter: MinecraftServerAdapter
+    minecraft_adapter: MinecraftServerPort
 
     # services
     audit: AuditService
@@ -118,10 +120,12 @@ def build_container(
     notifications = NotificationService(store, clock)
     auth = AuthenticationService(store, secrets, clock, audit)
     realtime = RealtimeHub()
-    operations = OperationService(store, clock, audit, realtime)
+    operations = OperationService(
+        store, clock, audit, realtime, notifications=notifications
+    )
     scheduler = SchedulerService(store, clock, operations)
     logs = LogFanout(realtime)
-    save_coordinator = RconSaveCoordinator(store, secrets)
+    save_coordinator = RconSaveCoordinator(store, secrets, rcon_factory=RconClient)
     backups = BackupService(
         store,
         clock,
@@ -141,6 +145,8 @@ def build_container(
         secrets=secrets,
         minecraft=minecraft_adapter,
         logs=logs,
+        audit=audit,
+        realtime=realtime,
     )
     runtime = RuntimeService(worlds)
     restore = RestoreService(store, clock, operations, backups, runtime)

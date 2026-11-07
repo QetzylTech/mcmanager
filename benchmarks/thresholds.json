@@ -1,6 +1,15 @@
 {
-  "reference_host": "development workstation smoke threshold",
-  "idle_cpu_pct_max": 5.0,
-  "idle_traced_memory_mb_max": 64.0,
-  "idle_window_seconds": 1.0
+  "reference_host_profile": {
+    "cpu_model": "reference-linux-x86_64",
+    "core_count": 8,
+    "ram_gb": 16,
+    "storage_type": "SSD"
+  },
+  "idle_window_seconds": 300,
+  "idle_cpu_pct_max": 2.0,
+  "idle_rss_mb_max": 150.0,
+  "stream_fanout_clients": 50,
+  "stream_metrics_hz": 1,
+  "log_ingestion_lines_per_second": 1000,
+  "log_tail_latency_ms_max": 250
 }

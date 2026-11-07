@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from datetime import time as datetime_time
 from pathlib import Path
@@ -18,9 +19,9 @@ from app.domain.value_objects import (
     SyncOutcome,
     SyncRecordStatus,
 )
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock, SystemClock
-from app.ports.sync_transport import SyncTransportPort
+from app.ports.persistence import PersistencePort
+from app.ports.sync_transport import PermanentSyncTransportError, SyncTransportPort
 from app.services.operations import OperationInput, OperationService
 
 
@@ -32,21 +33,24 @@ class SyncService:
     """Record sync jobs and their immutable retry timeline."""
 
     BACKOFF_DELAYS = tuple(
-        SYNC_BACKOFF_BASE_S * (2**index) for index in range(SYNC_TRANSIENT_RETRIES)
+        SYNC_BACKOFF_BASE_S * (2**index)
+        for index in range(SYNC_TRANSIENT_RETRIES - 1)
     )
     DAILY_TRANSFER_CAP_BYTES = 50 * 1024**3
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         transport: SyncTransportPort,
         clock: Clock | None = None,
         operations: OperationService | None = None,
+        sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self._store = store
         self._transport = transport
         self._clock = clock or SystemClock()
         self._operations = operations or OperationService(store, self._clock)
+        self._sleep = sleeper or time.sleep
 
     def get_bytes_transferred_today(self) -> int:
         now = datetime.fromtimestamp(self._clock.now(), UTC)
@@ -124,13 +128,16 @@ class SyncService:
         connection.commit()
 
         succeeded = False
-        for attempt_number in range(1, len(self.BACKOFF_DELAYS) + 2):
+        for attempt_number in range(1, SYNC_TRANSIENT_RETRIES + 1):
             started_at = int(self._clock.now())
             error_message: str | None = None
             outcome = SyncOutcome.SUCCEEDED
             try:
                 self._transport.upload_file(target_id, Path(artifact['storage_path']))
                 succeeded = True
+            except PermanentSyncTransportError as exc:
+                outcome = SyncOutcome.FAILED_PERMANENT
+                error_message = str(exc)[:1000]
             except Exception as exc:
                 outcome = SyncOutcome.FAILED_TRANSIENT
                 error_message = str(exc)[:1000]
@@ -143,10 +150,10 @@ class SyncService:
                 outcome,
                 error_message,
             )
-            if succeeded:
+            if succeeded or outcome == SyncOutcome.FAILED_PERMANENT:
                 break
-            if attempt_number <= len(self.BACKOFF_DELAYS):
-                time.sleep(self.BACKOFF_DELAYS[attempt_number - 1])
+            if attempt_number < SYNC_TRANSIENT_RETRIES:
+                self._sleep(self.BACKOFF_DELAYS[attempt_number - 1])
 
         terminal_status = (
             SyncRecordStatus.SUCCEEDED if succeeded else SyncRecordStatus.FAILED

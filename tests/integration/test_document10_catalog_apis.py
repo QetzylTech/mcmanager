@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+from functools import partial
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+
+import app.bootstrap as bootstrap
+from app import create_app
+from app.services.worlds import WorldsService
+from app.web.middleware import session_csrf_token
+
+
+@pytest.fixture
+def catalog_app(migrations_dir, clock, monkeypatch):
+    monkeypatch.setattr(bootstrap, "WorldsService", partial(WorldsService, minecraft=object()))
+    run_id = uuid4().hex
+    directory = Path(__file__).resolve().parent
+    database_path = directory / f".catalog-api-{run_id}.db"
+    keyfile_path = directory / f".catalog-api-{run_id}.key"
+    app = create_app(
+        database_path=database_path,
+        keyfile_path=keyfile_path,
+        migrations_dir=migrations_dir,
+        clock=clock,
+    )
+    try:
+        yield app
+    finally:
+        app.extensions["mcmanager_shutdown"]()
+        for path in (
+            database_path,
+            database_path.with_name(database_path.name + "-wal"),
+            database_path.with_name(database_path.name + "-shm"),
+            keyfile_path,
+        ):
+            path.unlink(missing_ok=True)
+
+
+def _admin_client(app):
+    container = app.extensions["mcmanager_container"]
+    container.auth.provision_first_superadmin(
+        username="catalog-admin",
+        password="a-strong-password-123",
+        device_id="catalog-admin-device",
+        device_name="Catalog Admin",
+        ip="127.0.0.1",
+    )
+    session = container.auth.authenticate(
+        username="catalog-admin",
+        password="a-strong-password-123",
+        device_id="catalog-admin-device",
+        device_name="Catalog Admin",
+        ip="127.0.0.1",
+    )
+    client = app.test_client()
+    client.set_cookie("mcmanager_session", session.token)
+    client.set_cookie("csrf_token", session_csrf_token(session.token))
+    return client, {"X-CSRF-Token": session_csrf_token(session.token)}
+
+
+def test_schedule_template_and_java_runtime_catalog_routes(catalog_app):
+    client, headers = _admin_client(catalog_app)
+
+    created_schedule = client.post(
+        "/api/schedules",
+        json={
+            "scope": "global",
+            "world_id": None,
+            "schedule_type": "backup",
+            "interval_spec": {"kind": "daily"},
+            "time_of_day": "02:30",
+        },
+        headers=headers,
+    )
+    assert created_schedule.status_code == 201
+    schedule_id = created_schedule.json["data"]["schedule"]["schedule_id"]
+    assert (
+        client.get("/api/schedules?scope=global").json["data"]["schedules"][0]["schedule_id"]
+        == schedule_id
+    )
+
+    stale = client.patch(
+        f"/api/schedules/{schedule_id}",
+        json={"version": 9, "enabled": False},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+    template = client.post(
+        "/api/templates",
+        json={
+            "name": "API Test Template",
+            "category": "vanilla",
+            "default_version": "1.21",
+            "config_defaults": {"launch_command_template": "java -jar server.jar"},
+        },
+        headers=headers,
+    )
+    assert template.status_code == 201
+    assert client.get("/api/templates?category=vanilla").json["data"]["templates"]
+
+    runtime = client.post(
+        "/api/java-runtimes",
+        json={"label": "missing-java", "path": "missing-java-executable"},
+        headers=headers,
+    )
+    assert runtime.status_code == 201
+    runtime_id = runtime.json["data"]["runtime"]["runtime_id"]
+    runtime_list = client.get("/api/java-runtimes?status=registered")
+    assert runtime_list.status_code == 200
+    assert runtime_list.json["data"]["java_runtimes"][0]["runtime_id"] == runtime_id
+    stale_runtime = client.patch(
+        f"/api/java-runtimes/{runtime_id}",
+        json={"version": 2, "label": "new-label"},
+        headers=headers,
+    )
+    assert stale_runtime.status_code == 409
+
+
+def test_missed_runs_notifications_and_audit_routes(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+    writer = container.store.writer()
+    writer.execute(
+        "INSERT INTO missed_run_records (missed_run_id, schedule_id, schedule_name_snapshot, "
+        "schedule_type_snapshot, expected_run_at, detected_at, resolution, resolution_at, "
+        "resolution_by, created_at) VALUES ('mr_api_test', 'missing-schedule', "
+        "'Global backup schedule', 'backup', 100, 101, 'pending', NULL, NULL, 101)"
+    )
+    writer.commit()
+
+    missed = client.get("/api/missed-runs?resolution=pending")
+    assert missed.status_code == 200
+    resolved = client.patch(
+        "/api/missed-runs/mr_api_test",
+        json={"resolution": "ignored"},
+        headers=headers,
+    )
+    assert resolved.status_code == 200
+    terminal = client.patch(
+        "/api/missed-runs/mr_api_test",
+        json={"resolution": "resolved"},
+        headers=headers,
+    )
+    assert terminal.status_code == 409
+
+    from app.domain.value_objects import NotificationSeverity
+    from app.services.notifications import NotificationInput
+
+    notification_id = container.notifications.publish(
+        NotificationInput(
+            category="security",
+            severity=NotificationSeverity.HIGH,
+            message="API test notification",
+        )
+    )
+    notifications = client.get("/api/notifications?read=false")
+    assert notifications.status_code == 200
+    assert notifications.json["meta"]["unread_count"] == 1
+    assert (
+        client.post(f"/api/notifications/{notification_id}/read", headers=headers).status_code
+        == 201
+    )
+    assert client.post("/api/notifications/read-all", headers=headers).status_code == 200
+
+    audit = client.get("/api/audit?sort=-created_at")
+    assert audit.status_code == 200
+    audit_id = audit.json["data"]["audit"][0]["audit_id"]
+    assert client.get(f"/api/audit/{audit_id}").status_code == 200
+
+
+def test_admin_catalog_endpoints_enforce_superadmin_and_csrf(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    assert client.get("/api/roles").status_code == 200
+    assert client.get("/api/users").status_code == 200
+    assert client.get("/api/setup").status_code == 200
+    assert client.get("/api/manager").status_code == 200
+
+    role = client.post(
+        "/api/roles",
+        json={"name": "Catalog Reader", "description": "test role"},
+        headers=headers,
+    )
+    assert role.status_code == 201
+    role_id = role.json["data"]["role_id"]
+    permission = client.post(
+        "/api/permissions",
+        json={"role_id": role_id, "action_category": "world.view"},
+        headers=headers,
+    )
+    assert permission.status_code == 201
+    assert (
+        client.delete(
+            f"/api/permissions/{permission.json['data']['permission_id']}",
+            headers=headers,
+        ).status_code
+        == 200
+    )
+
+    assert client.post("/api/notifications/read-all").status_code == 403
+    assert client.get("/api/java-runtimes").status_code == 200
+
+
+def test_non_superadmin_can_use_personal_notifications_but_not_admin_catalogs(catalog_app):
+    admin, admin_headers = _admin_client(catalog_app)
+    role = admin.post(
+        "/api/roles",
+        json={"name": "Catalog User"},
+        headers=admin_headers,
+    )
+    assert role.status_code == 201
+    user = admin.post(
+        "/api/users",
+        json={
+            "username": "catalog-user",
+            "password": "another-strong-password",
+            "role_id": role.json["data"]["role_id"],
+        },
+        headers=admin_headers,
+    )
+    assert user.status_code == 201
+
+    container = catalog_app.extensions["mcmanager_container"]
+    session = container.auth.authenticate(
+        username="catalog-user",
+        password="another-strong-password",
+        device_id="catalog-user-device",
+        device_name="Catalog User",
+        ip="127.0.0.1",
+    )
+    client = catalog_app.test_client()
+    token = session_csrf_token(session.token)
+    client.set_cookie("mcmanager_session", session.token)
+    client.set_cookie("csrf_token", token)
+    assert client.get("/api/notifications").status_code == 200
+    assert (
+        client.post("/api/notifications/read-all", headers={"X-CSRF-Token": token}).status_code
+        == 200
+    )
+    assert client.get("/api/users").status_code == 403
+
+
+def test_first_run_setup_accepts_matching_pre_authentication_csrf(catalog_app):
+    client = catalog_app.test_client()
+    client.get("/")
+    token = client.get_cookie("csrf_token").value
+    response = client.post(
+        "/api/setup",
+        json={"username": "first-admin", "password": "first-admin-password"},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 201
+    assert response.json["data"]["setup_completed"] is True
+
+
+def test_anonymous_catalog_and_audit_reads_are_rejected(catalog_app):
+    for path in ("/api/schedules", "/api/templates", "/api/notifications", "/api/audit"):
+        response = catalog_app.test_client().get(path)
+        assert response.status_code == 401
+        assert response.json["error"]["code"] == "AUTH_SESSION_INVALID"

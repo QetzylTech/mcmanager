@@ -30,7 +30,7 @@ test('shell navigates all 17 modules without a document reload', async () => {
   const requests = [];
   const reloads = [];
   const historyEntries = [];
-  const root = { innerHTML: '' };
+  const root = { innerHTML: '', addEventListener() {} };
   const main = { dataset: { activePage: 'home' } };
   const refresh = { addEventListener() {} };
   const anchors = slugs.map((slug) => {
@@ -44,7 +44,7 @@ test('shell navigates all 17 modules without a document reload', async () => {
       async click() {
         let prevented = false;
         const event = {
-          target: { closest: () => this },
+          target: { closest: (selector) => selector === 'a[data-page]' ? this : null },
           preventDefault() {
             prevented = true;
           },
@@ -86,6 +86,26 @@ test('shell navigates all 17 modules without a document reload', async () => {
   };
   const fetch = async (url) => {
     requests.push(url);
+    if (url.startsWith('/api/worlds?')) {
+      return {
+        async json() {
+          return {
+            ok: true,
+            data: {
+              worlds: [{
+                world_id: 'world_survival',
+                display_name: 'Survival',
+                server_type: 'vanilla',
+                mc_version: '1.21',
+                state: 'off',
+                port: 25565,
+              }],
+            },
+            meta: { pagination: { limit: 50, offset: 0, total: 1 } },
+          };
+        },
+      };
+    }
     const slug = url.split('/').pop();
     return {
       async json() {
@@ -96,7 +116,7 @@ test('shell navigates all 17 modules without a document reload', async () => {
       },
     };
   };
-  vm.runInNewContext(source, { document, window, history, fetch });
+  vm.runInNewContext(source, { document, window, history, fetch, URLSearchParams });
   await flush();
   requests.length = 0;
 
@@ -104,14 +124,19 @@ test('shell navigates all 17 modules without a document reload', async () => {
   for (const anchor of anchors) {
     intercepted.push(await anchor.click());
     await flush();
+    if (anchor.dataset.page === 'worlds') {
+      assert.match(root.innerHTML, /Survival/);
+      assert.match(root.innerHTML, /25565/);
+    }
   }
 
   assert.ok(intercepted.every(Boolean), 'every navigation should be intercepted');
-  assert.equal(requests.length, 17);
+  assert.equal(requests.filter((url) => url.startsWith('/api/pages/')).length, 17);
   assert.deepEqual(
-    requests.map((url) => url.split('/').pop()),
+    requests.filter((url) => url.startsWith('/api/pages/')).map((url) => url.split('/').pop()),
     slugs,
   );
+  assert.ok(requests.includes('/api/worlds?limit=50&offset=0'));
   assert.equal(historyEntries.length, 17);
   assert.deepEqual(reloads, []);
 });
@@ -153,7 +178,18 @@ test('ten tabs share one hub connection and elect a replacement on leader close'
       this.url = url;
       this.id = ++nextEventSourceId;
       this.closed = false;
+      this.listeners = new Map();
       FakeEventSource.instances.push(this);
+    }
+
+    addEventListener(type, handler) {
+      const current = this.listeners.get(type) || [];
+      current.push(handler);
+      this.listeners.set(type, current);
+    }
+
+    emit(type, event) {
+      for (const handler of this.listeners.get(type) || []) handler(event);
     }
 
     close() {
@@ -167,13 +203,16 @@ test('ten tabs share one hub connection and elect a replacement on leader close'
     const channels = [];
     const eventSources = [];
     const timerHandles = [];
+    const dispatchedEvents = [];
     const window = {
       addEventListener(type, handler) {
         const current = listeners.get(type) || [];
         current.push(handler);
         listeners.set(type, current);
       },
-      dispatchEvent() {},
+      dispatchEvent(event) {
+        dispatchedEvents.push(event);
+      },
     };
     class TabBroadcastChannel extends FakeBroadcastChannel {
       constructor(name) {
@@ -218,6 +257,8 @@ test('ten tabs share one hub connection and elect a replacement on leader close'
     const tab = {
       channels,
       eventSources,
+      dispatchedEvents,
+      client: window.mcmanagerStreamClient,
       close() {
         for (const type of ['pagehide', 'beforeunload', 'unload']) {
           for (const listener of listeners.get(type) || []) listener();
@@ -250,4 +291,60 @@ test('ten tabs share one hub connection and elect a replacement on leader close'
   }
   assert.equal(activeSources().length, 1);
   assert.notEqual(activeSources()[0].id, leader.eventSources[0].id);
+
+  const replacementSource = activeSources()[0];
+  const remainingTabs = tabs.filter((tab) => tab !== leader);
+  const documentedTopics = [
+    'world.state',
+    'world.metrics',
+    'operation.created',
+    'operation.progress',
+    'operation.terminal',
+    'notification',
+    'system.stats',
+    'backup.progress',
+    'restore.progress',
+    'sync.status',
+    'log.line',
+    'alert',
+    'queue.position',
+    'missed_run',
+  ];
+  documentedTopics.forEach((topic, index) => {
+    replacementSource.emit(topic, {
+      data: JSON.stringify({ topic }),
+      lastEventId: String(index + 1),
+    });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  for (const topic of documentedTopics) {
+    assert.ok(remainingTabs.every((tab) => (
+      tab.dispatchedEvents.some((event) => event.type === `sse:${topic}`)
+    )), `${topic} should be delivered to every tab`);
+  }
+
+  replacementSource.emit('stream.error', {
+    data: JSON.stringify({ code: 'AUTH_SESSION_EXPIRED' }),
+    lastEventId: '2',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(activeSources().length, 0);
+  assert.ok(remainingTabs.every((tab) => (
+    tab.dispatchedEvents.some((event) => event.type === 'sse:stream.error')
+  )));
+
+  remainingTabs[0].client.resumeAfterAuthentication();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(activeSources().length, 1);
+  assert.ok(remainingTabs.every((tab) => !tab.client.authExpired));
+
+  activeSources()[0].emit('manager.shutdown', {
+    data: '{}',
+    lastEventId: '3',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(activeSources().length, 0);
+  assert.ok(remainingTabs.every((tab) => (
+    tab.dispatchedEvents.some((event) => event.type === 'sse:manager.shutdown')
+  )));
 });

@@ -6,18 +6,17 @@ import os
 import shutil
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from app.domain.tuning import STORAGE_GUARD_OVERFLOW_PCT, STORAGE_GUARD_RESERVE_BYTES
 from app.domain.value_objects import TriggerType
-from app.infrastructure.backup_engine import NativeBackupEngine
-from app.infrastructure.filesystem import LocalFilesystem
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.backup_engine import BackupEnginePort
 from app.ports.clock import Clock
 from app.ports.filesystem import FilesystemPort
+from app.ports.persistence import PersistencePort
 
 
 class SaveCoordinator(Protocol):
@@ -50,7 +49,7 @@ class BackupService:
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         clock: Clock,
         save_coordinator: SaveCoordinator | None = None,
         engine: BackupEnginePort | None = None,
@@ -59,8 +58,10 @@ class BackupService:
         self._store = store
         self._clock = clock
         self._save_coordinator = save_coordinator
-        self._engine = engine or NativeBackupEngine()
-        self._filesystem = filesystem or LocalFilesystem()
+        if engine is None or filesystem is None:
+            raise ValueError('backup engine and filesystem ports must be injected')
+        self._engine = engine
+        self._filesystem = filesystem
 
     def create_world_backup(
         self,
@@ -85,8 +86,12 @@ class BackupService:
             try:
                 level_dat = source_dir / 'level.dat'
                 coordinator.suspend_autosave(world_id)
+                try:
+                    level_dat_mtime_before_flush = self._filesystem.modified_at(level_dat)
+                except OSError as exc:
+                    raise BackupIntegrityError('LEVEL_DAT_FLUSH_UNVERIFIED') from exc
                 coordinator.flush(world_id)
-                self._verify_level_dat_flush(level_dat)
+                self._verify_level_dat_flush(level_dat, level_dat_mtime_before_flush)
                 result = self._write_and_register(
                     world_id=world_id,
                     source_dir=source_dir,
@@ -129,12 +134,15 @@ class BackupService:
     def extract_to_staging(self, artifact_id: str, staging_dir: str | Path) -> None:
         row = self.validate_artifact(artifact_id)
         target = Path(staging_dir)
-        if target.exists():
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True)
         try:
             self._engine.extract_archive(Path(row['storage_path']), target)
-        except ValueError as exc:
+        except (ValueError, zipfile.BadZipFile) as exc:
+            self._flag_suspect(artifact_id)
             raise BackupIntegrityError(str(exc)) from exc
 
     def _write_and_register(
@@ -150,35 +158,42 @@ class BackupService:
         backup_dir.mkdir(parents=True, exist_ok=True)
         final_path = backup_dir / f'{world_id}-{artifact_id}.zip'
         part_path = final_path.with_suffix(final_path.suffix + '.part')
-        skipped = self._write_zip(source_dir, part_path)
-        checksum = self._sha256(part_path)
-        self._verify_zip(part_path)
-        os.replace(part_path, final_path)
-        size = final_path.stat().st_size
-        if self._sha256(final_path) != checksum:
-            final_path.unlink(missing_ok=True)
-            raise BackupIntegrityError('post-rename checksum mismatch')
+        connection = None
+        try:
+            skipped = self._write_zip(source_dir, part_path)
+            checksum = self._sha256(part_path)
+            self._verify_zip(part_path)
+            os.replace(part_path, final_path)
+            size = final_path.stat().st_size
+            if self._sha256(final_path) != checksum:
+                raise BackupIntegrityError('post-rename checksum mismatch')
 
-        connection = self._store.writer()
-        connection.execute(
-            """
-            INSERT INTO backup_artifacts (
-                artifact_id, world_id, category, storage_path, size_bytes,
-                checksum, suspect, operation_id, deleted_at, deleted_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, ?)
-            """,
-            (
-                artifact_id,
-                world_id,
-                category.value,
-                str(final_path),
-                size,
-                checksum,
-                operation_id,
-                int(self._clock.now()),
-            ),
-        )
-        connection.commit()
+            connection = self._store.writer()
+            connection.execute(
+                """
+                INSERT INTO backup_artifacts (
+                    artifact_id, world_id, category, storage_path, size_bytes,
+                    checksum, suspect, operation_id, deleted_at, deleted_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, ?)
+                """,
+                (
+                    artifact_id,
+                    world_id,
+                    category.value,
+                    str(final_path),
+                    size,
+                    checksum,
+                    operation_id,
+                    int(self._clock.now()),
+                ),
+            )
+            connection.commit()
+        except Exception:
+            if connection is not None:
+                connection.rollback()
+            part_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            raise
         return BackupResult(artifact_id, str(final_path), checksum, size, skipped)
 
     def _write_zip(self, source_dir: Path, part_path: Path) -> int:
@@ -194,7 +209,9 @@ class BackupService:
     def _sha256(self, path: Path) -> str:
         return self._engine.sha256(path)
 
-    def _verify_level_dat_flush(self, level_dat: Path) -> None:
+    def _verify_level_dat_flush(
+        self, level_dat: Path, mtime_before_flush: float | None = None
+    ) -> None:
         try:
             modified_at = self._filesystem.modified_at(level_dat)
         except OSError as exc:
@@ -202,6 +219,14 @@ class BackupService:
         age = time.time() - modified_at
         if age < -5 or age > self.LEVEL_DAT_MAX_AGE_SECONDS:
             raise BackupIntegrityError('LEVEL_DAT_FLUSH_UNVERIFIED')
+        if mtime_before_flush is not None:
+            if modified_at < mtime_before_flush:
+                raise BackupIntegrityError('LEVEL_DAT_FLUSH_UNVERIFIED')
+            if (
+                modified_at == mtime_before_flush
+                and time.time() - mtime_before_flush >= 1.0
+            ):
+                raise BackupIntegrityError('LEVEL_DAT_FLUSH_UNVERIFIED')
 
     def _enforce_storage_guard(self, source_dir: Path, backup_dir: Path) -> None:
         estimated_size = self._filesystem.tree_size(source_dir)

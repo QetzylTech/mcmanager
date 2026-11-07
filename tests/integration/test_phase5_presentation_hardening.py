@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import html
 
+import pytest
+
 from app import create_app
 from app.shell.routes import PAGE_MODULES
 from benchmarks.performance_acceptance import run as run_performance_acceptance
@@ -15,7 +17,7 @@ def _app(tmp_path, migrations_dir, clock):
         clock=clock,
     )
     yield app
-    app.extensions["mcmanager_container"].store.close()
+    app.extensions["mcmanager_shutdown"]()
 
 
 def _authenticated_admin_client(app, *, step_up=False):
@@ -101,6 +103,38 @@ def test_health_monitors_scheduler_sqlite_writer_and_process_adapter(
         assert data["sqlite_writer"]["status"] == "ok"
         assert data["process_adapter"]["status"] == "ok"
         assert data["process_adapter"]["adapter"]
+        assert data["reconciliation"]["status"] == "ok"
+        assert data["reconciliation"]["phase"] == "healthy"
+    finally:
+        next(app_iter, None)
+
+
+def test_health_reports_reconciliation_failure(tmp_path, migrations_dir, clock, monkeypatch):
+    app_iter = _app(tmp_path, migrations_dir, clock)
+    app = next(app_iter)
+    container = app.extensions["mcmanager_container"]
+
+    def fail_reconcile():
+        raise RuntimeError("process probe failed")
+
+    monkeypatch.setattr(
+        container.runtime,
+        "reconcile",
+        fail_reconcile,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="process probe failed"):
+            container.reconciliation.reconcile()
+
+        response = app.test_client().get("/api/health")
+        payload = response.get_json()
+        assert response.status_code == 503
+        assert payload["data"]["reconciliation"] == {
+            "status": "down",
+            "phase": "failed",
+            "reattached_worlds": 0,
+            "error": "process probe failed",
+        }
     finally:
         next(app_iter, None)
 
@@ -113,7 +147,7 @@ def test_health_reports_degrades_to_503_when_writer_down(tmp_path, migrations_di
         baseline = client.get("/api/health")
         assert baseline.status_code == 200
         # Simulate a dead writer by closing the store; the probe must fail.
-        app.extensions["mcmanager_container"].store.close()
+        app.extensions["mcmanager_shutdown"]()
         response = client.get("/api/health")
         assert response.status_code == 503
         assert response.get_json()["data"]["sqlite_writer"]["status"] == "down"

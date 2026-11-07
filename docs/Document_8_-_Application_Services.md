@@ -25,6 +25,10 @@ Concrete service behavior from Doc 6/7 — who does what, in what order, with re
 | ConfigurationService | Config:GuardedEdits(server.properties), ConfigEdit:Orchestrate(never silent), Settings:3-TierInheritance, Version:OptimisticCheck (Doc 9 §4) | Executing the ops themselves | `world_instances`(metadata), `world_settings`, `global_settings`, `schedules`, `cleanup_policies`, `roles`, `permissions`, `role_assignments`, `sync_targets`, `templates`(write via logged ConfigEdit) |
 | MetricsService | Metrics:Cadence(null/15s-cache/1Hz), Snapshot:CacheForFirstPaint | — | none persisted (reads `world_instances`/`runtime_sessions`, broadcasts) |
 
+### Service dependency boundary
+
+Application services depend on domain types and ports, not concrete infrastructure or platform adapters. The composition root supplies adapter implementations through constructor injection. Existing transaction-oriented SQL paths use the persistence port to preserve transaction behavior; new persistence behavior should use repositories where practical.
+
 ## 2 Command flow per operation type
 
 Standard shape for all: authorize → validate preconditions → create Operation → queue → dispatch → execute with checkpoints → audit → notify → terminal status. Differences per type = preconditions + domain service.
@@ -84,7 +88,7 @@ Ship as defaults in `global_settings`; globally overridable only where the table
 | Stop graceful deadline | **60s** | then escalate to Kill (escalation reuses Kill path — Doc 13 C10) |
 | Kill process-level deadline | **10s** | after forced signal, if tree not exited → supervisor re-asserts termination, marks `forced` on exit-classification |
 | Start cooldown | **10s** | duplicate-start guard (Doc 9 §6 "Start — Ignored") |
-| Sync transient retries | **3 attempts** | exp backoff 30s/60s/120s (base 30s ×2/attempt); 3rd `failed_transient` → SyncRecord `failed` |
+| Sync transient retries | **3 total attempts** | exp backoff waits 30s/60s between attempts; 3rd `failed_transient` → SyncRecord `failed` |
 | Sync per-attempt timeout | **120s** | configurable |
 | Sync outer overall bound | **30min** | total wall-clock for all attempts; configurable |
 | Sync global concurrency cap | **2 simultaneous transfers** | §7; configurable (Doc 10 `SYNC_CONCURRENCY_CAP`) |
@@ -114,7 +118,7 @@ Referenced by Doc 13 (C9/C10), Doc 10 (`OP_TIMEOUT`, `AUTH_THROTTLED`), Doc 11 (
 | Backup | No (failure surfaced; retry = new trigger) | Configurable per world size | While `Queued`/`Validating` only |
 | Restore | No | Longer default (file I/O) — default 30min | While `Queued`/`Validating` only — once staging begins, must run to terminal |
 | Cleanup | No | Configurable, scales with candidate set | Yes while `Queued`/`Validating`; dry-runs inherently low-risk |
-| Sync | **Yes — the one exception.** Exp backoff **3 attempts** (30s/60s/120s) for transient; permanent failures go straight `Failed` | Per-attempt **120s** + outer **30min** (configurable) | **Yes, even while `Running`** — aborting a transfer is safe (source artifact immutable/untouched) |
+| Sync | **Yes — the one exception.** Exp backoff **3 total attempts** (wait 30s, then 60s) for transient; permanent failures go straight `Failed` | Per-attempt **120s** + outer **30min** (configurable) | **Yes, even while `Running`** — aborting a transfer is safe (source artifact immutable/untouched) |
 | ConfigEdit | N/A (sync-fast) | Short (formality) — default 30s | No |
 | CrashDetected | N/A (system observation) | N/A | No |
 | DeleteWorld | No | Configurable, scales with world size — default 30min | While `Queued`/`Validating` only, before file removal |

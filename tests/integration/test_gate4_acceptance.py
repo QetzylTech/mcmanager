@@ -13,10 +13,22 @@ import pytest
 
 from app.domain.tuning import CLEANUP_BLAST_RADIUS_CAP
 from app.domain.value_objects import ActorType, OperationStatus, OperationType, TriggerType
+from app.infrastructure.backup_engine import NativeBackupEngine
+from app.infrastructure.filesystem import LocalFilesystem
 from app.services.backup import BackupService
 from app.services.cleanup import CleanupService, RetentionError
 from app.services.operations import OperationInput, OperationService
 from app.services.restore import RestoreService
+
+
+def _backup_service(store, clock, coordinator=None) -> BackupService:
+    return BackupService(
+        store,
+        clock,
+        coordinator,
+        NativeBackupEngine(),
+        LocalFilesystem(),
+    )
 
 
 def _seed_world(store, *, state: str = 'off') -> str:
@@ -76,6 +88,16 @@ def _seed_world(store, *, state: str = 'off') -> str:
     return 'gate4_world'
 
 
+@pytest.fixture(autouse=True)
+def sufficient_test_disk(monkeypatch):
+    free = 200 * 1024**3
+    monkeypatch.setattr(
+        shutil,
+        'disk_usage',
+        lambda _path: SimpleNamespace(total=free, used=0, free=free),
+    )
+
+
 def _create_operation(
     store,
     clock,
@@ -96,7 +118,7 @@ def _create_operation(
 
 def _seed_source_artifact(store, clock, world_id: str, source_dir: Path, backup_dir: Path) -> str:
     source_op = _create_operation(store, clock, world_id, OperationType.BACKUP)
-    result = BackupService(store, clock).create_world_backup(
+    result = _backup_service(store, clock).create_world_backup(
         world_id=world_id,
         world_dir=source_dir,
         backup_dir=backup_dir,
@@ -130,7 +152,7 @@ def test_backup_artifact_is_atomic_zip_with_verified_sha256(store, clock, tmp_pa
     (world_dir / 'ignored.part').write_bytes(b'partial')
     backup_dir = tmp_path / 'backups'
 
-    result = BackupService(store, clock).create_world_backup(
+    result = _backup_service(store, clock).create_world_backup(
         world_id=world_id,
         world_dir=world_dir,
         backup_dir=backup_dir,
@@ -156,6 +178,45 @@ def test_backup_artifact_is_atomic_zip_with_verified_sha256(store, clock, tmp_pa
     }
 
 
+def test_backup_checksum_failure_cleans_published_and_staged_files(
+    store, clock, tmp_path, monkeypatch
+):
+    world_id = _seed_world(store)
+    operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
+    world_dir = tmp_path / 'world'
+    world_dir.mkdir()
+    (world_dir / 'level.dat').write_bytes(b'level-data')
+    backup_dir = tmp_path / 'backups'
+    service = _backup_service(store, clock)
+
+    original_checksum = service._sha256
+    checksum_calls = 0
+
+    def fail_post_publish_checksum(path: Path) -> str:
+        nonlocal checksum_calls
+        checksum_calls += 1
+        if checksum_calls == 2:
+            raise OSError('simulated checksum failure')
+        return original_checksum(path)
+
+    monkeypatch.setattr(service, '_sha256', fail_post_publish_checksum)
+    with pytest.raises(OSError, match='simulated checksum failure'):
+        service.create_world_backup(
+            world_id=world_id,
+            world_dir=world_dir,
+            backup_dir=backup_dir,
+            operation_id=operation['op_id'],
+            category=TriggerType.MANUAL,
+        )
+
+    assert not list(backup_dir.glob('*.part'))
+    assert not list(backup_dir.glob('*.zip'))
+    assert store.reader().execute(
+        'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
+        (operation['op_id'],),
+    ).fetchone()['n'] == 0
+
+
 def test_running_backup_always_sends_save_on_after_compression_failure(
     store, clock, tmp_path, monkeypatch
 ):
@@ -166,7 +227,7 @@ def test_running_backup_always_sends_save_on_after_compression_failure(
     (world_dir / 'level.dat').write_bytes(b'level-data')
     backup_dir = tmp_path / 'backups'
     coordinator = _NoopSaveCoordinator()
-    service = BackupService(store, clock, coordinator)
+    service = _backup_service(store, clock, coordinator)
 
     def fail_compression(source_dir: Path, part_path: Path) -> int:
         raise OSError('simulated compression failure')
@@ -213,7 +274,7 @@ def test_backup_storage_guard_uses_contextual_reserve_not_flat_percentage(
         return SimpleNamespace(total=total, used=total - free, free=free)
 
     monkeypatch.setattr(shutil, 'disk_usage', disk_usage)
-    service = BackupService(store, clock)
+    service = _backup_service(store, clock)
 
     if should_capture:
         service.create_world_backup(
@@ -252,7 +313,7 @@ def test_running_backup_rejects_stale_level_dat_mtime_and_restores_save_on(
     backup_dir = tmp_path / 'backups'
 
     with pytest.raises(Exception, match='LEVEL_DAT_FLUSH_UNVERIFIED'):
-        BackupService(store, clock, coordinator).create_world_backup(
+        _backup_service(store, clock, coordinator).create_world_backup(
             world_id=world_id,
             world_dir=world_dir,
             backup_dir=backup_dir,
@@ -284,7 +345,7 @@ def test_restore_requires_world_off_before_prebackup_or_any_restore_side_effect(
         'SELECT COUNT(*) AS n FROM backup_artifacts'
     ).fetchone()['n']
     restore = RestoreService(
-        store, clock, OperationService(store, clock), BackupService(store, clock)
+        store, clock, OperationService(store, clock), _backup_service(store, clock)
     )
 
     with pytest.raises(Exception, match='WORLD_NOT_OFF'):
@@ -320,7 +381,7 @@ def test_restore_always_registers_mandatory_pre_restore_artifact(store, clock, t
     restore_operation = _create_operation(store, clock, world_id, OperationType.RESTORE)
 
     result = RestoreService(
-        store, clock, OperationService(store, clock), BackupService(store, clock)
+        store, clock, OperationService(store, clock), _backup_service(store, clock)
     ).restore(
         world_id=world_id,
         artifact_id=artifact_id,
@@ -367,7 +428,7 @@ def test_failed_restore_verification_rolls_back_and_marks_source_suspect(
         store,
         clock,
         OperationService(store, clock),
-        BackupService(store, clock),
+        _backup_service(store, clock),
         FailedRestart(),
     ).restore(
         world_id=world_id,
@@ -589,7 +650,7 @@ def test_sync_service_exposes_three_stage_retry_and_daily_transfer_cap():
         module, 'OffsiteSyncService', None
     )
     assert service_type is not None, 'Gate 4 requires a SyncService implementation'
-    assert tuple(service_type.BACKOFF_DELAYS) == (30, 60, 120)
+    assert tuple(service_type.BACKOFF_DELAYS) == (30, 60)
     assert service_type.DAILY_TRANSFER_CAP_BYTES == 50 * 1024**3
 
 
@@ -617,7 +678,7 @@ def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_loca
     sleeps: list[float] = []
     monkeypatch.setattr(module.time, 'sleep', sleeps.append)
     sync = service_type(store, FailingTransport())
-    backup = BackupService(store, clock)
+    backup = _backup_service(store, clock)
     result = backup.create_world_backup(
         world_id=world_id,
         world_dir=source_dir,
@@ -632,7 +693,7 @@ def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_loca
         (result.artifact_id,),
     ).fetchone()['checksum'] == result.checksum
     sync.dispatch_sync(result.artifact_id, 'gate4-nas')
-    assert sleeps == [30, 60, 120]
+    assert sleeps == [30, 60]
     timeline = store.reader().execute(
         """
         SELECT attempt_number, started_at, finished_at, outcome
@@ -649,6 +710,7 @@ def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_loca
         range(1, len(timeline) + 1)
     )
     assert timeline
+    assert len(timeline) == 3
     assert all(row['started_at'] <= row['finished_at'] for row in timeline)
     assert all(row['outcome'] == 'failed_transient' for row in timeline)
     assert store.reader().execute(
@@ -674,7 +736,7 @@ def test_sync_daily_cap_rejects_dispatch_without_touching_local_artifact(
     world_dir.mkdir()
     (world_dir / 'level.dat').write_bytes(b'local backup remains valid')
     operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
-    result = BackupService(store, clock).create_world_backup(
+    result = _backup_service(store, clock).create_world_backup(
         world_id=world_id,
         world_dir=world_dir,
         backup_dir=tmp_path / 'backups',

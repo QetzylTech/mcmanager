@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
+from app.ports.persistence import PersistencePort
 from app.services.audit import ActorSnapshot, AuditService
+from app.services.notifications import NotificationService
 from app.services.realtime import RealtimeHub
 
 IN_FLIGHT_STATUSES = (
@@ -56,6 +57,7 @@ class OperationInput:
     actor_user_id: str | None = None
     idempotency_key: str | None = None
     data: dict[str, Any] | None = None
+    compensates_operation_id: str | None = None
 
 
 class OperationService:
@@ -63,15 +65,17 @@ class OperationService:
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         clock: Clock,
         audit: AuditService | None = None,
         realtime: RealtimeHub | None = None,
+        notifications: NotificationService | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._audit = audit or AuditService(store, clock)
         self._realtime = realtime
+        self._notifications = notifications
         self._progress_cache: dict[str, dict[str, Any]] = {}
         self._pending_checkpoints: dict[str, dict[str, Any]] = {}
         self._progress_lock = threading.RLock()
@@ -96,6 +100,25 @@ class OperationService:
         ).fetchone()
         return row is not None
 
+    def has_active_operation(self, world_id: str, *, exclude_op_id: str) -> bool:
+        statuses = (
+            OperationStatus.CREATED.value,
+            OperationStatus.VALIDATING.value,
+            OperationStatus.RUNNING.value,
+        )
+        row = self._store.reader().execute(
+            f"""
+            SELECT 1
+            FROM operations
+            WHERE world_id = ?
+              AND op_id <> ?
+              AND status IN ({','.join('?' for _ in statuses)})
+            LIMIT 1
+            """,
+            (world_id, exclude_op_id, *statuses),
+        ).fetchone()
+        return row is not None
+
     def create(
         self,
         request: OperationInput,
@@ -103,7 +126,21 @@ class OperationService:
         initial_status: OperationStatus = OperationStatus.QUEUED,
         allow_world_conflict: bool = False,
     ) -> dict[str, Any]:
-        """Create an operation, applying Doc 9 queue/reject/ignore/preempt rules."""
+        operation, _ = self.create_with_replay(
+            request,
+            initial_status=initial_status,
+            allow_world_conflict=allow_world_conflict,
+        )
+        return operation
+
+    def create_with_replay(
+        self,
+        request: OperationInput,
+        *,
+        initial_status: OperationStatus = OperationStatus.QUEUED,
+        allow_world_conflict: bool = False,
+    ) -> tuple[dict[str, Any], bool]:
+        """Create an operation and report whether an existing request was replayed."""
         connection = self._store.writer()
         now = int(self._clock.now())
         terminal_audits: list[dict[str, Any]] = []
@@ -117,7 +154,7 @@ class OperationService:
                 ).fetchone()
                 if existing is not None:
                     connection.commit()
-                    return dict(existing)
+                    return dict(existing), True
 
             active: list[dict[str, Any]] = []
             if request.world_id is not None:
@@ -133,7 +170,27 @@ class OperationService:
                 active = [dict(row) for row in rows]
 
             status = initial_status
-            if request.world_id is not None and not allow_world_conflict:
+            if request.op_type == OperationType.SYNC:
+                artifact_id = self._sync_artifact_id(request.data)
+                if artifact_id is not None and self._has_in_flight_sync(
+                    connection, artifact_id
+                ):
+                    status = OperationStatus.QUEUED
+
+            if request.op_type == OperationType.CLEANUP:
+                cleanup_scope = self._cleanup_scope(
+                    {'world_id': request.world_id, 'data_json': json.dumps(request.data or {})}
+                )
+                if cleanup_scope is not None and self._has_in_flight_cleanup_scope(
+                    connection, cleanup_scope
+                ):
+                    status = OperationStatus.QUEUED
+
+            if (
+                request.world_id is not None
+                and not allow_world_conflict
+                and request.op_type != OperationType.SYNC
+            ):
                 repeated = next(
                     (
                         row
@@ -146,7 +203,7 @@ class OperationService:
                 )
                 if repeated is not None:
                     connection.commit()
-                    return repeated
+                    return repeated, True
                 active, status, terminal_audits = self._apply_conflict_policy(
                     connection, request, active, status, now
                 )
@@ -160,7 +217,7 @@ class OperationService:
                     compensates_operation_id, intent_at, started_at,
                     finished_at, error_code, message, data_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, ?, ?, NULL, NULL, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     op_id,
@@ -170,6 +227,7 @@ class OperationService:
                     request.actor_user_id,
                     request.idempotency_key,
                     status.value,
+                    request.compensates_operation_id,
                     now,
                     now if status == OperationStatus.RUNNING else None,
                     json.dumps(request.data) if request.data is not None else None,
@@ -190,7 +248,93 @@ class OperationService:
             self._publish_terminal(terminal_row)
         assert created is not None
         self._publish_created(created)
-        return created
+        return created, False
+
+    def get_by_idempotency_key(
+        self, op_type: OperationType, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        row = self._store.reader().execute(
+            'SELECT * FROM operations WHERE op_type = ? AND idempotency_key = ?',
+            (op_type.value, idempotency_key),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_queued(
+        self, op_types: tuple[OperationType, ...]
+    ) -> list[dict[str, Any]]:
+        if not op_types:
+            return []
+        rows = self._store.reader().execute(
+            f"""
+            SELECT *
+            FROM operations
+            WHERE status = ?
+              AND op_type IN ({','.join('?' for _ in op_types)})
+            ORDER BY created_at ASC, op_id ASC
+            """,
+            (OperationStatus.QUEUED.value, *(op_type.value for op_type in op_types)),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def claim_queued(self, op_id: str) -> dict[str, Any] | None:
+        """Atomically claim a durable queued operation for one dispatcher."""
+        connection = self._store.writer()
+        now = int(self._clock.now())
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            current = connection.execute(
+                'SELECT world_id FROM operations WHERE op_id = ? AND status = ?',
+                (op_id, OperationStatus.QUEUED.value),
+            ).fetchone()
+            if current is None:
+                connection.commit()
+                return None
+            if current['world_id'] is not None:
+                active_statuses = (
+                    OperationStatus.CREATED.value,
+                    OperationStatus.VALIDATING.value,
+                    OperationStatus.RUNNING.value,
+                )
+                active = connection.execute(
+                    f"""
+                    SELECT 1 FROM operations
+                    WHERE world_id = ?
+                      AND op_id <> ?
+                      AND status IN ({','.join('?' for _ in active_statuses)})
+                    LIMIT 1
+                    """,
+                    (current['world_id'], op_id, *active_statuses),
+                ).fetchone()
+                if active is not None:
+                    connection.commit()
+                    return None
+            cursor = connection.execute(
+                """
+                UPDATE operations
+                SET status = ?, started_at = COALESCE(started_at, ?), updated_at = ?
+                WHERE op_id = ? AND status = ?
+                """,
+                (
+                    OperationStatus.RUNNING.value,
+                    now,
+                    now,
+                    op_id,
+                    OperationStatus.QUEUED.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.commit()
+                return None
+            row = connection.execute(
+                'SELECT * FROM operations WHERE op_id = ?', (op_id,)
+            ).fetchone()
+            claimed = dict(row)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        self._publish_status(claimed, OperationStatus.RUNNING)
+        return claimed
 
     def _apply_conflict_policy(
         self,
@@ -265,13 +409,23 @@ class OperationService:
             return active, OperationStatus.QUEUED, []
 
         if op_type == OperationType.CLEANUP.value:
-            conflicting = active_types - _RUNTIME_TYPES
-            if conflicting - {OperationType.CLEANUP.value}:
+            cleanup_scope = self._cleanup_scope(
+                {'world_id': request.world_id, 'data_json': json.dumps(request.data or {})}
+            )
+            matching_cleanup = [
+                row
+                for row in active
+                if row['op_type'] == OperationType.CLEANUP.value
+                and cleanup_scope is not None
+                and self._cleanup_scope(row) == cleanup_scope
+            ]
+            if matching_cleanup:
+                return active, OperationStatus.QUEUED, []
+            conflicting = active_types - _RUNTIME_TYPES - {OperationType.CLEANUP.value}
+            if conflicting:
                 raise OperationConflictError(
                     f'Cleanup conflicts with in-flight operation for world {request.world_id}'
                 )
-            if OperationType.CLEANUP.value in active_types:
-                return active, OperationStatus.QUEUED, []
             return active, status, []
 
         if op_type == OperationType.STOP.value:
@@ -296,6 +450,58 @@ class OperationService:
         raise OperationConflictError(
             f'{op_type} conflicts with in-flight operation for world {request.world_id}'
         )
+
+    @staticmethod
+    def _sync_artifact_id(data: dict[str, Any] | None) -> str | None:
+        artifact_id = (data or {}).get('artifact_id')
+        return artifact_id if isinstance(artifact_id, str) and artifact_id else None
+
+    @staticmethod
+    def _cleanup_scope(operation: dict[str, Any]) -> str | None:
+        data_json = operation.get('data_json')
+        try:
+            data = json.loads(data_json or '{}')
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        scope = data.get('scope')
+        if isinstance(scope, str) and scope:
+            return scope
+        world_id = operation.get('world_id')
+        return f'world:{world_id}' if world_id is not None else None
+
+    @classmethod
+    def _has_in_flight_sync(
+        cls, connection: sqlite3.Connection, artifact_id: str
+    ) -> bool:
+        rows = connection.execute(
+            f"""
+            SELECT data_json FROM operations
+            WHERE op_type = ? AND status IN ({','.join('?' for _ in IN_FLIGHT_STATUSES)})
+            """,
+            (OperationType.SYNC.value, *IN_FLIGHT_STATUSES),
+        ).fetchall()
+        return any(
+            cls._sync_artifact_id(
+                json.loads(row['data_json'] or '{}')
+                if row['data_json'] is not None
+                else None
+            )
+            == artifact_id
+            for row in rows
+        )
+
+    @classmethod
+    def _has_in_flight_cleanup_scope(
+        cls, connection: sqlite3.Connection, scope: str
+    ) -> bool:
+        rows = connection.execute(
+            f"""
+            SELECT world_id, data_json FROM operations
+            WHERE op_type = ? AND status IN ({','.join('?' for _ in IN_FLIGHT_STATUSES)})
+            """,
+            (OperationType.CLEANUP.value, *IN_FLIGHT_STATUSES),
+        ).fetchall()
+        return any(cls._cleanup_scope(dict(row)) == scope for row in rows)
 
     def _cancel_row(
         self,
@@ -396,6 +602,10 @@ class OperationService:
             )
             if terminal:
                 self._write_terminal_audit(connection, updated)
+                if self._notifications is not None:
+                    self._notifications.publish_terminal_operation(
+                        updated, connection=connection
+                    )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -434,6 +644,20 @@ class OperationService:
             'ts': progress['ts'],
         }
         self._publish('operation.progress', payload, row['world_id'])
+        event_payload = {
+            'world_id': row['world_id'],
+            'operation_id': op_id,
+            'stage': step_name,
+            'pct': progress_pct,
+        }
+        if row['op_type'] == OperationType.BACKUP.value:
+            self._publish('backup.progress', event_payload, row['world_id'])
+        elif row['op_type'] == OperationType.RESTORE.value:
+            self._publish(
+                'restore.progress',
+                {**event_payload, 'reverted': False},
+                row['world_id'],
+            )
 
     def _write_terminal_audit(
         self, connection: sqlite3.Connection, operation: dict[str, Any]
@@ -445,6 +669,23 @@ class OperationService:
                 'SELECT username FROM users WHERE user_id = ?', (operation['actor_user_id'],)
             ).fetchone()
             username = user['username'] if user is not None else None
+        payload = {
+            'op_type': operation['op_type'],
+            'status': operation['status'],
+            'error_code': operation['error_code'],
+            'message': operation['message'],
+        }
+        if operation['op_type'] == OperationType.CONFIG_EDIT.value:
+            try:
+                config_edit = json.loads(operation['data_json'] or '{}')
+            except json.JSONDecodeError:
+                config_edit = {}
+            payload.update(
+                {
+                    key: config_edit.get(key, {})
+                    for key in ('entity', 'row_id', 'before', 'after')
+                }
+            )
         self._audit.write(
             event_type=(
                 f"operation.{operation['op_type'].lower()}.{operation['status'].lower()}"
@@ -456,12 +697,7 @@ class OperationService:
             ),
             operation_id=operation['op_id'],
             world_id=operation['world_id'],
-            payload={
-                'op_type': operation['op_type'],
-                'status': operation['status'],
-                'error_code': operation['error_code'],
-                'message': operation['message'],
-            },
+            payload=payload,
             when=operation['finished_at'],
             connection=connection,
         )
@@ -498,6 +734,16 @@ class OperationService:
             },
             operation['world_id'],
         )
+        if position > 0:
+            self._publish(
+                'queue.position',
+                {
+                    'op_id': operation['op_id'],
+                    'op_type': operation['op_type'],
+                    'queue_position': position,
+                },
+                operation['world_id'],
+            )
 
     def _publish_status(
         self,
@@ -527,6 +773,23 @@ class OperationService:
             },
             operation['world_id'],
         )
+        if self._realtime is not None:
+            notification = self._store.reader().execute(
+                """
+                SELECT notification_id, category, severity, message,
+                       related_operation_id, related_world_id, requires_action,
+                       action_taken, created_at
+                FROM notifications
+                WHERE related_operation_id = ?
+                """,
+                (operation['op_id'],),
+            ).fetchone()
+            if notification is not None:
+                self._publish(
+                    'notification',
+                    dict(notification),
+                    operation['world_id'],
+                )
 
     def _publish(self, event: str, payload: dict[str, Any], world_id: str | None) -> None:
         if self._realtime is None:
@@ -534,6 +797,11 @@ class OperationService:
         self._realtime.publish('events', event, payload)
         if world_id is not None:
             self._realtime.publish(f'world:{world_id}:events', event, payload)
+
+    def publish_event(
+        self, event: str, payload: dict[str, Any], *, world_id: str | None = None
+    ) -> None:
+        self._publish(event, payload, world_id)
 
     def list_incomplete(self) -> list[dict[str, Any]]:
         rows = self._store.reader().execute(

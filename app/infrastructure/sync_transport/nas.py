@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from app.infrastructure.sqlite.connection import SqliteStore
-from app.ports.sync_transport import SyncTransportPort
+from app.ports.sync_transport import PermanentSyncTransportError, SyncTransportPort
 
 
 class NasSyncTransport(SyncTransportPort):
@@ -26,11 +26,20 @@ class NasSyncTransport(SyncTransportPort):
             (target_id,),
         ).fetchone()
         if target is None or target['target_type'] != 'nas':
-            raise ValueError(f'NAS target is not configured: {target_id}')
-        config = json.loads(target['config'])
+            raise PermanentSyncTransportError(
+                f'NAS target is not configured: {target_id}'
+            )
+        try:
+            config = json.loads(target['config'])
+        except (TypeError, ValueError) as exc:
+            raise PermanentSyncTransportError(
+                f'NAS target configuration is invalid: {target_id}'
+            ) from exc
         target_path = config.get('path')
         if not isinstance(target_path, str) or not target_path:
-            raise ValueError(f'NAS target path is missing: {target_id}')
+            raise PermanentSyncTransportError(
+                f'NAS target path is missing: {target_id}'
+            )
         target_root = Path(target_path)
         target_root.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, target_root / Path(source_path).name)

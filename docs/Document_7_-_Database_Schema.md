@@ -47,7 +47,7 @@ IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 `template_id` PK | `name` UNIQ_SOFT | `category` // free-text, never a closed enum | `default_version` | `config_defaults` JSON // must include generic launch-command template; adapter launches by data | `source` // built_in/imported | `deprecated` INT // distinct from deleted_at: hidden from create, still referenced historically | `version` INT // Doc 9 §4 | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 
 **2.7 java_runtimes** // T2, soft-deprecated only, Doc 6 §2.11
-`runtime_id` PK | `label` UNIQ_SOFT | `executable_path` | `version_detected` | `status` // registered/verified/missing/deprecated | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
+`runtime_id` PK | `label` UNIQ_SOFT | `executable_path` | `version_detected` | `status` // registered/verified/missing/deprecated | `version` INT // API optimistic lock | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 
 **2.8 runtime_sessions** // T2 in principle, practically permanent
 `session_id` PK | `world_id` FK->world_instances | `started_at` INT // set only at confirmed running (Doc 6 §2.2) | `ended_at` NULL | `end_reason` NULL // graceful_stop/forced_stop/crashed/emergency_stop/reconciled_missing | `rcon_secret_id` FK->secrets | `port_used` INT | `java_runtime_id` FK->java_runtimes // historical, not necessarily current | `launch_args_snapshot` JSON // captured at launch; independent of later edits | `created_at`

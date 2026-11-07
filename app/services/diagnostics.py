@@ -4,14 +4,26 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
-from app.bootstrap import Container
+from app.ports.persistence import PersistencePort
+from app.ports.process_control import ProcessControlPort
+from app.services.operations import OperationService
+from app.services.scheduler import SchedulerService
+
+
+class DiagnosticsDependencies(Protocol):
+    """Service capabilities needed to build manager diagnostics."""
+
+    scheduler: SchedulerService
+    operations: OperationService
+    store: PersistencePort
+    process_adapter: ProcessControlPort
 
 
 @dataclass(frozen=True)
 class DiagnosticsService:
-    container: Container
+    container: DiagnosticsDependencies
 
     def health(self) -> dict[str, str]:
         return {'status': 'ok', 'db': 'ok', 'version': 'dev'}

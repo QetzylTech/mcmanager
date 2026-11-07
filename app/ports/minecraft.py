@@ -59,7 +59,7 @@ def detect_eula(world_dir: str, file_name: str = 'eula.txt') -> EulaState:
     if not os.path.exists(path):
         return EulaState.NOT_PRESENT
 
-    with open(path, 'r', encoding='utf-8', errors='replace') as handle:
+    with open(path, encoding='utf-8', errors='replace') as handle:
         content = handle.read()
 
     for line in content.splitlines():

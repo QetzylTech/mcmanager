@@ -15,8 +15,8 @@ from app.domain.value_objects import (
     TriggerType,
     WorldState,
 )
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
+from app.ports.persistence import PersistencePort
 from app.services.backup import BackupService
 from app.services.operations import OperationInput, OperationService
 
@@ -46,7 +46,7 @@ class RestoreService:
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         clock: Clock,
         operations: OperationService,
         backups: BackupService,
@@ -118,6 +118,7 @@ class RestoreService:
                 actor_type=ActorType.SYSTEM,
                 world_id=world_id,
                 data={'rollback_of_restore_id': restore_id, 'source_artifact_id': pre_backup.artifact_id},
+                compensates_operation_id=operation_id,
             ),
             allow_world_conflict=True,
         )
@@ -157,9 +158,19 @@ class RestoreService:
 
     def _switch_world(self, world_dir: Path, staging_dir: Path) -> None:
         archive_dir = world_dir.with_name(f'{world_dir.name}.restore-archive-{uuid.uuid4().hex[:8]}')
-        if world_dir.exists():
+        archived_original = world_dir.exists()
+        if archived_original:
             shutil.move(str(world_dir), str(archive_dir))
-        shutil.move(str(staging_dir), str(world_dir))
+        try:
+            shutil.move(str(staging_dir), str(world_dir))
+        except Exception:
+            if archived_original and archive_dir.exists():
+                if world_dir.is_symlink() or world_dir.is_file():
+                    world_dir.unlink()
+                elif world_dir.exists():
+                    shutil.rmtree(world_dir)
+                shutil.move(str(archive_dir), str(world_dir))
+            raise
 
     def _record_history(
         self,

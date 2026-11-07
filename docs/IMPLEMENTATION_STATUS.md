@@ -1,64 +1,69 @@
 # MCManager Implementation Status
 
-Last verified: 2026-11-06
+Last verified: 2026-11-07
 
-`docs/` is the product contract. This file records the current implementation
-and verification state; passing a gate's focused tests does not mean the whole
-product or release gate is complete.
+`docs/` is the product contract. This file summarizes implementation and
+verification state; passing focused tests does not mean a whole gate or the
+product is release-ready. Work-item ownership, dependencies, and detailed
+evidence are tracked in [WORKBOARD.md](WORKBOARD.md).
 
-Work-item ownership, dependencies, and current acceptance evidence are tracked
-in [WORKBOARD.md](WORKBOARD.md).
+## Current assessment
+
+MCManager has a tested application foundation and substantial control-plane
+functionality. It is an **early functional prototype, not yet an
+operator-ready MVP** for dependable day-to-day server management. The main
+product gaps are the remaining backup/restore/cleanup/sync API workflows,
+complete shell workflows, manager lifecycle operations, and cross-platform,
+security, and performance release acceptance.
 
 ## Gate status
 
-| Gate | Status | Verified scope |
-|---|---|---|
-| 1 - Process and Minecraft adapters | Partial | Port-based Minecraft adapter wiring, process conformance, readiness, and missing-JAR validation. Windows conformance passed; POSIX was not run in this environment. |
-| 2 - Persistence and domain | Partial | Domain lifecycle/invariants, effective settings resolution, ConfigEdit operations, and conflict mapping. Schema FK checks remain part of migration verification. |
-| 3 - Control plane | Partial | Milestone-only operations, in-memory progress, terminal audit, conflict policy, startup reconciliation, supervisor/scheduler workers, and missed-run recording. |
-| 4 - Operational subsystems | Partial | Native ZIP/SHA-256 backup, storage/flush guards, restore rollback, cleanup floors/operations, and sync retry/cap services. |
-| 5 - API, streams, and shell | Partial | Session/CSRF/step-up middleware, auth routes, selected world/operation routes, SSE replay/subscription, multi-tab client, and shell navigation. |
+| Gate | Status | Implemented and verified scope | Remaining acceptance |
+|---|---|---|---|
+| 1 - Process and Minecraft adapters | Partial | Port-based process/Minecraft wiring, Windows/fake adapter contracts, readiness and EULA flow, durable logging | POSIX C1-C14 evidence and real Vanilla/Paper/Fabric/Forge integration spike |
+| 2 - Persistence and domain | Core slices Done | Migration/persistence checks, domain lifecycle validation, effective configuration, ConfigEdit operations and conflict mapping | Broader release/security acceptance; see workboard |
+| 3 - Control plane | Core slices Done | Durable queued operations, progress/replay, conflict matrix, terminal audit, crash-safe reconciliation, scheduler/missed-run behavior | Full release acceptance beyond the focused suites |
+| 4 - Operational subsystems | Review | Backup integrity, save coordination, restore rollback, cleanup floors, sync retry/cap, and filesystem hardening have focused Windows tests | Three symlink checks, POSIX and live RCON/NAS acceptance remain unverified |
+| 5 - API, streams, and shell | Partial | Auth/CSRF/step-up foundations, world APIs, settings/catalog/admin APIs, durable operations, SSE replay/auth/topic behavior, shared browser connection and world-list workflow | Backup/restore/cleanup/sync APIs, manager lifecycle operations, operation cancellation, full shell workflows, metrics/proxy and security acceptance |
 
-Focused Windows verification:
+## Latest recorded verification
+
+Windows / Python 3.13.14, updated 2026-11-07:
 
 | Command/suite | Result |
 |---|---|
-| Gates 1-5 acceptance and related regression tests | 125 passed; 1 failed because `benchmarks/thresholds.json` lacks the documented reference-host profile and required CPU/RSS/stream/log thresholds. |
-| Gate 1 conformance and Minecraft gate tests | 53 passed. POSIX native conformance still needs a POSIX run. |
-| Gate 2 realignment and schema/Phase 4 regressions | 21 passed. |
-| Gate 3 acceptance and Gate 1/2 regressions | 61 passed. |
-| Gate 4 acceptance and Gate 3 regressions | 35 passed. |
-| Gate 5 browser and presentation/auth checks | Passed except for the performance-profile requirement above. |
-| `python -m ruff check` on Gate 5 implementation files; `python -m compileall -q app` | Passed. |
+| `python -m pytest --no-cov -q -k "not performance_acceptance_smoke"` | **448 passed, 3 skipped, 1 deselected**. The skips are symlink tests requiring a Windows privilege unavailable on this host; the deselected smoke is the long calibrated performance test. |
+| `node --test tests\browser\test_gate5_browser.test.cjs` | **2 passed**, including 10-tab stream sharing/failover, documented event forwarding, auth expiry/recovery, and manager shutdown. |
+| Scoped Ruff, compilation, and focused mypy checks | Passed for the feature slices recorded on the workboard; this is not a repository-wide static-gate pass. |
+| Repository-wide static checks | Not green: the recorded baseline reported 52 Ruff errors, Black would reformat 74 files, isort reported 14 files, mypy failed, and import-linter reported `app layers BROKEN`. |
 
-The full `python -m pytest -q --no-cov` run is not green: it has the same
-unconfigured Gate 5 performance check plus five `test_coverage_smoke.py`
-failures. Those smoke cases currently use invalid string enums, missing
-foreign-key seed rows, and an unwired diagnostics attribute; they need valid
-fixtures and/or a diagnostics implementation before they can be used as full
-suite evidence.
+The three Windows symlink skips are an environment limitation, not passing
+acceptance. POSIX adapter conformance and live RCON/NAS integration have not
+been run. Calibrated performance acceptance remains blocked pending a
+documented reference host and justified thresholds; no benchmark limits should
+be inferred from the deselected smoke test.
 
-## Product scope still incomplete
+## Major remaining product work
 
-- The full Document 10 route catalog is not implemented. Auth/session and
-  selected world lifecycle/operation routes exist; CRUD and workflows for
-  backups/restores, cleanup, sync, schedules, settings, templates/runtimes,
-  admin, notifications, audit, files, and logs remain incomplete.
-- The command layer exists only in part; most route catalog commands and query
-  handlers are still missing.
-- The 17 shell modules are navigable without full reloads, but most are still
-  scaffold fragments rather than complete Document 4/5 workflows. World
-  context selection and complete manager workflows remain open.
-- SSE snapshots, replay, and client-side tab sharing are implemented, but the
-  complete Document 10 topics, auth-expiry stream behavior, metrics cadence,
-  and deployment proxy checks are not demonstrated.
-- Runtime supervisor shutdown still needs lifecycle handling; a worker has
-  logged an error when tests close the SQLite store before the worker stops.
-- Performance release acceptance is blocked until a reference-host profile
-  and measurable limits are supplied. Do not invent benchmark numbers.
-- Cross-platform release acceptance is incomplete until C1-C14 passes on both
-  Windows and POSIX. Full type/import-boundary and release gates also remain;
-  no clean import-boundary check result is recorded.
+- Implement and test the Document 10 backup, restore/rollback, cleanup, and
+  sync API catalog.
+- Complete the 17 shell modules as real manager/world workflows, including
+  explicit world context switching.
+- Implement manager restart/update/rollback and manager backup/restore
+  operations; several registered endpoints currently return
+  `NOT_IMPLEMENTED`.
+- Implement the documented operation-cancellation endpoint.
+- Verify and complete metrics cadence, streaming behavior through the
+  supported proxy shape, and the dedicated security acceptance suite.
+- Run the real Minecraft adapter integration spike across Vanilla, Paper,
+  Fabric, and Forge, and run C1-C14 on a supported POSIX host.
+- Restore green repository-wide lint, format, type, and import-boundary gates.
+- Complete calibrated performance release acceptance after the reference
+  host/profile is available.
+
+Detailed dependencies and acceptance criteria for these items are in
+[WORKBOARD.md](WORKBOARD.md). Gate 4 verification and a full Document 10 API
+contract parity audit also remain open there.
 
 ## Run locally
 
@@ -69,6 +74,5 @@ installations are kept in ignored directories under `app/`):
 python -m flask --app "app:create_app(database_path='app/data/manager.db', keyfile_path='app/data/secrets.key', migrations_dir='migrations')" run --host 127.0.0.1 --port 5000
 ```
 
-Run tests and development tooling from the repository root; the application
-source and migrations are in `app/` and `migrations/`. The application starts,
-but it is not yet an operator-ready implementation of all Documents 4-14.
+Application startup is not evidence that all operator workflows or release
+gates are complete.

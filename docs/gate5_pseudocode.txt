@@ -1,3 +1,31 @@
+# CURRENT RECONCILIATION — 2026-11-07
+This file is retained as a historical Gate 5 pseudocode snapshot. Documents 4,
+5, 6, 8, 10, 11 and 12 are authoritative for UI, navigation, identity/audit,
+operations, API/SSE, verification and file layout. The samples below preserve
+the original thin-gateway/shared-stream/shell intent, but they are NOT the
+current route contract or implementation wherever they differ.
+
+Current application paths are app/web/{middleware.py,errors.py,api/,streams/},
+app/shell/{routes.py,templates/,static/}, app/services/realtime.py and
+app/__init__.py. Implemented API scope includes auth/session, system and page
+reads, world list/detail and lifecycle actions, operation reads, and SSE
+endpoints; the full Document 10 catalog and real page workflows remain
+incomplete. Middleware validates the live session and a session-bound
+double-submit CSRF token, applies the currently wired admin/step-up checks and
+security headers. Do not copy the sample's unbound token check, route names,
+cookie policy or response envelope: Document 10's cookie/auth/error/status
+contracts win. The shell's BroadcastChannel leader/follower client and server
+hub support snapshots, replay and subscriber cleanup; this is not evidence that
+every documented topic, auth-expiry behavior or deployment proxy case is
+complete. Shell fragments are navigable, but most remain scaffolds.
+
+The sample metrics numbers are not approved thresholds. Document 11 requires
+a measured reference-host profile, 300-second CPU/RSS evidence, 50-client
+stream fan-out and 1000-lines/sec log ingestion with documented limits. The
+profile is unavailable; do not fabricate thresholds or claim the performance
+release gate passed. Everything below is retained as superseded historical
+pseudocode, not a replacement for Documents 4–12 or the implementation.
+
 ================================================================================
 MCMANAGER SPECIFICATION — STAGE 5 (GATE 5) PSEUDOCODE
 ================================================================================

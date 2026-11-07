@@ -12,8 +12,8 @@ from app.domain.value_objects import (
     OperationStatus,
     OperationType,
 )
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
+from app.ports.persistence import PersistencePort
 from app.services.operations import OperationInput, OperationService
 
 
@@ -27,6 +27,7 @@ VERSION_TABLES = {
     ConfigEditEntity.GLOBAL_SETTINGS: ('global_settings', 'settings_id', 'version'),
     ConfigEditEntity.WORLD_SETTINGS: ('world_settings', 'world_id', 'version'),
     ConfigEditEntity.TEMPLATES: ('templates', 'template_id', 'version'),
+    ConfigEditEntity.JAVA_RUNTIMES: ('java_runtimes', 'runtime_id', 'version'),
     ConfigEditEntity.ROLES: ('roles', 'role_id', 'version'),
     ConfigEditEntity.SYNC_TARGETS: ('sync_targets', 'sync_target_id', 'version'),
     ConfigEditEntity.WORLD_INSTANCES: ('world_instances', 'world_id', 'metadata_version'),
@@ -48,7 +49,7 @@ class ConfigurationService:
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         clock: Clock,
         operations: OperationService | None = None,
     ) -> None:
@@ -58,33 +59,22 @@ class ConfigurationService:
 
     def resolve_effective(self, world_id: str) -> dict[str, Any]:
         """Resolve singleton defaults and nullable per-world overrides."""
-        connection = self._store.reader()
-        global_row = connection.execute(
-            "SELECT * FROM global_settings ORDER BY settings_id LIMIT 1"
-        ).fetchone()
-        if global_row is None:
-            raise KeyError("global_settings")
-        world_row = connection.execute(
-            "SELECT * FROM world_settings WHERE world_id = ?", (world_id,)
-        ).fetchone()
-
-        def decode_json(value: Any) -> Any:
-            return json.loads(value) if value is not None else None
+        global_settings = self.resolve_global()
+        world_settings = self.resolve_world(world_id)
 
         effective = {
-            "timezone": global_row["timezone"],
-            "idle_countdown_seconds": global_row["idle_countdown_seconds"],
-            "notification_defaults": decode_json(
-                global_row["notification_defaults"]
-            ),
-            "minecraft_root_path": global_row["minecraft_root_path"],
-            "backup_root_path": global_row["backup_root_path"],
-            "log_root_path": global_row["log_root_path"],
-            "offsite_sync_defaults": decode_json(
-                global_row["offsite_sync_defaults"]
-            ),
+            key: global_settings[key]
+            for key in (
+                "timezone",
+                "idle_countdown_seconds",
+                "notification_defaults",
+                "minecraft_root_path",
+                "backup_root_path",
+                "log_root_path",
+                "offsite_sync_defaults",
+            )
         }
-        if world_row is None:
+        if world_settings is None:
             return effective
 
         overrides = {
@@ -95,16 +85,46 @@ class ConfigurationService:
             "offsite_sync_defaults": "offsite_sync_override",
         }
         for effective_key, override_key in overrides.items():
-            override_value = world_row[override_key]
+            override_value = world_settings[override_key]
             if override_value is not None:
-                effective[effective_key] = (
-                    decode_json(override_value)
-                    if effective_key == "offsite_sync_defaults"
-                    else override_value
-                )
+                effective[effective_key] = override_value
         return effective
 
+    def resolve_global(self) -> dict[str, Any]:
+        """Return the manager-wide settings baseline, including its version."""
+        row = self._store.reader().execute(
+            "SELECT * FROM global_settings ORDER BY settings_id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            raise KeyError("global_settings")
+        settings = dict(row)
+        for column in ("notification_defaults", "offsite_sync_defaults"):
+            if settings[column] is not None:
+                settings[column] = json.loads(settings[column])
+        return settings
+
+    def resolve_world(self, world_id: str) -> dict[str, Any] | None:
+        """Return a world's stored overrides, decoding JSON-valued settings."""
+        row = self._store.reader().execute(
+            "SELECT * FROM world_settings WHERE world_id = ?", (world_id,)
+        ).fetchone()
+        if row is None:
+            return None
+
+        settings = dict(row)
+        if settings["offsite_sync_override"] is not None:
+            settings["offsite_sync_override"] = json.loads(
+                settings["offsite_sync_override"]
+            )
+        return settings
+
     def update_versioned(self, update: VersionedUpdate) -> dict[str, Any]:
+        updated, _ = self.update_versioned_with_operation(update)
+        return updated
+
+    def update_versioned_with_operation(
+        self, update: VersionedUpdate
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if update.entity not in VERSION_TABLES:
             raise ValueError(f'entity is not versioned: {update.entity.value}')
         table, key_column, version_column = VERSION_TABLES[update.entity]
@@ -113,6 +133,30 @@ class ConfigurationService:
         disallowed = {key_column, version_column}
         if disallowed.intersection(update.fields):
             raise ValueError('cannot update identity or version columns directly')
+
+        table_columns = {
+            row['name']
+            for row in self._store.reader().execute(f'PRAGMA table_info({table})')
+        }
+        unknown = set(update.fields).difference(table_columns)
+        if unknown:
+            raise ValueError(f'unknown fields for {update.entity.value}: {sorted(unknown)}')
+
+        connection = self._store.writer()
+        current = connection.execute(
+            f'SELECT * FROM {table} WHERE {key_column} = ?', (update.row_id,)
+        ).fetchone()
+        creating_world_override = (
+            update.entity is ConfigEditEntity.WORLD_SETTINGS
+            and current is None
+            and update.expected_version == 0
+        )
+        if current is None and not creating_world_override:
+            if update.entity is ConfigEditEntity.WORLD_SETTINGS:
+                raise ConfigurationConflictError('CONFIG_VERSION_CONFLICT')
+            raise KeyError(update.row_id)
+        if current is not None and current[version_column] != update.expected_version:
+            raise ConfigurationConflictError('CONFIG_VERSION_CONFLICT')
 
         world_id = (
             update.row_id
@@ -137,7 +181,6 @@ class ConfigurationService:
             allow_world_conflict=True,
         )
         self._operations.transition(operation["op_id"], OperationStatus.RUNNING)
-        connection = self._store.writer()
         now = int(self._clock.now())
         payload: dict[str, Any] = {
             "entity": update.entity.value,
@@ -150,38 +193,63 @@ class ConfigurationService:
             row = connection.execute(
                 f'SELECT * FROM {table} WHERE {key_column} = ?', (update.row_id,)
             ).fetchone()
-            if row is None:
+            if row is None and not creating_world_override:
                 raise KeyError(update.row_id)
-            payload["before"] = {
-                column: row[column] for column in update.fields
-            }
+            payload["before"] = (
+                {column: row[column] for column in update.fields}
+                if row is not None
+                else {column: None for column in update.fields}
+            )
             payload["after"] = dict(update.fields)
-            if row[version_column] != update.expected_version:
+            if row is not None and row[version_column] != update.expected_version:
                 raise ConfigurationConflictError('CONFIG_VERSION_CONFLICT')
 
             fields = dict(update.fields)
-            if 'updated_at' in row and 'updated_at' not in fields:
-                fields['updated_at'] = now
-            if 'last_changed_at' in row and 'last_changed_at' not in fields:
-                fields['last_changed_at'] = now
-            assignments = [f'{column} = ?' for column in fields]
-            assignments.append(f'{version_column} = {version_column} + 1')
-            values = list(fields.values())
-            values.append(update.row_id)
-            connection.execute(
-                f"UPDATE {table} SET {', '.join(assignments)} WHERE {key_column} = ?",
-                values,
-            )
+            if row is None:
+                if update.actor_user_id is None:
+                    raise ValueError('creating world settings requires an actor user')
+                insert_fields = {
+                    'world_id': update.row_id,
+                    **fields,
+                    'version': 1,
+                    'updated_at': now,
+                    'updated_by': update.actor_user_id,
+                }
+                columns = ', '.join(insert_fields)
+                placeholders = ', '.join('?' for _ in insert_fields)
+                connection.execute(
+                    f'INSERT INTO {table} ({columns}) VALUES ({placeholders})',
+                    list(insert_fields.values()),
+                )
+            else:
+                if 'updated_at' in row and 'updated_at' not in fields:
+                    fields['updated_at'] = now
+                if (
+                    'updated_by' in row
+                    and update.actor_user_id is not None
+                    and 'updated_by' not in fields
+                ):
+                    fields['updated_by'] = update.actor_user_id
+                if 'last_changed_at' in row and 'last_changed_at' not in fields:
+                    fields['last_changed_at'] = now
+                assignments = [f'{column} = ?' for column in fields]
+                assignments.append(f'{version_column} = {version_column} + 1')
+                values = list(fields.values())
+                values.append(update.row_id)
+                connection.execute(
+                    f"UPDATE {table} SET {', '.join(assignments)} WHERE {key_column} = ?",
+                    values,
+                )
             updated = connection.execute(
                 f'SELECT * FROM {table} WHERE {key_column} = ?', (update.row_id,)
             ).fetchone()
             connection.commit()
-            self._operations.transition(
+            operation = self._operations.transition(
                 operation["op_id"],
                 OperationStatus.COMPLETED,
                 data=payload,
             )
-            return dict(updated)
+            return dict(updated), operation
         except Exception as exc:
             connection.rollback()
             if isinstance(exc, ConfigurationConflictError):

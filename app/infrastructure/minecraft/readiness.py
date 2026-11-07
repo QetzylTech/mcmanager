@@ -80,20 +80,23 @@ def build_state(
 ) -> ReadinessState:
     """Build a ReadinessState from live signals.
 
-    ``probe_ok`` is a live legacy-protocol ping whenever the port is bound on
-    a Minecraft server; callers that can prove a stronger signal (Paper API,
-    external probe) pass ``probe_ok`` and/or ``operationally_valid``
-    explicitly. ``host_is_minecraft=False`` forces the bare-connect floor
-    (Doc 13 C8) so a non-Minecraft listener never claims ``probe_ok``.
+    Higher readiness signals are only valid behind the lower ladder: a bound
+    port is required before protocol-ping or higher signals can count, and a
+    non-Minecraft listener never claims a probe outcome.
     """
     bound = port_is_bound(host, port, port_timeout_s)
-    live_probe = probe_ok or (
-        bound and host_is_minecraft and ping_protocol(host, port, port_timeout_s)
+    live_probe = (
+        bound and process_alive and host_is_minecraft and ping_protocol(host, port, port_timeout_s)
+    )
+    effective_probe = bool(process_alive and bound and host_is_minecraft and probe_ok) or live_probe
+    effective_rcon = bool(rcon_ready and bound and process_alive)
+    effective_operational = bool(
+        operationally_valid and process_alive and bound and rcon_ready and effective_probe
     )
     return ReadinessState(
         process_alive=process_alive,
         port_bound=bound,
-        rcon_ready=rcon_ready,
-        probe_ok=live_probe,
-        operationally_valid=operationally_valid,
+        rcon_ready=effective_rcon,
+        probe_ok=effective_probe,
+        operationally_valid=effective_operational,
     )

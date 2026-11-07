@@ -15,8 +15,9 @@ Error: `{"ok": false, "error": {"code": "WORLD_NOT_OFF", "message": "World must 
 - **Authn:** cookie `mcmanager_session` (HttpOnly, SameSite=Lax, Path=/; Secure over TLS); opaque session id looked up in `client_sessions` (Doc 7), expiry/revocation checked every request. Server-side authz on every request regardless of origin. `POST /api/auth/login` sets cookie; `POST /api/auth/logout` revokes (`deleted_at`).
 - **CSRF:** every state-changing request (POST/PATCH/DELETE) needs `X-CSRF-Token` (double-submit, session-bound, rotated on session restore); missing/mismatch → `CSRF_INVALID`. SSE GET needs none.
 - **Step-up (S):** requires verified window on session (`client_sessions.step_up_confirmed_at` ≤ default 10 min) or fresh `POST /api/auth/step-up {password}`. S routes additionally require elevated confirmation / scope preview. Password never persisted/pre-filled.
-- **Idempotency:** Operation-creating POSTs accept `Idempotency-Key` (stored on `operations.idempotency_key`, unique per `op_type`). Same key + op_type retry → original Operation (200). Server generates one if omitted → `meta.idempotency_key`.
+- **Idempotency:** Operation-creating requests accept `Idempotency-Key` (stored on `operations.idempotency_key`, unique per `op_type`). Same key + op_type retry → original Operation (200). Server generates one if omitted → `meta.idempotency_key`.
 - **Async (O):** state changes are durable Operations. Validate preconditions → create → **202** `{meta.op_id, data.operation.status (Created|Queued), meta.queue_position?}`. No polling — progress via SSE `operation.*`, fallback `GET /api/operations/{op_id}`; audit records append only at terminal status transitions. Rejection-path preconditions (never queued: Restore while running, DeleteWorld not off, stale-version ConfigEdit) → **409**, no Operation. Idempotent replay of completed op → **200** terminal state.
+- World lifecycle actions persist as `Queued` before returning; the application dispatcher atomically claims queued actions and resumes them after manager restart. Already-running operations are not queued again.
 - **Paging/filter/sort:** `limit` (default 50, max 500) + `offset` (0) → `meta.pagination {limit, offset, total}`. Filters per-endpoint server-side query params. `sort` = comma list, optional `-` desc (`sort=-created_at`); unsupported field → `VALIDATION_ERROR`.
 
 ## HTTP status summary
@@ -54,7 +55,8 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | POST | `/api/worlds` | A | O CreateWorld; body: template_id, display_name, port, addressing_strategy/value, java_runtime_id, launch_args |
 | GET | `/api/worlds/{world_id}` | any | detail incl. live state, **resolved capability record** (Doc 14 §2/§8), last backup summary; deleted → 404 |
 | PATCH | `/api/worlds/{world_id}` | A | RenameWorld `{display_name, version}` (metadata ConfigEdit, version per Doc 9 §4); allowed concurrently with Backup/Restore/Cleanup |
-| DELETE | `/api/worlds/{world_id}` | A S | O DeleteWorld; scope preview required first; 409 unless `off` + no in-flight ops |
+| POST | `/api/worlds/{world_id}/delete-preview` | A | returns a short-lived, session-bound scope token; required by DeleteWorld |
+| DELETE | `/api/worlds/{world_id}` | A S | O DeleteWorld `{preview_token}`; preview required first; 409 unless `off` + no in-flight ops |
 | GET | `/api/worlds/{world_id}/runtime-config` | A | read view: java_runtime_id, launch_args, port, addressing |
 | PATCH | `/api/worlds/{world_id}/runtime-config` | A | O ConfigEdit; **409 unless state = off**; requires `version`; immediate write, effect next boot |
 | POST | `/api/worlds/{world_id}/start` | any | O Start; 10s cooldown; duplicates ignored |
@@ -206,7 +208,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 - Heartbeats: empty comment line (`: ping`) every 15s keeps proxies from closing; clients treat as no-op (never drives UI state — Doc 4 nav ban).
 - Stream shutdown: clean shutdown ends streams with final `event: manager.shutdown`; on crash no such event — clients detect dropped connection and reconnect with `Last-Event-ID`.
 - Proxy buffering: deployment must disable intermediate buffering for `/stream`; Doc 11 E2E covers this on the supported deployment shape.
-- Auth expiry mid-stream: session expiry/revocation closes stream with 401-equivalent terminal `event: stream.error`, `data: {"code": "AUTH_SESSION_EXPIRED"}`; client re-authenticates and reconnects.
+- Auth expiry mid-stream: session expiry/revocation closes stream with 401-equivalent terminal `event: stream.error`, `data: {"code": "AUTH_SESSION_EXPIRED"}`; clients stop reconnecting until authentication succeeds, then the shell calls `resumeAfterAuthentication()` to reconnect one leader and resume its peers.
 - Slow clients: fan-out drops the slowest sink rather than blocking the event source (Doc 13 §3.3 backpressure); dropped-client alert surfaces at most once per minute per client.
 
 ### Endpoints

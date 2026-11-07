@@ -43,27 +43,87 @@ def _requires_step_up() -> bool:
     if method not in _STATE_CHANGING_METHODS:
         return False
     path: str = request.path
+    segments = path.strip("/").split("/")
     return (
         path.endswith("/stop")
         or path.endswith("/kill")
         or path.endswith("/eula/accept")
         or path.endswith("/runtime-config")
+        or (
+            method == "DELETE"
+            and path.startswith("/api/worlds/")
+            and len(segments) == 3
+        )
+        or (
+            method == "DELETE"
+            and path.startswith("/api/worlds/")
+            and len(segments) == 4
+            and segments[3] == "files"
+        )
+        or path == "/api/manager/restore"
+        or path in {"/api/manager/update", "/api/manager/rollback"}
+        or (
+            method == "PATCH"
+            and path.startswith("/api/users/")
+            and isinstance(request.get_json(silent=True), dict)
+            and "username" in request.get_json(silent=True)
+        )
     )
 
 
 def _requires_admin() -> bool:
     path: str = request.path
     method: str = request.method
+    segments = path.strip("/").split("/")
+    protected_world_files = (
+        path.startswith("/api/worlds/")
+        and len(segments) >= 4
+        and segments[3] == "files"
+    )
+    protected_world_logs = (
+        path.startswith("/api/worlds/")
+        and len(segments) >= 5
+        and segments[3] == "logs"
+    )
     return (
         path == "/api/diagnostics"
+        or path == "/api/settings"
+        or (path.startswith("/api/worlds/") and path.endswith("/settings"))
         or path.startswith("/api/supervisor/")
         or path.endswith("/stop")
         or path.endswith("/kill")
         or path.endswith("/eula/accept")
         or path.endswith("/runtime-config")
+        or protected_world_files
+        or protected_world_logs
+        or path.endswith("/delete-preview")
+        or (
+            method in _STATE_CHANGING_METHODS
+            and (
+                path.startswith("/api/schedules")
+                or path.startswith("/api/templates")
+                or path.startswith("/api/java-runtimes")
+                or path in {
+                    "/api/manager/backup",
+                    "/api/manager/restore",
+                    "/api/manager/restart",
+                    "/api/manager/update",
+                    "/api/manager/rollback",
+                }
+            )
+        )
         or method in _STATE_CHANGING_METHODS
         and path.startswith("/api/worlds/")
         and not path.endswith("/start")
+    )
+
+
+def _requires_superadmin() -> bool:
+    path: str = request.path
+    return (
+        path == "/api/setup" and request.method == "POST"
+    ) or path.startswith(("/api/users", "/api/roles", "/api/permissions", "/api/devices")) or (
+        path in {"/api/manager/update", "/api/manager/rollback"}
     )
 
 
@@ -72,17 +132,36 @@ def register_middleware(app: Flask) -> None:
 
     @app.before_request
     def authenticate_and_validate_csrf() -> Any:
-        if request.method in _STATE_CHANGING_METHODS:
-            cookie_token = request.cookies.get("csrf_token", "")
-            header_token = request.headers.get("X-CSRF-Token", "")
-            if (
-                not cookie_token
-                or not header_token
-                or not hmac.compare_digest(cookie_token, header_token)
-            ):
-                return error("CSRF_INVALID", "CSRF token validation failed.", status=403)
-
+        if request.path == "/api/setup" and request.method == "POST":
+            container = app.extensions.get("mcmanager_container")
+            if container is not None:
+                active_users = container.store.reader().execute(
+                    "SELECT count(*) FROM users WHERE deleted_at IS NULL"
+                ).fetchone()[0]
+                if active_users == 0:
+                    cookie_token = request.cookies.get("csrf_token", "")
+                    header_token = request.headers.get("X-CSRF-Token", "")
+                    if (
+                        cookie_token
+                        and header_token
+                        and hmac.compare_digest(cookie_token, header_token)
+                    ):
+                        return None
+                    return error(
+                        "CSRF_INVALID",
+                        "CSRF token validation failed.",
+                        status=403,
+                    )
         if _is_public_request():
+            if request.path == "/api/auth/login" and request.method in _STATE_CHANGING_METHODS:
+                cookie_token = request.cookies.get("csrf_token", "")
+                header_token = request.headers.get("X-CSRF-Token", "")
+                if (
+                    not cookie_token
+                    or not header_token
+                    or not hmac.compare_digest(cookie_token, header_token)
+                ):
+                    return error("CSRF_INVALID", "CSRF token validation failed.", status=403)
             return None
 
         container = app.extensions.get("mcmanager_container")
@@ -101,11 +180,34 @@ def register_middleware(app: Flask) -> None:
         g.current_user_id = session.user_id
 
         if request.method in _STATE_CHANGING_METHODS:
+            cookie_token = request.cookies.get("csrf_token", "")
+            header_token = request.headers.get("X-CSRF-Token", "")
+            if (
+                not cookie_token
+                or not header_token
+                or not hmac.compare_digest(cookie_token, header_token)
+            ):
+                return error("CSRF_INVALID", "CSRF token validation failed.", status=403)
+
             expected_token = session_csrf_token(session.token)
             if not hmac.compare_digest(cookie_token, expected_token):
                 return error("CSRF_INVALID", "CSRF token validation failed.", status=403)
 
-        if _requires_admin():
+        if _requires_superadmin():
+            role = (
+                container.store.reader()
+                .execute(
+                    "SELECT 1 FROM role_assignments ra "
+                    "JOIN roles r ON r.role_id = ra.role_id "
+                    "WHERE ra.user_id = ? AND ra.deleted_at IS NULL "
+                    "AND r.deleted_at IS NULL AND r.name = ? LIMIT 1",
+                    (session.user_id, "Superadmin"),
+                )
+                .fetchone()
+            )
+            if role is None:
+                return error("AUTH_FORBIDDEN", "A Superadmin role is required.", status=403)
+        elif _requires_admin():
             role = (
                 container.store.reader()
                 .execute(

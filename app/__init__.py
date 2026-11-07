@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import threading
 from pathlib import Path
@@ -46,6 +47,18 @@ def _scheduler_worker(container: Any, stop_event: threading.Event) -> None:
             _logger.exception('Scheduler tick failed')
 
 
+def _operation_worker(container: Any, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        worlds = getattr(container, 'worlds', None)
+        dispatch = getattr(worlds, 'dispatch_queued_operations', None)
+        if callable(dispatch):
+            try:
+                dispatch()
+            except Exception:
+                _logger.exception('Queued operation dispatch failed')
+        stop_event.wait(0.25)
+
+
 def create_app(
     *,
     database_path: str | Path,
@@ -77,24 +90,60 @@ def create_app(
         container.worlds.reconcile()
     else:
         reconciliation.reconcile()
+        app.extensions['mcmanager_reconciliation_health'] = reconciliation.health
     app.register_blueprint(shell_bp)
     register_api_blueprints(app)
     register_stream_blueprints(app)
 
     stop_event = threading.Event()
     app.extensions['mcmanager_workers_stop'] = stop_event
-    threading.Thread(
-        target=_supervisor_worker,
-        args=(container, stop_event),
-        name='mcmanager-runtime-supervisor',
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=_scheduler_worker,
-        args=(container, stop_event),
-        name='mcmanager-scheduler',
-        daemon=True,
-    ).start()
+    workers = [
+        threading.Thread(
+            target=_supervisor_worker,
+            args=(container, stop_event),
+            name='mcmanager-runtime-supervisor',
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_scheduler_worker,
+            args=(container, stop_event),
+            name='mcmanager-scheduler',
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_operation_worker,
+            args=(container, stop_event),
+            name='mcmanager-operation-dispatcher',
+            daemon=True,
+        ),
+    ]
+    app.extensions['mcmanager_workers'] = tuple(workers)
+    shutdown_lock = threading.Lock()
+    shutdown_complete = False
+
+    def shutdown_workers() -> None:
+        nonlocal shutdown_complete
+        with shutdown_lock:
+            if shutdown_complete:
+                return
+            stop_event.set()
+            started_workers = [worker for worker in workers if worker.ident is not None]
+            for worker in started_workers:
+                worker.join(timeout=5)
+            if any(worker.is_alive() for worker in started_workers):
+                raise RuntimeError('MCManager background workers did not stop')
+            realtime = getattr(container, 'realtime', None)
+            if realtime is not None:
+                realtime.shutdown()
+            store = getattr(container, 'store', None)
+            if store is not None:
+                store.close()
+            shutdown_complete = True
+
+    app.extensions['mcmanager_shutdown'] = shutdown_workers
+    atexit.register(shutdown_workers)
+    for worker in workers:
+        worker.start()
 
     @app.teardown_appcontext
     def _close_store(_exc: BaseException | None) -> None:

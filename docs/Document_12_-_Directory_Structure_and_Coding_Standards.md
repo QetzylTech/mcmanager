@@ -19,9 +19,10 @@ mcmanager/
 ├── benchmarks/               # Doc 11 performance suite + thresholds.json
 ├── migrations/               # schema_migrations versioned SQL (Doc 7)
 ├── docs/                     # ARCHITECTURE.md + Documents 4-14
-├── static/                   # served assets (CSS/JS/images, Doc 4)
-├── templates/                # Jinja2 templates (persistent shell + page fragments, Doc 5)
-├── prototypes/               # legacy reference only — never imported by app/
+├── app/shell/
+│   ├── static/               # served shell assets (CSS/JS, Doc 4)
+│   └── templates/            # Jinja2 shell templates (Doc 5)
+├── Prototypes/               # legacy reference archive (Legacy/, V1/, V2/, V3/)
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── pyproject.toml            # tool config: black, isort, ruff, mypy, pytest (§5)
@@ -29,7 +30,14 @@ mcmanager/
 └── README.md
 ```
 
-Rules: `app/` never imports from `prototypes/`, `benchmarks/`, `tests/`, `docs/`. `docs/` may contain examples/DDL extracts but is never executed or imported. Only `migrations/` + `app/` may touch the live database.
+Decision: Flask's shell blueprint owns the live frontend assets, so they stay in
+`app/shell/static/` and `app/shell/templates/`; root-level `static/` and
+`templates/` aliases or copies are intentionally not created. The historical
+prototype archive keeps its existing `Prototypes/` spelling and versioned
+layout; do not rename or duplicate it to match a lowercase sketch. The runtime
+example remains at the repository root.
+
+Rules: `app/` never imports from `Prototypes/`, `benchmarks/`, `tests/`, `docs/`. `docs/` may contain examples/DDL extracts but is never executed or imported. Only `migrations/` + `app/` may touch the live database.
 
 ## 3 Application package layout
 
@@ -176,10 +184,10 @@ templates/ static/     (presentation)
    →  platform/        (OS-specific)
 ```
 
-- **Imports only flow downward.** `services/` may import `domain/`, `ports/`, `infrastructure/` (via DI wiring, not concrete lookup). `web/` may import `commands/` + `services/` but never `infrastructure/` or `platform/` directly.
+- **Imports only flow downward.** `services/` may import `domain/` and `ports/`; they never import concrete `infrastructure/` or `platform/` modules. Persistence adapters implement ports, while services receive the port through constructor injection. Existing SQL-heavy services may use the transaction-aware persistence port; new persistence behavior should be placed behind service-owned repositories where practical. `web/` may import `commands/` + `services/` but never `infrastructure/` or `platform/` directly.
 - `domain/` imports nothing outside itself + stdlib — no Flask, no SQLite, no adapter.
 - `platform/` is leaf-only: imported by nothing except the composition root (§5) and `infrastructure/` where an adapter is platform-bound. No `services/` module ever imports `platform/` directly.
-- **DI wiring lives in one composition root** (`app/bootstrap.py` + `app/__init__.py`): all port→implementation bindings resolved there. Services receive ports via constructor injection; never import a concrete implementation.
+- **DI wiring lives in one composition root** (`app/bootstrap.py` + `app/__init__.py`): all port→implementation bindings resolved there. Services receive ports via constructor injection; never import a concrete implementation. The SQLite store implements the persistence port and is bound by the composition root.
 - Enforced in CI: boundary test (Doc 11 §2 Maintainability gate) asserts the import graph — `services/*` importing `platform/*` fails the build. Tooling: `import-linter` (or equivalent) in `requirements-dev.txt` with contracts in `pyproject.toml`.
 
 ## 5 Composition & boot

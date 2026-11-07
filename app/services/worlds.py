@@ -15,7 +15,10 @@ with an open ``runtime_sessions`` row after a manager crash (Doc 13 §5.1).
 from __future__ import annotations
 
 import json
+import logging
 import secrets
+import shutil
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -23,7 +26,11 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.entities import WorldInstance
-from app.domain.lifecycle import InvalidWorldTransition, transition_world
+from app.domain.lifecycle import (
+    InvalidWorldTransition,
+    WorldTransitionIntent,
+    transition_world,
+)
 from app.domain.tuning import (
     START_READINESS_TIMEOUT_S,
     STOP_GRACEFUL_DEADLINE_S,
@@ -32,20 +39,24 @@ from app.domain.tuning import (
 )
 from app.domain.value_objects import (
     ActorType,
+    ConfigEditEntity,
     EndReason,
+    EulaState,
     OperationStatus,
     OperationType,
+    ServerReadinessLevel,
     ServerType,
     WorldState,
 )
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
 from app.ports.minecraft import (
+    GateResult,
     LaunchContext,
     MinecraftRconError,
     MinecraftRconPort,
     MinecraftServerPort,
 )
+from app.ports.persistence import PersistencePort
 from app.ports.process_control import (
     ProbeFingerprint,
     ProcessControlPort,
@@ -53,11 +64,14 @@ from app.ports.process_control import (
     SpawnRequest,
 )
 from app.ports.secrets_store import SecretsStore, SecretType
-from app.services.configuration import ConfigurationService
+from app.services.audit import AuditService
+from app.services.configuration import ConfigurationConflictError, ConfigurationService
 from app.services.operations import OperationInput, OperationService
-from app.services.realtime import LogFanout
+from app.services.realtime import LogFanout, RealtimeHub
 
 _RCON_PORT_OFFSET = 10
+_logger = logging.getLogger(__name__)
+_world_mutation_dispatch_lock = threading.Lock()
 
 
 class WorldLifecycleError(Exception):
@@ -95,13 +109,15 @@ class WorldsService:
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         clock: Clock,
         operations: OperationService,
         process_adapter: ProcessControlPort,
         secrets: SecretsStore,
         minecraft: MinecraftServerPort,
         logs: LogFanout | None = None,
+        audit: AuditService | None = None,
+        realtime: RealtimeHub | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
@@ -110,8 +126,94 @@ class WorldsService:
         self._secrets = secrets
         self._minecraft = minecraft
         self._logs = logs
+        self._audit = audit
+        self._realtime = realtime
 
     # ------------------------------------------------------------------ start
+
+    def enqueue_start(
+        self,
+        *,
+        world_id: str,
+        actor_type: ActorType,
+        actor_user_id: str | None,
+        idempotency_key: str,
+    ) -> tuple[dict[str, Any], bool]:
+        existing = self._operations.get_by_idempotency_key(
+            OperationType.START, idempotency_key
+        )
+        if existing is not None:
+            return existing, True
+        world = self._world(world_id)
+        if world['state'] in (
+            WorldState.STARTING.value,
+            WorldState.RUNNING.value,
+            WorldState.STOPPING.value,
+        ):
+            raise WorldConflictError(f'world {world_id} is already {world["state"]}')
+        context = self._launch_context(world)
+        gate = self._validate_launch(world, context)
+        if not gate.passed:
+            if gate.error_code == 'EULA_NOT_ACCEPTED':
+                self._set_world_state(world_id, WorldState.EULA_REQUIRED)
+            raise WorldLifecycleError(f'{gate.error_code}: {gate.detail}')
+        return self._operations.create_with_replay(
+            OperationInput(
+                op_type=OperationType.START,
+                actor_type=actor_type,
+                world_id=world_id,
+                actor_user_id=actor_user_id,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    def enqueue_stop(
+        self,
+        *,
+        world_id: str,
+        actor_type: ActorType,
+        actor_user_id: str | None,
+        idempotency_key: str,
+    ) -> tuple[dict[str, Any], bool]:
+        existing = self._operations.get_by_idempotency_key(
+            OperationType.STOP, idempotency_key
+        )
+        if existing is not None:
+            return existing, True
+        self._world(world_id)
+        return self._operations.create_with_replay(
+            OperationInput(
+                op_type=OperationType.STOP,
+                actor_type=actor_type,
+                world_id=world_id,
+                actor_user_id=actor_user_id,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    def enqueue_kill(
+        self,
+        *,
+        world_id: str,
+        actor_type: ActorType,
+        actor_user_id: str | None,
+        idempotency_key: str,
+    ) -> tuple[dict[str, Any], bool]:
+        existing = self._operations.get_by_idempotency_key(
+            OperationType.KILL, idempotency_key
+        )
+        if existing is not None:
+            return existing, True
+        self._world(world_id)
+        return self._operations.create_with_replay(
+            OperationInput(
+                op_type=OperationType.KILL,
+                actor_type=actor_type,
+                world_id=world_id,
+                actor_user_id=actor_user_id,
+                idempotency_key=idempotency_key,
+            )
+        )
 
     def start(
         self,
@@ -120,6 +222,7 @@ class WorldsService:
         actor_type: ActorType = ActorType.USER,
         actor_user_id: str | None = None,
         _allow_world_conflict: bool = False,
+        _operation_id: str | None = None,
     ) -> str:
         """Run the full Start ladder. Returns the handle's session_id."""
         # Fast-fail before consuming the derived world lock.
@@ -131,22 +234,25 @@ class WorldsService:
         ):
             raise WorldConflictError(f'world {world_id} is already {pre["state"]}')
         pre_context = self._launch_context(pre)
-        pre_gate = self._minecraft.validate_launch(pre_context)
+        pre_gate = self._validate_launch(pre, pre_context)
         if not pre_gate.passed:
             if pre_gate.error_code == "EULA_NOT_ACCEPTED":
                 self._set_world_state(world_id, WorldState.EULA_REQUIRED)
             raise WorldLifecycleError(f"{pre_gate.error_code}: {pre_gate.detail}")
 
-        op = self._operations.create(
-            OperationInput(
-                op_type=OperationType.START,
-                actor_type=actor_type,
-                world_id=world_id,
-                actor_user_id=actor_user_id,
-            ),
-            allow_world_conflict=_allow_world_conflict,
-        )
-        op_id = op["op_id"]
+        if _operation_id is None:
+            op = self._operations.create(
+                OperationInput(
+                    op_type=OperationType.START,
+                    actor_type=actor_type,
+                    world_id=world_id,
+                    actor_user_id=actor_user_id,
+                ),
+                allow_world_conflict=_allow_world_conflict,
+            )
+            op_id = op["op_id"]
+        else:
+            op_id = _operation_id
         try:
             self._operations.transition(
                 op_id, OperationStatus.RUNNING, checkpoint={"stage": "validating"}
@@ -164,7 +270,7 @@ class WorldsService:
                 raise WorldConflictError(f'world {world_id} is already {world["state"]}')
 
             context = self._launch_context(world)
-            gate = self._minecraft.validate_launch(context)
+            gate = self._validate_launch(world, context)
             if not gate.passed:
                 self._fail_op(op_id, gate.error_code or "GATE_REJECTED", gate.detail)
                 if gate.error_code == "EULA_NOT_ACCEPTED":
@@ -176,6 +282,7 @@ class WorldsService:
             rcon_port, rcon_password = self._provision_rcon(context, world_id)
             argv = self._launch_command(world, context)
             session_id = f"rs_{uuid.uuid4().hex[:16]}"
+            self._set_world_state(world_id, WorldState.QUEUED)
             self._set_world_state(world_id, WorldState.STARTING)
             result = self._adapter.spawn(
                 SpawnRequest(
@@ -184,7 +291,7 @@ class WorldsService:
                     cwd=context.world_dir,
                     env={},
                     session_id=session_id,
-                    log_dir=str(self._log_root(world_id)),
+                    log_dir=str(self._log_root(world_id) / world_id),
                 )
             )
             if result.handle is None:
@@ -224,7 +331,17 @@ class WorldsService:
                 data={"session_id": session_id},
             )
             return session_id
-        except (WorldConflictError, StartTimeoutError, SpawnFailedError, WorldLifecycleError):
+        except StartTimeoutError as exc:
+            self._close_session(world_id, EndReason.CRASHED)
+            self._set_world_state(world_id, WorldState.ERROR)
+            self._operations.transition(
+                op_id,
+                OperationStatus.TIMED_OUT,
+                error_code="START_TIMEOUT",
+                message=str(exc),
+            )
+            raise
+        except WorldLifecycleError:
             raise
         except Exception as exc:
             self._fail_op(op_id, "START_ERROR", str(exc))
@@ -247,6 +364,7 @@ class WorldsService:
         deadline = time.monotonic() + START_READINESS_TIMEOUT_S
         rcon: MinecraftRconPort | None = None
         rcon_ready = False
+        operationally_valid = False
 
         while time.monotonic() < deadline:
             status = self._adapter.poll(handle)
@@ -259,20 +377,35 @@ class WorldsService:
                     rcon = self._rcon_client(rcon_port, rcon_password)
                     try:
                         rcon.connect()
+                        rcon_ready = rcon.ping()
                     except MinecraftRconError:
                         rcon.close()
                         rcon = None
-                else:
+                elif not rcon_ready:
                     try:
                         rcon_ready = rcon.ping()
                     except MinecraftRconError:
                         rcon_ready = False
                         rcon.close()
                         rcon = None
+                if (
+                    rcon is not None
+                    and rcon_ready
+                    and target is ServerReadinessLevel.OPERATIONALLY_VALID
+                ):
+                    try:
+                        operationally_valid = bool(rcon.command("list").strip())
+                        if server_type is ServerType.PAPER and caps.paper_api:
+                            operationally_valid = operationally_valid and bool(
+                                rcon.command("tps").strip()
+                            )
+                    except MinecraftRconError:
+                        operationally_valid = False
             state = self._minecraft.build_readiness_state(
                 process_alive=True,
                 port=port,
                 rcon_ready=rcon_ready,
+                operationally_valid=operationally_valid,
                 host_is_minecraft=True,
                 port_timeout_s=0.5,
             )
@@ -282,11 +415,114 @@ class WorldsService:
                 state=state,
             )
             if level.rank >= target.rank:
+                if rcon is not None:
+                    rcon.close()
                 return level.value
             time.sleep(0.25)
 
-        self._teardown(handle)
+        if rcon is not None:
+            rcon.close()
+        self._teardown(handle, graceful_deadline_s=0)
         raise StartTimeoutError(f"world {world_id} did not reach {target.value} in time")
+
+    def accept_eula(
+        self,
+        *,
+        world_id: str,
+        actor_user_id: str,
+        accepted: bool,
+        ip: str | None = None,
+    ) -> dict[str, Any]:
+        """Record explicit operator acceptance before writing ``eula=true``."""
+        if accepted is not True:
+            raise WorldLifecycleError("explicit EULA acceptance is required")
+        if not actor_user_id:
+            raise WorldLifecycleError("EULA acceptance requires an operator identity")
+        if self._audit is None:
+            raise WorldLifecycleError("EULA acceptance audit is unavailable")
+        world = self._world(world_id)
+        if world["state"] != WorldState.EULA_REQUIRED.value:
+            raise WorldConflictError("world is not awaiting EULA acceptance")
+        payload: dict[str, Any] = {
+            "entity": ConfigEditEntity.EULA.value,
+            "row_id": world_id,
+            "before": {"accepted": False},
+            "after": {"accepted": True},
+        }
+        operation = self._operations.create(
+            OperationInput(
+                op_type=OperationType.CONFIG_EDIT,
+                actor_type=ActorType.USER,
+                actor_user_id=actor_user_id,
+                world_id=world_id,
+                data=payload,
+            )
+        )
+        op_id = operation["op_id"]
+        self._operations.transition(op_id, OperationStatus.RUNNING)
+        try:
+            actor = self._audit.snapshot_for_user(
+                user_id=actor_user_id,
+                device_id=None,
+                device_name=None,
+                ip=ip,
+            )
+            self._audit.write(
+                event_type="world_eula_accepted",
+                actor=actor,
+                world_id=world_id,
+                payload={"accepted": True},
+            )
+            self._minecraft.accept_eula(str(self._world_dir(world)), actor_user_id)
+            self._set_world_state(
+                world_id,
+                WorldState.OFF,
+                intent=WorldTransitionIntent.EULA_ACCEPTANCE,
+            )
+            self._operations.transition(
+                op_id,
+                OperationStatus.COMPLETED,
+                data=payload,
+            )
+            result = self._operations.get(op_id)
+            if result is None:
+                raise WorldLifecycleError("EULA acceptance operation disappeared.")
+            return result
+        except Exception as exc:
+            self._operations.transition(
+                op_id,
+                OperationStatus.FAILED,
+                error_code="EULA_ACCEPTANCE_FAILED",
+                message=str(exc),
+                data=payload,
+            )
+            raise
+
+    def _validate_launch(
+        self, world: dict[str, Any], context: LaunchContext
+    ) -> GateResult:
+        """Require both the live EULA file and audited acceptance."""
+        eula_state = self._minecraft.detect_eula(context.world_dir)
+        if eula_state is not EulaState.ACCEPTED:
+            return GateResult(
+                passed=False,
+                error_code="EULA_NOT_ACCEPTED",
+                detail="eula.txt not accepted",
+                eula_state=eula_state,
+            )
+        audited = self._store.reader().execute(
+            "SELECT 1 FROM audit_records "
+            "WHERE world_id = ? AND event_type = 'world_eula_accepted' LIMIT 1",
+            (world["world_id"],),
+        ).fetchone()
+        if audited is None:
+            return GateResult(
+                passed=False,
+                error_code="EULA_NOT_ACCEPTED",
+                detail="EULA acceptance has not been audited",
+                eula_state=EulaState.UNACCEPTED,
+            )
+        return self._minecraft.validate_launch(context)
 
     # ------------------------------------------------------------------- stop
 
@@ -296,18 +532,22 @@ class WorldsService:
         world_id: str,
         actor_type: ActorType = ActorType.USER,
         actor_user_id: str | None = None,
+        _operation_id: str | None = None,
     ) -> str:
         """Graceful stop ladder: stdin stop -> RCON stop -> terminate(60s)."""
         self._world(world_id)
-        op = self._operations.create(
-            OperationInput(
-                op_type=OperationType.STOP,
-                actor_type=actor_type,
-                world_id=world_id,
-                actor_user_id=actor_user_id,
+        if _operation_id is None:
+            op = self._operations.create(
+                OperationInput(
+                    op_type=OperationType.STOP,
+                    actor_type=actor_type,
+                    world_id=world_id,
+                    actor_user_id=actor_user_id,
+                )
             )
-        )
-        op_id = op["op_id"]
+            op_id = op["op_id"]
+        else:
+            op_id = _operation_id
         try:
             self._operations.transition(
                 op_id, OperationStatus.RUNNING, checkpoint={"stage": "stopping"}
@@ -330,16 +570,16 @@ class WorldsService:
         handle = self._resolve_handle(world_id)
         if handle is None:
             return True
-        if self._adapter.write_stdin(handle, "stop").delivered and self._wait_exit(
-            handle, STOP_GRACEFUL_DEADLINE_S
-        ):
-            return True
         try:
             self._rcon_command_quiet(world_id, "stop")
             if self._wait_exit(handle, STOP_GRACEFUL_DEADLINE_S):
                 return True
         except MinecraftRconError:
             pass
+        if self._adapter.write_stdin(handle, "stop").delivered and self._wait_exit(
+            handle, STOP_GRACEFUL_DEADLINE_S
+        ):
+            return True
         outcome = self._adapter.terminate(handle, graceful_deadline_s=STOP_GRACEFUL_DEADLINE_S)
         return bool(outcome.resolved and "grace" in outcome.exit_class.value)
 
@@ -351,18 +591,22 @@ class WorldsService:
         world_id: str,
         actor_type: ActorType = ActorType.USER,
         actor_user_id: str | None = None,
+        _operation_id: str | None = None,
     ) -> str:
         """Immediate forced termination (graceful_deadline_s=0, C3)."""
         self._world(world_id)
-        op = self._operations.create(
-            OperationInput(
-                op_type=OperationType.KILL,
-                actor_type=actor_type,
-                world_id=world_id,
-                actor_user_id=actor_user_id,
+        if _operation_id is None:
+            op = self._operations.create(
+                OperationInput(
+                    op_type=OperationType.KILL,
+                    actor_type=actor_type,
+                    world_id=world_id,
+                    actor_user_id=actor_user_id,
+                )
             )
-        )
-        op_id = op["op_id"]
+            op_id = op["op_id"]
+        else:
+            op_id = _operation_id
         try:
             self._operations.transition(
                 op_id, OperationStatus.RUNNING, checkpoint={"stage": "killing"}
@@ -381,6 +625,399 @@ class WorldsService:
             self._fail_op(op_id, "KILL_ERROR", str(exc))
             raise WorldLifecycleError(str(exc)) from exc
 
+    def dispatch_queued_operations(self) -> list[str]:
+        """Resume persisted world lifecycle operations from the durable queue."""
+        dispatched: list[str] = []
+        seen_worlds: set[str] = set()
+        queued = self._operations.list_queued(
+            (OperationType.START, OperationType.STOP, OperationType.KILL)
+        )
+        for operation in queued:
+            world_id = operation['world_id']
+            if world_id is not None:
+                if world_id in seen_worlds:
+                    continue
+                seen_worlds.add(world_id)
+                if self._operations.has_active_operation(
+                    world_id, exclude_op_id=operation['op_id']
+                ):
+                    continue
+            claimed = self._operations.claim_queued(operation['op_id'])
+            if claimed is None:
+                continue
+            op_id = claimed['op_id']
+            dispatched.append(op_id)
+            try:
+                op_type = OperationType(claimed['op_type'])
+                if world_id is None:
+                    raise WorldLifecycleError(
+                        f'{op_type.value} operation is missing a world id'
+                    )
+                actor_type = ActorType(claimed['actor_type'])
+                actor_user_id = claimed['actor_user_id']
+                if op_type is OperationType.START:
+                    self.start(
+                        world_id=world_id,
+                        actor_type=actor_type,
+                        actor_user_id=actor_user_id,
+                        _operation_id=op_id,
+                    )
+                elif op_type is OperationType.STOP:
+                    self.stop(
+                        world_id=world_id,
+                        actor_type=actor_type,
+                        actor_user_id=actor_user_id,
+                        _operation_id=op_id,
+                    )
+                else:
+                    self.kill(
+                        world_id=world_id,
+                        actor_type=actor_type,
+                        actor_user_id=actor_user_id,
+                        _operation_id=op_id,
+                    )
+            except Exception as exc:
+                current = self._operations.get(op_id)
+                if current is not None and current['status'] not in {
+                    OperationStatus.COMPLETED.value,
+                    OperationStatus.FAILED.value,
+                    OperationStatus.CANCELLED.value,
+                    OperationStatus.TIMED_OUT.value,
+                }:
+                    self._operations.transition(
+                        op_id,
+                        OperationStatus.FAILED,
+                        error_code='OP_EXECUTION_FAILED',
+                        message=str(exc),
+                    )
+                _logger.exception('Queued world operation failed: %s', op_id)
+        dispatched.extend(self.dispatch_queued_world_mutations())
+        return dispatched
+
+    def enqueue_world_mutation(
+        self,
+        *,
+        op_type: OperationType,
+        world_id: str | None,
+        actor_user_id: str,
+        idempotency_key: str,
+        data: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist a world-management request before returning its HTTP 202."""
+        return self._operations.create_with_replay(
+            OperationInput(
+                op_type=op_type,
+                actor_type=ActorType.USER,
+                actor_user_id=actor_user_id,
+                world_id=world_id,
+                idempotency_key=idempotency_key,
+                data=data,
+            ),
+            initial_status=OperationStatus.QUEUED,
+            allow_world_conflict=op_type
+            in (OperationType.CONFIG_EDIT, OperationType.DELETE_WORLD),
+        )
+
+    def dispatch_queued_world_mutations(self) -> list[str]:
+        """Apply queued create/delete/runtime-config requests and recover interrupted writes."""
+        if not _world_mutation_dispatch_lock.acquire(blocking=False):
+            return []
+        dispatched: list[str] = []
+        try:
+            rows = self._store.reader().execute(
+                """
+                SELECT * FROM operations
+                WHERE op_type IN (?, ?, ?)
+                  AND status IN (?, ?)
+                ORDER BY created_at ASC, op_id ASC
+                """,
+                (
+                    OperationType.CREATE_WORLD.value,
+                    OperationType.DELETE_WORLD.value,
+                    OperationType.CONFIG_EDIT.value,
+                    OperationStatus.QUEUED.value,
+                    OperationStatus.RUNNING.value,
+                ),
+            ).fetchall()
+            for record in rows:
+                operation = dict(record)
+                try:
+                    data = json.loads(operation.get("data_json") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                action = data.get("world_action")
+                if operation["op_type"] == OperationType.CONFIG_EDIT.value:
+                    if data.get("queued_runtime_config"):
+                        action = "runtime_config"
+                    elif data.get("queued_file_edit"):
+                        action = "file_edit"
+                    else:
+                        continue
+                if action not in {"create", "delete", "runtime_config", "file_edit"}:
+                    continue
+                if operation["status"] == OperationStatus.QUEUED.value:
+                    claimed = self._operations.claim_queued(operation["op_id"])
+                    if claimed is None:
+                        continue
+                    operation = claimed
+                dispatched.append(operation["op_id"])
+                try:
+                    if action == "create":
+                        result = self._apply_queued_world_create(operation, data)
+                    elif action == "delete":
+                        result = self._apply_queued_world_delete(operation, data)
+                    elif action == "file_edit":
+                        result = self._apply_queued_file_edit(operation, data)
+                    else:
+                        result = self._apply_queued_runtime_config(operation, data)
+                    self._operations.transition(
+                        operation["op_id"], OperationStatus.COMPLETED, data=result
+                    )
+                except Exception as exc:
+                    code = (
+                        "CONFIG_VERSION_CONFLICT"
+                        if isinstance(exc, ConfigurationConflictError)
+                        else "OP_EXECUTION_FAILED"
+                    )
+                    try:
+                        self._operations.transition(
+                            operation["op_id"],
+                            OperationStatus.FAILED,
+                            error_code=code,
+                            message=str(exc),
+                        )
+                    except Exception:
+                        _logger.exception(
+                            "Could not terminalize world mutation %s",
+                            operation["op_id"],
+                        )
+                    _logger.exception(
+                        "Queued world mutation failed: %s", operation["op_id"]
+                    )
+        finally:
+            _world_mutation_dispatch_lock.release()
+        return dispatched
+
+    def _apply_queued_world_create(
+        self, operation: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
+        world = data["world"]
+        connection = self._store.writer()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = connection.execute(
+                "SELECT * FROM world_instances WHERE world_id = ?", (world["world_id"],)
+            ).fetchone()
+            if row is None:
+                columns = tuple(world)
+                connection.execute(
+                    f"INSERT INTO world_instances ({', '.join(columns)}) "
+                    f"VALUES ({', '.join('?' for _ in columns)})",
+                    tuple(world[column] for column in columns),
+                )
+            elif any(row[key] != value for key, value in world.items()):
+                raise WorldConflictError("world create operation does not match persisted world")
+            connection.execute(
+                "UPDATE operations SET world_id = ? WHERE op_id = ? AND world_id IS NULL",
+                (world["world_id"], operation["op_id"]),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return {"world_id": world["world_id"]}
+
+    def _apply_queued_world_delete(
+        self, operation: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
+        world_id = operation["world_id"]
+        expected_version = data["preview_version"]
+        now = int(self._clock.now())
+        connection = self._store.writer()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            world = connection.execute(
+                "SELECT * FROM world_instances WHERE world_id = ?", (world_id,)
+            ).fetchone()
+            if world is None:
+                raise WorldNotFoundError(world_id)
+            if (
+                world["deleted_at"] is not None
+                and world["deleted_by"] == operation["actor_user_id"]
+                and world["metadata_version"] == expected_version + 1
+            ):
+                connection.commit()
+                return {"world_id": world_id, "deleted": True}
+            if (
+                world["deleted_at"] is not None
+                or world["state"] != WorldState.OFF.value
+                or world["metadata_version"] != expected_version
+            ):
+                raise ConfigurationConflictError("World changed after deletion preview.")
+            cursor = connection.execute(
+                """
+                UPDATE world_instances
+                SET deleted_at = ?, deleted_by = ?, metadata_version = metadata_version + 1,
+                    updated_at = ?
+                WHERE world_id = ? AND deleted_at IS NULL AND state = 'off'
+                  AND metadata_version = ?
+                """,
+                (now, operation["actor_user_id"], now, world_id, expected_version),
+            )
+            if cursor.rowcount != 1:
+                raise ConfigurationConflictError("World changed after deletion preview.")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return {"world_id": world_id, "deleted": True}
+
+    def _apply_queued_runtime_config(
+        self, operation: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
+        world_id = operation["world_id"]
+        expected_version = data["expected_version"]
+        after = data["after"]
+        now = int(self._clock.now())
+        connection = self._store.writer()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            world = connection.execute(
+                "SELECT * FROM world_instances WHERE world_id = ? AND deleted_at IS NULL",
+                (world_id,),
+            ).fetchone()
+            if world is None:
+                raise WorldNotFoundError(world_id)
+            if (
+                world["metadata_version"] == expected_version + 1
+                and all(world[key] == value for key, value in after.items())
+            ):
+                connection.commit()
+                return {
+                    "entity": ConfigEditEntity.WORLD_INSTANCES.value,
+                    "row_id": world_id,
+                    "before": data["before"],
+                    "after": after,
+                }
+            if world["metadata_version"] != expected_version:
+                raise ConfigurationConflictError("CONFIG_VERSION_CONFLICT")
+            if world["state"] != WorldState.OFF.value:
+                raise WorldConflictError("Runtime configuration requires an off world.")
+            assignments = [f"{column} = ?" for column in after]
+            assignments.extend(
+                ("metadata_version = metadata_version + 1", "updated_at = ?")
+            )
+            values = [*after.values(), now, world_id, expected_version]
+            cursor = connection.execute(
+                f"UPDATE world_instances SET {', '.join(assignments)} "
+                "WHERE world_id = ? AND metadata_version = ? AND deleted_at IS NULL",
+                values,
+            )
+            if cursor.rowcount != 1:
+                raise ConfigurationConflictError("CONFIG_VERSION_CONFLICT")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return {
+            "entity": ConfigEditEntity.WORLD_INSTANCES.value,
+            "row_id": world_id,
+            "before": data["before"],
+            "after": after,
+        }
+
+    def _apply_queued_file_edit(
+        self, operation: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
+        root = Path(data["world_root"]).resolve()
+        source_relative = Path(data["from"])
+        target_relative = Path(data["to"])
+        if source_relative.is_absolute() or target_relative.is_absolute():
+            raise WorldLifecycleError("FileEdit paths must be relative.")
+        for relative in (source_relative, target_relative):
+            cursor = root
+            for component in relative.parts:
+                if component in {"", "."}:
+                    continue
+                cursor = cursor / component
+                if cursor.is_symlink():
+                    raise WorldLifecycleError(
+                        "FileEdit paths cannot traverse symbolic links."
+                    )
+        source = (root / source_relative).resolve()
+        target = (root / target_relative).resolve()
+        try:
+            source.relative_to(root)
+            target.relative_to(root)
+        except ValueError as exc:
+            raise WorldLifecycleError(
+                "FileEdit path escapes the world directory."
+            ) from exc
+        if source == root or target == root:
+            raise WorldLifecycleError("FileEdit cannot operate on the world root.")
+        if not source.exists() and target.exists() and data["action"] != "copy":
+            return {"action": data["action"], "from": data["from"], "to": data["to"]}
+        if not source.exists():
+            raise FileNotFoundError(data["from"])
+        if not target.parent.is_dir():
+            raise FileNotFoundError(str(target.parent))
+
+        action = data["action"]
+        if action in {"rename", "move"}:
+            if target.exists():
+                raise FileExistsError(data["to"])
+            source.rename(target)
+        elif action == "copy":
+            if target.exists():
+                if self._same_file_tree(source, target):
+                    return {"action": action, "from": data["from"], "to": data["to"]}
+                raise FileExistsError(data["to"])
+            staging = target.with_name(f".{target.name}.{operation['op_id']}.part")
+            if staging.exists():
+                if staging.is_dir():
+                    shutil.rmtree(staging)
+                else:
+                    staging.unlink()
+            if source.is_dir():
+                shutil.copytree(source, staging)
+            else:
+                shutil.copy2(source, staging)
+            staging.rename(target)
+        else:
+            raise WorldLifecycleError("Unsupported FileEdit action.")
+        return {"action": action, "from": data["from"], "to": data["to"]}
+
+    @staticmethod
+    def _same_file_tree(source: Path, target: Path) -> bool:
+        if source.is_file() and target.is_file():
+            return (
+                source.stat().st_size == target.stat().st_size
+                and source.read_bytes() == target.read_bytes()
+            )
+        if not source.is_dir() or not target.is_dir():
+            return False
+        source_files = sorted(
+            (path.relative_to(source), path)
+            for path in source.rglob("*")
+            if path.is_file()
+        )
+        target_files = sorted(
+            (path.relative_to(target), path)
+            for path in target.rglob("*")
+            if path.is_file()
+        )
+        return (
+            [relative for relative, _ in source_files]
+            == [relative for relative, _ in target_files]
+            and all(
+                left.stat().st_size == right.stat().st_size
+                and left.read_bytes() == right.read_bytes()
+                for (_, left), (_, right) in zip(
+                    source_files, target_files, strict=True
+                )
+            )
+        )
+
     # ------------------------------------------------------- supervisor / boot
 
     def poll_running(self) -> list[str]:
@@ -398,28 +1035,9 @@ class WorldsService:
                 alive = self._adapter.poll(handle).alive
             if alive:
                 continue
-            operation = self._operations.create(
-                OperationInput(
-                    op_type=OperationType.CRASH_DETECTED,
-                    actor_type=ActorType.SYSTEM,
-                    world_id=world_id,
-                    data={"detected_at": self._clock.now()},
-                ),
-                allow_world_conflict=True,
-            )
-            operation_id = str(operation['op_id'])
-            self._operations.transition(
-                operation_id,
-                OperationStatus.RUNNING,
-                checkpoint={'stage': 'crash_detected'},
-            )
             self._close_session(world_id, EndReason.CRASHED)
             self._set_world_state(world_id, WorldState.CRASHED)
-            self._operations.transition(
-                operation_id,
-                OperationStatus.COMPLETED,
-                checkpoint={'stage': 'crashed'},
-            )
+            self._record_crash(world_id)
             crashed.append(world_id)
         return crashed
 
@@ -441,7 +1059,8 @@ class WorldsService:
 
         A fresh adapter has an empty registry; this re-attaches by probing
         the launch fingerprint captured at spawn time. Returns re-attached
-        world_ids.
+        world_ids. Interrupted Starts without a matching process are failed
+        so they do not retain the derived world lock after manager restart.
         """
         reattached: list[str] = []
         for row in self._open_sessions():
@@ -459,8 +1078,92 @@ class WorldsService:
                 reattached.append(world_id)
             else:
                 self._close_session(world_id, EndReason.RECONCILED_MISSING)
-                self._set_world_state(world_id, WorldState.CRASHED)
+                start_operation = self._in_flight_start(world_id)
+                if start_operation is None:
+                    self._set_world_state(world_id, WorldState.CRASHED)
+                    self._record_crash(world_id)
+                else:
+                    self._fail_interrupted_start(start_operation, world_id)
+
+        for operation in self._incomplete_starts_without_sessions():
+            self._fail_interrupted_start(operation, operation['world_id'])
         return reattached
+
+    def _record_crash(self, world_id: str) -> None:
+        operation = self._operations.create(
+            OperationInput(
+                op_type=OperationType.CRASH_DETECTED,
+                actor_type=ActorType.SYSTEM,
+                world_id=world_id,
+                data={'detected_at': self._clock.now()},
+            ),
+            allow_world_conflict=True,
+        )
+        operation_id = str(operation['op_id'])
+        self._operations.transition(
+            operation_id,
+            OperationStatus.RUNNING,
+            checkpoint={'stage': 'crash_detected'},
+        )
+        self._operations.transition(
+            operation_id,
+            OperationStatus.COMPLETED,
+            checkpoint={'stage': 'crashed'},
+        )
+
+    def _in_flight_start(self, world_id: str) -> dict[str, Any] | None:
+        statuses = (
+            OperationStatus.VALIDATING.value,
+            OperationStatus.RUNNING.value,
+        )
+        row = self._store.reader().execute(
+            f"""
+            SELECT * FROM operations
+            WHERE world_id = ? AND op_type = ? AND status IN ({','.join('?' for _ in statuses)})
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (world_id, OperationType.START.value, *statuses),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _incomplete_starts_without_sessions(self) -> list[dict[str, Any]]:
+        statuses = (
+            OperationStatus.VALIDATING.value,
+            OperationStatus.RUNNING.value,
+        )
+        rows = self._store.reader().execute(
+            f"""
+            SELECT o.* FROM operations AS o
+            LEFT JOIN runtime_sessions AS rs
+              ON rs.world_id = o.world_id AND rs.ended_at IS NULL
+            WHERE o.op_type = ?
+              AND o.status IN ({','.join('?' for _ in statuses)})
+              AND rs.session_id IS NULL
+            ORDER BY o.created_at ASC
+            """,
+            (OperationType.START.value, *statuses),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _fail_interrupted_start(self, operation: dict[str, Any], world_id: str) -> None:
+        state = WorldState(self._world(world_id)['state'])
+        if state is WorldState.STARTING:
+            self._set_world_state(world_id, WorldState.ERROR)
+        elif state in (WorldState.RUNNING, WorldState.STOPPING):
+            self._set_world_state(world_id, WorldState.CRASHED)
+        elif state is WorldState.QUEUED:
+            self._set_world_state(world_id, WorldState.OFF)
+        elif state not in (WorldState.OFF, WorldState.ERROR, WorldState.CRASHED):
+            raise WorldLifecycleError(
+                f"cannot reconcile interrupted Start from {state.value}"
+            )
+        self._operations.transition(
+            operation['op_id'],
+            OperationStatus.FAILED,
+            error_code='manager_restart_incomplete',
+            message='Start was interrupted by manager restart before process recovery.',
+        )
 
     # ------------------------------------------------------------- read model
 
@@ -486,6 +1189,45 @@ class WorldsService:
             .fetchall()
         )
         return [self.world_summary(row["world_id"]) for row in rows]
+
+    def query_worlds(
+        self,
+        *,
+        state: str | None = None,
+        server_type: str | None = None,
+        mc_version: str | None = None,
+        search: str | None = None,
+        include_deleted: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return a filtered, paginated world summary and the matching total."""
+        clauses: list[str] = []
+        values: list[Any] = []
+        if not include_deleted:
+            clauses.append("deleted_at IS NULL")
+        for column, value in (
+            ("state", state),
+            ("server_type", server_type),
+            ("mc_version", mc_version),
+        ):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                values.append(value)
+        if search:
+            clauses.append("instr(lower(display_name), lower(?)) > 0")
+            values.append(search)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        reader = self._store.reader()
+        total = reader.execute(
+            f"SELECT COUNT(*) AS total FROM world_instances{where}", values
+        ).fetchone()["total"]
+        rows = reader.execute(
+            "SELECT world_id FROM world_instances"
+            f"{where} ORDER BY created_at DESC, world_id ASC LIMIT ? OFFSET ?",
+            (*values, limit, offset),
+        ).fetchall()
+        return [self.world_summary(row["world_id"]) for row in rows], int(total)
 
     # ---------------------------------------------------------------- helpers
 
@@ -740,9 +1482,11 @@ class WorldsService:
             time.sleep(0.5)
         return not self._adapter.poll(handle).alive
 
-    def _teardown(self, handle: ProcessHandle) -> None:
+    def _teardown(
+        self, handle: ProcessHandle, *, graceful_deadline_s: int = STOP_GRACEFUL_DEADLINE_S
+    ) -> None:
         try:
-            self._adapter.terminate(handle, graceful_deadline_s=STOP_GRACEFUL_DEADLINE_S)
+            self._adapter.terminate(handle, graceful_deadline_s=graceful_deadline_s)
         finally:
             self._adapter.close_handle(handle)
 
@@ -763,8 +1507,15 @@ class WorldsService:
         )
         return [dict(row) for row in rows]
 
-    def _set_world_state(self, world_id: str, state: WorldState) -> None:
+    def _set_world_state(
+        self,
+        world_id: str,
+        state: WorldState,
+        *,
+        intent: WorldTransitionIntent = WorldTransitionIntent.ORDINARY,
+    ) -> None:
         connection = self._store.writer()
+        state_event = None
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -783,11 +1534,14 @@ class WorldsService:
                 ),
             )
             try:
-                transitioned, _ = transition_world(
+                transitioned, transition_event = transition_world(
                     world,
                     state,
                     occurred_at=int(self._clock.now()),
+                    intent=intent,
                 )
+                if world.state is not state:
+                    state_event = transition_event
             except InvalidWorldTransition as exc:
                 raise WorldConflictError(str(exc)) from exc
             connection.execute(
@@ -809,6 +1563,16 @@ class WorldsService:
         except Exception:
             connection.rollback()
             raise
+        if state_event is not None and self._realtime is not None:
+            payload = {
+                "world_id": state_event.world_id,
+                "state": state_event.new_state.value,
+                "previous_state": state_event.previous_state.value,
+                "at": state_event.occurred_at,
+                "reason": intent.value,
+            }
+            self._realtime.publish("events", "world.state", payload)
+            self._realtime.publish(f"world:{world_id}:events", "world.state", payload)
 
     def _fail_op(self, op_id: str, error_code: str, message: str | None) -> None:
         self._operations.transition(

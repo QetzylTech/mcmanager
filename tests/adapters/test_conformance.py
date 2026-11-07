@@ -15,7 +15,7 @@ from pathlib import Path
 import psutil
 import pytest
 
-from app.domain.value_objects import ExitClass, ProcessState
+from app.domain.value_objects import ExitClass, ProcessState, Signal
 from app.platform.process.base import LiveRegistry
 from app.platform.process.posix import PosixProcessAdapter
 from app.platform.process.windows import WindowsProcessAdapter
@@ -117,6 +117,8 @@ def test_c1_spawn_probe_poll(kind, tmp_path):
     assert result.handle is not None, result.spawn_error
     handle = result.handle
     try:
+        if kind == 'native':
+            assert handle.process_group_id == handle.pid
         assert wait_for(lambda: adapter.probe(world_id, '').found, 10)
         probe = adapter.probe(
             world_id,
@@ -197,7 +199,8 @@ def test_c4_crash_detection(kind, tmp_path):
 
 @pytest.mark.conformance
 @pytest.mark.parametrize('kind', ['fake', 'native'])
-def test_c5_tail_and_replay(kind, tmp_path):
+def test_c5_tail_and_replay(kind, tmp_path, monkeypatch):
+    monkeypatch.setenv('VERBOSE_LOGGING', 'true')
     adapter = _make_adapter(kind)
     world_id = f'c5-{kind}'
     result = adapter.spawn(
@@ -302,6 +305,16 @@ def test_c7_pid_reuse_guard(kind, tmp_path):
 
         outcome = adapter.terminate(forged, graceful_deadline_s=2)
         assert not outcome.resolved
+
+        near_collision = dataclasses.replace(
+            handle, spawn_epoch=handle.spawn_epoch - 5.0
+        )
+        assert adapter.poll(near_collision).state is ProcessState.MISSING
+        sent = adapter.send_signal(near_collision, Signal.TERMINATE)
+        assert not sent.delivered
+        assert not adapter.terminate(
+            near_collision, graceful_deadline_s=0
+        ).resolved
 
         # The innocent process (the real handle) must be unharmed.
         assert adapter.poll(handle).alive
@@ -444,7 +457,8 @@ def test_c11_boot_reconciliation(kind, tmp_path):
 
 @pytest.mark.conformance
 @pytest.mark.parametrize('kind', ['fake', 'native'])
-def test_c12_log_durability(kind, tmp_path):
+def test_c12_log_durability(kind, tmp_path, monkeypatch):
+    monkeypatch.setenv('VERBOSE_LOGGING', 'true')
     adapter = _make_adapter(kind)
     world_id = f'c12-{kind}'
     session_log = tmp_path / f'{world_id}.log'
@@ -469,6 +483,8 @@ def test_c12_log_durability(kind, tmp_path):
     content = session_log.read_text(encoding='utf-8')
     assert 'durable-line' in content
     assert len(content.splitlines()) >= 2
+    channel_log = tmp_path / f'{world_id}.stdout.log'
+    assert 'durable-line' in channel_log.read_text(encoding='utf-8')
 
 
 # --------------------------------------------------------------------------- C13
@@ -476,7 +492,8 @@ def test_c12_log_durability(kind, tmp_path):
 
 @pytest.mark.conformance
 @pytest.mark.parametrize('kind', ['fake', 'native'])
-def test_c13_slow_sink_backpressure(kind, tmp_path):
+def test_c13_slow_sink_backpressure(kind, tmp_path, monkeypatch):
+    monkeypatch.setenv('VERBOSE_LOGGING', 'true')
     adapter = _make_adapter(kind)
     world_id = f'c13-{kind}'
     result = adapter.spawn(

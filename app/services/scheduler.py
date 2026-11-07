@@ -15,9 +15,21 @@ from app.domain.value_objects import (
     OperationStatus,
     OperationType,
 )
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
+from app.ports.persistence import PersistencePort
 from app.services.operations import OperationConflictError, OperationInput, OperationService
+
+_CONFLICTING_SCHEDULE_OPERATION_TYPES = (
+    OperationType.BACKUP.value,
+    OperationType.RESTORE.value,
+    OperationType.CLEANUP.value,
+)
+_IN_FLIGHT_STATUSES = (
+    OperationStatus.CREATED.value,
+    OperationStatus.QUEUED.value,
+    OperationStatus.VALIDATING.value,
+    OperationStatus.RUNNING.value,
+)
 
 
 @dataclass(frozen=True)
@@ -32,7 +44,9 @@ class SchedulerService:
 
     tick_interval_seconds = SCHEDULER_TICK_INTERVAL_S
 
-    def __init__(self, store: SqliteStore, clock: Clock, operations: OperationService) -> None:
+    def __init__(
+        self, store: PersistencePort, clock: Clock, operations: OperationService
+    ) -> None:
         self._store = store
         self._clock = clock
         self._operations = operations
@@ -61,9 +75,7 @@ class SchedulerService:
             if op_type is None:
                 missed += self._record_missed(current, expected, now)
                 continue
-            if current['world_id'] is not None and self._operations.has_in_flight_operation(
-                current['world_id']
-            ):
+            if self._has_schedule_conflict(current['world_id']):
                 missed += self._record_missed(current, expected, now)
                 continue
             try:
@@ -120,6 +132,8 @@ class SchedulerService:
     def _record_missed(self, schedule: dict[str, Any], expected: int, detected: int) -> int:
         connection = self._store.writer()
         connection.execute('BEGIN IMMEDIATE')
+        missed_run_id = f'mr_{uuid.uuid4().hex[:16]}'
+        schedule_name = self._snapshot_name(schedule)
         try:
             if connection.execute(
                 'SELECT 1 FROM missed_run_records WHERE schedule_id = ? AND expected_run_at = ?',
@@ -136,9 +150,9 @@ class SchedulerService:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
                 """,
                 (
-                    f'mr_{uuid.uuid4().hex[:16]}',
+                    missed_run_id,
                     schedule['schedule_id'],
-                    self._snapshot_name(schedule),
+                    schedule_name,
                     schedule['schedule_type'],
                     expected,
                     detected,
@@ -150,6 +164,16 @@ class SchedulerService:
         except Exception:
             connection.rollback()
             raise
+        self._operations.publish_event(
+            'missed_run',
+            {
+                'missed_run_id': missed_run_id,
+                'schedule_id': schedule['schedule_id'],
+                'schedule_name_snapshot': schedule_name,
+                'expected_run_at': expected,
+            },
+            world_id=schedule['world_id'],
+        )
         return 1
 
     def _schedule_for_dispatch(self, schedule_id: str) -> dict[str, Any] | None:
@@ -178,6 +202,25 @@ class SchedulerService:
             LIMIT 1
             """,
             (schedule_id, expected),
+        ).fetchone()
+        return row is not None
+
+    def _has_schedule_conflict(self, world_id: str | None) -> bool:
+        scope_clause = 'world_id IS NULL' if world_id is None else 'world_id = ?'
+        params: list[Any] = []
+        if world_id is not None:
+            params.append(world_id)
+        params.extend((*_CONFLICTING_SCHEDULE_OPERATION_TYPES, *_IN_FLIGHT_STATUSES))
+        row = self._store.reader().execute(
+            f"""
+            SELECT 1
+            FROM operations
+            WHERE {scope_clause}
+              AND op_type IN ({','.join('?' for _ in _CONFLICTING_SCHEDULE_OPERATION_TYPES)})
+              AND status IN ({','.join('?' for _ in _IN_FLIGHT_STATUSES)})
+            LIMIT 1
+            """,
+            params,
         ).fetchone()
         return row is not None
 

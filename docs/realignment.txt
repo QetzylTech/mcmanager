@@ -1,3 +1,131 @@
+CURRENT REALIGNMENT ADDENDUM — 2026-11-07
+========================================
+
+This addendum supersedes the assessment and proposed action list below. The
+older plan's observations are preserved as historical rationale, not current
+findings. Its `core/` and `core/STATUS.md` assumptions, recommendation to keep
+the application under core/, and earlier blanket missing-feature findings are
+stale: the repository's application is now at root `app/`, and
+docs/IMPLEMENTATION_STATUS.md (last verified 2026-11-06) records the current
+verification snapshot. Some previously identified gaps have since been
+implemented; others remain partial as recorded below. Numbered Documents
+4–14 remain the product contract; this file and the gate pseudocode do not
+override them.
+
+Current tree and contract
+------------------------
+
+The live application package is `app/`; migrations are at root `migrations/`,
+with tests and benchmarks at root `tests/` and `benchmarks/`. Important current
+paths:
+
+  app/bootstrap.py, app/__init__.py
+  app/domain/{entities,lifecycle,invariants,events,deletion_tiers,value_objects,tuning}.py
+  app/ports/{persistence,process_control,minecraft,filesystem,backup_engine,
+             sync_transport,clock,secrets_store}.py
+  app/platform/process/{base,posix,windows,tailing}.py
+  app/infrastructure/{sqlite/,minecraft/,backup_engine.py,filesystem.py,
+                      secrets.py,sync_transport/}
+  app/services/{operations,worlds,runtime,reconciliation,scheduler,audit,
+                auth,configuration,backup,restore,cleanup,sync,realtime,
+                notifications,diagnostics,save_coordination}.py
+  app/commands/world.py; app/web/{middleware.py,errors.py,api/,streams/};
+  app/shell/{routes.py,templates/,static/}
+
+There is no current `core/` application package. Do not move or recreate one.
+Document 12 remains normative for target structure and dependency direction.
+Actual placement differs in places: shell templates/static are within
+`app/shell/` rather than root `templates/` and `static/`, and services still
+contain inline SQL/concrete persistence dependencies instead of a complete
+repository-port layer. These are implementation divergences, not amendments
+to Document 12. `app/commands/` and the API/stream catalog are only partial;
+the single `app/commands/world.py` does not mean the full command/query layer
+or route catalog is complete.
+
+Reconciled gate status
+----------------------
+
+All five gates remain partial; the focused implementation below is not full
+product completion or a release pass.
+
+Gate 1 — Process/Minecraft adapters. Implemented: ProcessControlPort and
+POSIX/Windows adapters; argv launches and PID-identity guards; Minecraft
+capability/readiness/EULA/property/Java adapter pieces; bounded log buffers,
+VERBOSE_LOGGING filtering and durable session logs; fake-server C1–C14 tests.
+The fake flags are `--crash-after-ms` and `--save-slow-ms`. Windows conformance
+passed in the recorded run; POSIX has not been run. The service and HTTP EULA
+acceptance flow exist (`WorldsService.accept_eula`,
+`app/web/api/system.py`) and audit explicit acceptance; the route still does
+not implement Document 10's ConfigEdit Operation/202 contract. Remaining:
+cross-OS acceptance and full Doc 14/Doc 10 conformance. Documents 13–14 govern;
+the gate1 sample's PID dataclass, seconds-based flags and universal readiness
+threshold do not.
+
+Gate 2 — Persistence/domain/auth/configuration. Implemented: Documents 6–7
+domain types and initial migrations, FK enforcement/checking, Argon2id via the
+encrypted secrets store, session hashing/step-up foundations, three-tier
+effective settings and versioned ConfigEdit Operations. The schema is the
+Document 7 model, not gate2's simplified SQL sketch. Remaining product
+coverage includes full authorization/grant management and schema/migration
+release verification. Focused Gate 2 tests passed per the recorded status;
+this does not certify every Doc 6/7 invariant.
+
+Gate 3 — Control plane. Implemented: derived world-lock query; milestone-only
+operation persistence and in-memory progress; terminal audit/notification
+integration; conflict policy; scheduler missed-run recording; startup
+reconciliation; supervisor and scheduler workers started by `create_app`.
+`RuntimeService` is presently a facade and `WorldsService` still owns lifecycle
+logic. HTTP lifecycle work executes synchronously before the 202 response, so
+the durable background dispatcher remains unfinished. Documents 6–9 govern
+conflict and state behavior; do not use the old generic pseudocode rules.
+
+Gate 4 — Operational subsystems. Implemented: native ZIP/SHA-256 backup,
+storage/save guards, off-only restore with pre-backup and compensating rollback,
+backup-artifact cleanup with preview/floors/blast-radius guard, and separate
+sync with recorded retries/cap. Cleanup is currently backup-artifact scope;
+stale-world/log cleanup and the HTTP catalog remain incomplete. Sync is not
+coupled to local backup validity. Documents 6–9 and 14 govern the details.
+
+Gate 5 — API/streams/shell. Implemented foundation: session/auth/CSRF/step-up
+middleware, selected API routes, operation reads, authenticated SSE snapshots
+and replay, BroadcastChannel leader/follower client, and no-reload navigation.
+The complete Document 10 catalog, all Document 4/5 workflows, command layer,
+stream auth-expiry/reconnect/deployment evidence and calibrated Doc 11
+performance release gate remain incomplete. Do not claim the old sample's
+route/security semantics or benchmark numbers are current.
+
+Remaining contradictions / decision boundaries
+----------------------------------------------
+
+1. Numbered Documents 4–14 win over all pseudocode and architecture notes.
+   The pseudocode code blocks are historical snapshots; their per-gate
+   addenda explicitly identify the superseded paths, schemas, APIs and
+   algorithms. Do not implement from those blocks without reconciling against
+   numbered documents.
+2. Document 12's root `static/` and `templates/` target differs from the
+   current `app/shell/static/` and `app/shell/templates/` placement. The
+   current runtime uses the latter; no packaging/layout change is authorized
+   by this documentation task.
+3. `app/services/` still has concrete/inline persistence use, and the complete
+   command/query and web catalogs are absent. Document 12's layering/layout
+   contract is not waived by existing code.
+4. Product/release completeness remains unverified: POSIX conformance,
+   broader schema/security/static gates, full Doc 10 coverage, browser
+   deployment behavior, and measured Document 11 performance profile.
+   `benchmarks/thresholds.json` must not be filled with invented values.
+5. Implementation evidence is bounded by the focused verification recorded
+   in docs/IMPLEMENTATION_STATUS.md; do not infer full gate closure from the
+   current feature foundations.
+
+Historical rationale retained
+-----------------------------
+
+The plan below was written when the application tree was assessed as
+`core/`. Its core-vs-root packaging recommendation and its missing-feature
+inventory are explicitly superseded by this addendum and the current tree.
+The previous plan is retained intact below for traceability only; do not
+re-open its action ordering, statuses, paths, or acceptance claims as current.
+
 ================================================================================
 MCMANAGER CORE REALIGNMENT PLAN
 ================================================================================
@@ -396,8 +524,9 @@ MODULE 3 Cleanup — IMPLEMENTED for backup artifacts
   product work, outside WP 4.1–4.4's backup-artifact implementation.
 
 MODULE 4 Offsite sync — IMPLEMENTED
-  SyncService records write-once attempt timelines, retries after 30/60/120
-  seconds, enforces the 50 GiB daily cap, and has a mounted-NAS transport.
+  SyncService records write-once attempt timelines, makes three total
+  attempts with 30/60-second waits, enforces the 50 GiB daily cap, and has a
+  mounted-NAS transport.
   It is dispatched separately from local backup creation, so network failures
   do not block or invalidate the local artifact.
 
@@ -621,7 +750,7 @@ Gate 3  Derived lock query only (no is_locked column).
 Gate 4  ZIP SHA-256 roundtrip; save-on after failed compress.
         Restore crash-on-boot => pre_restore restored, source suspect=1.
         Wet cleanup refuses age<3 or keep<3.
-        Sync retry schedule 30/60/120 without blocking local backup.
+        Sync retry schedule 30/60 seconds without blocking local backup.
 
 Gate 5  POST without matching CSRF cookies/headers => 403 CSRF_INVALID.
         Start => 202 + meta.op_id.

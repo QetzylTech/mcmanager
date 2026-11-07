@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+import uuid
+from dataclasses import asdict
+from typing import Any
 
-from flask import Blueprint, current_app, g, jsonify
+from flask import Blueprint, Response, current_app, g, jsonify, request
 
 from app.commands.world import WorldLifecycleCommands
-from app.domain.value_objects import OperationType
+from app.domain.value_objects import OperationType, ServerType, WorldState
 from app.services.diagnostics import DiagnosticsService
 from app.services.worlds import (
-    SpawnFailedError,
-    StartTimeoutError,
     WorldConflictError,
     WorldLifecycleError,
     WorldNotFoundError,
@@ -31,7 +33,7 @@ def _runtime():
     return getattr(container, 'runtime', container.worlds)
 
 
-def _operation_payload(operation: dict) -> dict:
+def _operation_payload(operation: dict[str, Any]) -> dict[str, Any]:
     payload = dict(operation)
     if payload.get('data_json'):
         try:
@@ -41,25 +43,30 @@ def _operation_payload(operation: dict) -> dict:
     return payload
 
 
-def _action_operation(result: str, *, world_id: str, op_type: OperationType):
-    container = _container()
-    operation = container.operations.get(result)
-    if operation is None:
-        row = container.store.reader().execute(
-            'SELECT * FROM operations WHERE world_id = ? AND op_type = ? '
-            'ORDER BY created_at DESC LIMIT 1',
-            (world_id, op_type.value),
-        ).fetchone()
-        operation = dict(row) if row is not None else None
-    if operation is None:
-        operation = {'op_id': result, 'status': 'Queued'}
+def _action_operation(
+    operation: dict[str, Any],
+    *,
+    idempotency_key: str,
+    replayed: bool,
+) -> tuple[Response, int]:
     operation = _operation_payload(operation)
     op_id = operation['op_id']
     return ok(
         {'operation': operation},
-        status=202,
-        meta={'op_id': op_id},
+        status=200 if replayed else 202,
+        meta={
+            'op_id': op_id,
+            'idempotency_key': operation.get('idempotency_key') or idempotency_key,
+        },
     )
+
+
+def _request_idempotency_key() -> str | None:
+    key = request.headers.get('Idempotency-Key')
+    if key is None:
+        return uuid.uuid4().hex
+    key = key.strip()
+    return key or None
 
 
 @system_bp.get('/health')
@@ -99,6 +106,14 @@ def health():
     except Exception as exc:  # noqa: BLE001
         checks['process_adapter'] = {'status': 'down', 'error': str(exc)}
 
+    outcome = container.reconciliation.health
+    checks['reconciliation'] = {
+        'status': 'ok' if outcome.status == 'healthy' else 'down',
+        'phase': outcome.status,
+        'reattached_worlds': len(outcome.reattached_world_ids),
+        **({'error': outcome.error} if outcome.error is not None else {}),
+    }
+
     all_ok = all(check['status'] == 'ok' for check in checks.values())
     return jsonify(
         {
@@ -136,18 +151,85 @@ def system_stats():
 
 @system_bp.get('/worlds')
 def list_worlds():
-    return ok({'worlds': _container().worlds.list_worlds()})
+    state = request.args.get('state')
+    server_type = request.args.get('server_type')
+    mc_version = request.args.get('mc_version')
+    search = request.args.get('search')
+    include_deleted_value = request.args.get('include_deleted', 'false')
+    limit_value = request.args.get('limit', '50')
+    offset_value = request.args.get('offset', '0')
+    if state is not None and state not in {item.value for item in WorldState}:
+        return error(
+            'VALIDATION_ERROR',
+            'Unsupported world state filter.',
+            details={'fields': {'state': state}},
+        )
+    if server_type is not None and server_type not in {item.value for item in ServerType}:
+        return error(
+            'VALIDATION_ERROR',
+            'Unsupported server type filter.',
+            details={'fields': {'server_type': server_type}},
+        )
+    if include_deleted_value not in {'true', 'false'}:
+        return error(
+            'VALIDATION_ERROR',
+            'include_deleted must be true or false.',
+            details={'fields': {'include_deleted': include_deleted_value}},
+        )
+    if not re.fullmatch(r'\d+', limit_value) or not re.fullmatch(r'\d+', offset_value):
+        return error('VALIDATION_ERROR', 'limit and offset must be non-negative integers.')
+    limit = int(limit_value)
+    offset = int(offset_value)
+    if not 1 <= limit <= 500:
+        return error(
+            'VALIDATION_ERROR',
+            'limit must be between 1 and 500.',
+            details={'fields': {'limit': limit_value}},
+        )
+    worlds, total = _container().worlds.query_worlds(
+        state=state,
+        server_type=server_type,
+        mc_version=mc_version,
+        search=search,
+        include_deleted=include_deleted_value == 'true',
+        limit=limit,
+        offset=offset,
+    )
+    return ok(
+        {'worlds': worlds},
+        meta={'pagination': {'limit': limit, 'offset': offset, 'total': total}},
+    )
 
 
 @system_bp.get('/worlds/<world_id>')
 def get_world(world_id: str):
-    world = next(
-        (item for item in _container().worlds.list_worlds() if item['world_id'] == world_id),
-        None,
-    )
-    if world is None:
+    container = _container()
+    row = container.store.reader().execute(
+        'SELECT * FROM world_instances WHERE world_id = ? AND deleted_at IS NULL',
+        (world_id,),
+    ).fetchone()
+    if row is None:
         return error('NOT_FOUND', 'World not found.', status=404)
-    return ok({'world': world})
+    world = container.worlds.world_summary(world_id)
+    last_backup = container.store.reader().execute(
+        """
+        SELECT artifact_id, category, size_bytes, created_at
+        FROM backup_artifacts
+        WHERE world_id = ? AND deleted_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (world_id,),
+    ).fetchone()
+    return ok(
+        {
+            'world': world,
+            'capabilities': asdict(
+                container.minecraft_adapter.capabilities_for(ServerType(row['server_type']))
+            ),
+            'last_backup': dict(last_backup) if last_backup is not None else None,
+        }
+    )
 
 
 @system_bp.get('/operations/<op_id>')
@@ -160,26 +242,68 @@ def get_operation(op_id: str):
 
 @system_bp.post('/worlds/<world_id>/start')
 def world_start(world_id: str):
+    idempotency_key = _request_idempotency_key()
+    if idempotency_key is None:
+        return error('VALIDATION_ERROR', 'Idempotency-Key must not be empty.', status=400)
     try:
-        result = WorldLifecycleCommands(_container().worlds).start(
+        operation, replayed = WorldLifecycleCommands(_container().worlds).enqueue(
+            op_type=OperationType.START,
             world_id=world_id,
             actor_user_id=g.current_user_id,
+            idempotency_key=idempotency_key,
         )
     except WorldNotFoundError:
         return error('NOT_FOUND', 'World not found.', status=404)
     except WorldConflictError as exc:
         return error('WORLD_CONFLICT', str(exc), status=409)
-    except (SpawnFailedError, StartTimeoutError, WorldLifecycleError) as exc:
+    except WorldLifecycleError as exc:
         return error('START_FAILED', str(exc), status=422)
-    return _action_operation(result, world_id=world_id, op_type=OperationType.START)
+    return _action_operation(
+        operation,
+        idempotency_key=idempotency_key,
+        replayed=replayed,
+    )
+
+
+@system_bp.post('/worlds/<world_id>/eula/accept')
+def world_eula_accept(world_id: str):
+    body = request.get_json(silent=True) or {}
+    if body.get('accepted') is not True:
+        return error(
+            'VALIDATION_ERROR',
+            'Explicit EULA acceptance is required.',
+            status=400,
+        )
+    try:
+        operation = _container().worlds.accept_eula(
+            world_id=world_id,
+            actor_user_id=g.current_user_id,
+            accepted=True,
+            ip=request.remote_addr,
+        )
+    except WorldNotFoundError:
+        return error('NOT_FOUND', 'World not found.', status=404)
+    except WorldConflictError as exc:
+        return error('WORLD_CONFLICT', str(exc), status=409)
+    except WorldLifecycleError as exc:
+        return error('EULA_ACCEPT_FAILED', str(exc), status=422)
+    return ok(
+        {'world_id': world_id, 'eula': 'accepted', 'operation': operation},
+        meta={'op_id': operation['op_id']},
+    )
 
 
 @system_bp.post('/worlds/<world_id>/stop')
 def world_stop(world_id: str):
+    idempotency_key = _request_idempotency_key()
+    if idempotency_key is None:
+        return error('VALIDATION_ERROR', 'Idempotency-Key must not be empty.', status=400)
     try:
-        result = WorldLifecycleCommands(_container().worlds).stop(
+        operation, replayed = WorldLifecycleCommands(_container().worlds).enqueue(
+            op_type=OperationType.STOP,
             world_id=world_id,
             actor_user_id=g.current_user_id,
+            idempotency_key=idempotency_key,
         )
     except WorldNotFoundError:
         return error('NOT_FOUND', 'World not found.', status=404)
@@ -187,15 +311,24 @@ def world_stop(world_id: str):
         return error('WORLD_CONFLICT', str(exc), status=409)
     except WorldLifecycleError as exc:
         return error('STOP_FAILED', str(exc), status=422)
-    return _action_operation(result, world_id=world_id, op_type=OperationType.STOP)
+    return _action_operation(
+        operation,
+        idempotency_key=idempotency_key,
+        replayed=replayed,
+    )
 
 
 @system_bp.post('/worlds/<world_id>/kill')
 def world_kill(world_id: str):
+    idempotency_key = _request_idempotency_key()
+    if idempotency_key is None:
+        return error('VALIDATION_ERROR', 'Idempotency-Key must not be empty.', status=400)
     try:
-        result = WorldLifecycleCommands(_container().worlds).kill(
+        operation, replayed = WorldLifecycleCommands(_container().worlds).enqueue(
+            op_type=OperationType.KILL,
             world_id=world_id,
             actor_user_id=g.current_user_id,
+            idempotency_key=idempotency_key,
         )
     except WorldNotFoundError:
         return error('NOT_FOUND', 'World not found.', status=404)
@@ -203,7 +336,11 @@ def world_kill(world_id: str):
         return error('WORLD_CONFLICT', str(exc), status=409)
     except WorldLifecycleError as exc:
         return error('KILL_FAILED', str(exc), status=422)
-    return _action_operation(result, world_id=world_id, op_type=OperationType.KILL)
+    return _action_operation(
+        operation,
+        idempotency_key=idempotency_key,
+        replayed=replayed,
+    )
 
 
 @system_bp.post('/supervisor/tick')

@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -50,16 +51,39 @@ class StreamSubscriber:
             with suppress(queue.Full):
                 self._queue.put_nowait(None)
 
-    def frames(self) -> Iterable[str]:
-        while not self.closed:
+    def frames(self, *, auth_check: Callable[[], bool] | None = None) -> Iterable[str]:
+        next_keepalive = time.monotonic() + 15
+        while True:
+            timeout = 15.0
+            if auth_check is not None:
+                timeout = min(1, max(0, next_keepalive - time.monotonic()))
             try:
-                item = self._queue.get(timeout=15)
+                item = self._queue.get(timeout=timeout)
             except queue.Empty:
-                yield ': keepalive\n\n'
+                if self.closed:
+                    break
+                if auth_check is not None and not auth_check():
+                    yield _auth_expired_frame()
+                    break
+                if time.monotonic() >= next_keepalive:
+                    yield ': ping\n\n'
+                    next_keepalive = time.monotonic() + 15
                 continue
             if item is None:
                 break
+            if (
+                auth_check is not None
+                and 'event: manager.shutdown' not in item
+                and not auth_check()
+            ):
+                yield _auth_expired_frame()
+                break
             yield item
+
+
+def _auth_expired_frame() -> str:
+    payload = json.dumps({'code': 'AUTH_SESSION_EXPIRED'}, separators=(',', ':'))
+    return f'event: stream.error\ndata: {payload}\n\n'
 
 
 class RealtimeHub:
@@ -71,6 +95,12 @@ class RealtimeHub:
         self._buffers: dict[str, deque[StreamEvent]] = {}
         self._subscribers: dict[str, list[StreamSubscriber]] = {}
         self._lock = threading.RLock()
+        self._closed = False
+
+    @property
+    def is_shutdown(self) -> bool:
+        with self._lock:
+            return self._closed
 
     def subscribe(self, stream: str, *, last_event_id: int | None = None) -> StreamSubscriber:
         subscriber = StreamSubscriber()
@@ -88,6 +118,28 @@ class RealtimeHub:
                 self._subscribers[stream] = [
                     item for item in subscribers if item is not subscriber
                 ]
+
+    def subscriber_count(self, stream: str) -> int:
+        with self._lock:
+            return len(self._subscribers.get(stream, ()))
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            for stream, subscribers in self._subscribers.items():
+                sequence = self._next_sequence.get(stream, 1)
+                self._next_sequence[stream] = sequence + 1
+                event = StreamEvent(sequence, 'manager.shutdown', {})
+                self._buffers.setdefault(
+                    stream, deque(maxlen=self._replay_limit)
+                ).append(event)
+                frame = event.encode()
+                for subscriber in subscribers:
+                    subscriber.put(frame)
+                    subscriber.close()
+            self._subscribers.clear()
 
     def publish(self, stream: str, event: str, data: dict[str, Any]) -> StreamEvent:
         with self._lock:

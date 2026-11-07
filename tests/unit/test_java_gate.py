@@ -169,6 +169,27 @@ def test_gate_rejects_unaccepted_eula(tmp_path, monkeypatch):
     assert result.eula_state is EulaState.UNACCEPTED
 
 
+def test_launch_argument_cannot_override_unaccepted_eula_file(tmp_path, monkeypatch):
+    _stub_java(monkeypatch, version='21')
+    context = _context(tmp_path, eula=False)
+    context = LaunchContext(
+        world_id=context.world_id,
+        server_type=context.server_type,
+        mc_version=context.mc_version,
+        world_dir=context.world_dir,
+        java_path=context.java_path,
+        server_jar_path=context.server_jar_path,
+        port=context.port,
+        launch_args=['--eula=true'],
+    )
+
+    result = validate_launch(context)
+
+    assert not result.passed
+    assert result.error_code == ERROR_EULA_NOT_ACCEPTED
+    assert result.eula_state is EulaState.UNACCEPTED
+
+
 def test_gate_rejects_missing_jar(tmp_path, monkeypatch):
     _stub_java(monkeypatch, version='21')
     result = validate_launch(_context(tmp_path, jar=False))

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import threading
 from types import SimpleNamespace
 
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
@@ -29,20 +28,29 @@ def test_create_app_surfaces_boot_reconciliation_failure(monkeypatch) -> None:
         raise AssertionError('boot reconciliation failure was swallowed')
 
 
-def test_create_app_starts_supervisor_and_scheduler_workers(monkeypatch) -> None:
+def test_create_app_starts_supervisor_scheduler_and_operation_workers(monkeypatch) -> None:
     app_module = importlib.import_module('app')
     container = SimpleNamespace(
-        worlds=SimpleNamespace(reconcile=lambda: None),
-        scheduler=SimpleNamespace(tick_interval_seconds=30),
+        worlds=SimpleNamespace(reconcile=lambda: None, poll_running=lambda: []),
+        scheduler=SimpleNamespace(tick_interval_seconds=30, tick=lambda: None),
     )
+    closed: list[bool] = []
+    container.store = SimpleNamespace(close=lambda: closed.append(True))
     monkeypatch.setattr(app_module, 'build_container', lambda **_kwargs: container)
-    started: list[threading.Thread] = []
-    monkeypatch.setattr(threading.Thread, 'start', lambda thread: started.append(thread))
 
-    app_module.create_app(database_path='unused.db', keyfile_path='unused.key')
+    app = app_module.create_app(database_path='unused.db', keyfile_path='unused.key')
 
-    workers = [thread for thread in started if thread.daemon and thread._target is not None]
-    assert len(workers) >= 2
+    workers = app.extensions['mcmanager_workers']
+    assert {thread.name for thread in workers} == {
+        "mcmanager-runtime-supervisor",
+        "mcmanager-scheduler",
+        "mcmanager-operation-dispatcher",
+    }
+    assert all(thread.daemon and thread.ident is not None for thread in workers)
+    app.extensions['mcmanager_shutdown']()
+    assert app.extensions['mcmanager_workers_stop'].is_set()
+    assert all(not thread.is_alive() for thread in workers)
+    assert closed == [True]
 
 
 def test_scheduler_conflict_is_recorded_once_and_never_replayed(store, clock) -> None:

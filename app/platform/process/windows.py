@@ -46,7 +46,7 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
 JobObjectExtendedLimitInformation = 9
 
-_IDENTITY_TOLERANCE_S = 30.0
+_IDENTITY_TOLERANCE_S = 1.0
 
 
 class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
@@ -212,15 +212,17 @@ class WindowsProcessAdapter(BaseProcessAdapter):
             self._close_job(job_handle)
             return SpawnResult(handle=None, started_at=time.time(), spawn_error=str(exc))
 
+        process = psutil.Process(popen.pid)
         handle = WindowsHandle(
             world_id=request.world_id,
             pid=popen.pid,
-            spawn_epoch=time.time(),
+            spawn_epoch=process.create_time(),
+            process_group_id=popen.pid,
             job_handle=job_handle,
         )
         entry = RegistryEntry(
             handle=handle,
-            process=psutil.Process(popen.pid),
+            process=process,
             args_snapshot=list(argv),
             spawn_epoch=handle.spawn_epoch,
             popen=popen,
@@ -265,29 +267,25 @@ class WindowsProcessAdapter(BaseProcessAdapter):
 
     # -- signals -------------------------------------------------------------
 
-    def _signal_tree_impl(self, process: psutil.Process, signal: Signal) -> SendResult:
+    def _signal_tree_impl(
+        self, process: psutil.Process, handle: ProcessHandle, signal: Signal
+    ) -> SendResult:
         if signal is Signal.KILL:
             return SendResult(delivered=False, error='use_terminate_for_kill')
         api = _load_kernel32()
         if not api:
             return SendResult(delivered=False, error='kernel32_unavailable')
-        ok = api['ctrl_break'](1, process.pid)  # type: ignore[operator]
+        group_id = handle.process_group_id or process.pid
+        ok = api['ctrl_break'](1, group_id)  # type: ignore[operator]
         if ok:
             return SendResult(delivered=True)
         return SendResult(delivered=False, error='ctrl_break_failed')
 
-    def _kill_tree_impl(self, process: psutil.Process) -> None:
-        for entry in self._registry.all():
-            if entry.process.pid == process.pid:
-                handle = entry.handle
-                if not isinstance(handle, WindowsHandle):
-                    break
-                if handle.job_handle:
-                    self._terminate_job(handle.job_handle)
-                    return
-                # Re-attached handle: the job object cannot be rebuilt from
-                # a pid (job_handle=0). Fall through to a direct kill.
-                break
+    def _kill_tree_impl(self, process: psutil.Process, handle: ProcessHandle) -> None:
+        if isinstance(handle, WindowsHandle) and handle.job_handle:
+            self._terminate_job(handle.job_handle)
+            return
+        # A re-attached process has no rebuildable Job Object handle.
         process.kill()
 
     def _terminate_job(self, job_handle: int) -> None:
@@ -350,6 +348,7 @@ class WindowsProcessAdapter(BaseProcessAdapter):
             world_id=world_id,
             pid=fingerprint.pid,
             spawn_epoch=fingerprint.spawn_epoch,
+            process_group_id=fingerprint.pid,
             job_handle=0,  # job handle cannot be rebuilt from a pid
         )
         entry = RegistryEntry(

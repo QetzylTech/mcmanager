@@ -1,3 +1,33 @@
+# CURRENT RECONCILIATION — 2026-11-07
+This file is retained as a historical Gate 2 pseudocode snapshot. The DDL,
+field names, package paths, API error spellings, and examples below are NOT
+current requirements where they conflict with numbered product documents.
+Their rationale is preserved; this notice explicitly supersedes the stale
+sketch rather than silently removing it.
+
+Documents 6 and 7 are normative for the domain and 27-table schema; Document 9
+governs optimistic locking; Documents 8, 10 and 12 govern service/API/layout
+contracts. In particular, Document 7's singleton global_settings row plus
+sparse world_settings override is authoritative, not the key/value global
+settings table or the simplified users/secrets/operations/audit DDL below.
+All enforced foreign keys are RESTRICT; IDs, snapshots, deletion tiers and
+closed enums follow Documents 6–7. The schema is in migrations/001_initial_schema.sql
+and 002_runtime_session_rcon_port.sql; persistence code is in
+app/infrastructure/sqlite/. Do not execute or apply the SQL samples in this file.
+
+Current implementation: app/domain/ contains the value objects, entities,
+lifecycle guards, invariants, events and deletion tiers; ConfigurationService
+resolves global defaults with world overrides and records versioned edits as
+Operations; AuthenticationService uses Argon2id hashes held in the encrypted
+secrets store and hashed session tokens. The API maps the implemented version
+conflict to the current error handling; Document 10's canonical codes remain
+authoritative (for example CONFIG_VERSION_CONFLICT and AUTH_STEP_UP_REQUIRED),
+not spellings invented by this sketch. Focused Gate 2 verification is recorded
+in docs/IMPLEMENTATION_STATUS.md; it does not certify the full product.
+
+Everything below is the superseded historical pseudocode, not a second schema
+or competing API contract. Follow Documents 6–10 and the app/ implementation.
+
 ================================================================================
 MCMANAGER STAGE 2 (GATE 2) PSEUDOCODE SPECIFICATION
 ================================================================================

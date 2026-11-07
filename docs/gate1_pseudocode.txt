@@ -1,3 +1,38 @@
+# CURRENT RECONCILIATION — 2026-11-07
+This file is retained as a historical Gate 1 pseudocode snapshot. The
+specimens below are NOT the current implementation plan where they conflict
+with Documents 6, 12, 13, 14 or the code. Their original rationale is retained;
+the corrections here make supersession explicit rather than silently deleting
+the examples.
+
+Current contract: Documents 13 and 14 govern the process/Minecraft boundary;
+Documents 6, 8, 9 and 12 govern lifecycle, locked deadlines, conflicts and
+placement. The implementation is under app/ (not src/mcmanager/):
+app/ports/process_control.py, app/platform/process/{base,posix,windows,tailing}.py,
+app/infrastructure/minecraft/, app/services/worlds.py, and app/bootstrap.py.
+The ProcessControlPort and ProcessHandle are the richer port/value-object
+design in Documents 13 and 12, not the dataclass sketch below. Minecraft
+readiness targets are type/capability-dependent under Document 14 §3; a
+universal “level 4” threshold is not the contract. EULA acceptance is explicit,
+audited and step-up protected; the service helper and HTTP route exist, but
+the route does not yet implement Document 10's ConfigEdit-Operation/202
+contract.
+
+Implementation accepted to date: process launches use argv; adapters guard PID
+identity; the 5000-line tail filters debug/noisy raw output by VERBOSE_LOGGING
+(default false) and writes session logs; the C1–C14 suite and fake server live
+under tests/adapters/. The fake-server options are --crash-after-ms and
+--save-slow-ms (plus the documented EULA/save modes), not the old seconds/
+boolean options below. Windows conformance has passed; POSIX conformance has
+not been run in the recorded verification. The EULA service and HTTP route
+exist (`WorldsService.accept_eula`, `app/web/api/system.py`) and audit/write
+explicit acceptance; this route does not yet implement Document 10's
+ConfigEdit-Operation/202 contract. Do not treat the sample /tmp cwd,
+src/mcmanager paths, or any pseudocode as current implementation evidence.
+
+All material below this reconciliation is the superseded historical snapshot.
+Use Documents 13/14 and the app/ implementation paths above for current work.
+
 ================================================================================
 GATE 1 PSEUDOCODE SPECIFICATION: PROCESS CONTROL & PLATFORM ADAPTERS (WP 1.0)
 ================================================================================

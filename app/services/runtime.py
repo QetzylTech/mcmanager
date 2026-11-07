@@ -25,14 +25,11 @@ class RuntimeService:
 
     def restart_and_confirm(self, world_id: str) -> bool:
         """Perform the post-restore verification start and wait for readiness."""
-        try:
-            self._lifecycle.start(
-                world_id=world_id,
-                actor_type=ActorType.SYSTEM,
-                _allow_world_conflict=True,
-            )
-        except Exception:
-            return False
+        self._lifecycle.start(
+            world_id=world_id,
+            actor_type=ActorType.SYSTEM,
+            _allow_world_conflict=True,
+        )
         return True
 
     def stop(

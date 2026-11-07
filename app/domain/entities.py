@@ -15,6 +15,12 @@ class WorldInstance:
     world_id: str
     state: WorldState = WorldState.OFF
     pre_backup_state: WorldState | None = None
+    deleted_at: int | None = None
 
     def __post_init__(self) -> None:
-        validate_world_instance(self.world_id, self.state, self.pre_backup_state)
+        validate_world_instance(
+            self.world_id,
+            self.state,
+            self.pre_backup_state,
+            self.deleted_at,
+        )

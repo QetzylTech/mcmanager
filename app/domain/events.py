@@ -15,3 +15,11 @@ class WorldStateChanged:
     previous_state: WorldState
     new_state: WorldState
     occurred_at: int
+
+
+@dataclass(frozen=True)
+class WorldDeleted:
+    """A world tombstone created after DeleteWorld completes."""
+
+    world_id: str
+    occurred_at: int

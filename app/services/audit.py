@@ -16,11 +16,11 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
-from app.domain.value_objects import ActorType
-from app.infrastructure.sqlite.connection import SqliteStore
+from app.domain.value_objects import ActorType, OperationStatus, OperationType
 from app.ports.clock import Clock
+from app.ports.persistence import PersistencePort
 
 # Event-type catalog used by Gate 2 consumers (Doc 8 section 10).
 EVENT_LOGIN_SUCCESS = 'user_login_success'
@@ -31,6 +31,34 @@ EVENT_SESSION_REVOKED = 'session_revoked'
 EVENT_STEP_UP_CONFIRMED = 'step_up_confirmed'
 EVENT_PASSWORD_CHANGED = 'password_changed'
 EVENT_AUTHZ_DENIED = 'authorization_denied'
+
+AUTH_EVENT_TYPES = frozenset(
+    {
+        EVENT_LOGIN_SUCCESS,
+        EVENT_LOGIN_FAILED,
+        EVENT_LOGIN_LOCKED,
+        EVENT_SESSION_ISSUED,
+        EVENT_SESSION_REVOKED,
+        EVENT_STEP_UP_CONFIRMED,
+        EVENT_PASSWORD_CHANGED,
+        EVENT_AUTHZ_DENIED,
+    }
+)
+TERMINAL_OPERATION_STATUSES = frozenset(
+    {
+        OperationStatus.COMPLETED,
+        OperationStatus.FAILED,
+        OperationStatus.CANCELLED,
+        OperationStatus.TIMED_OUT,
+    }
+)
+
+
+def operation_event_type(op_type: OperationType, status: OperationStatus) -> str:
+    """Return the canonical event name for a documented terminal transition."""
+    if status not in TERMINAL_OPERATION_STATUSES:
+        raise ValueError(f'not a terminal operation status: {status.value}')
+    return f'operation.{op_type.value.lower()}.{status.value.lower()}'
 
 
 @dataclass(frozen=True)
@@ -51,7 +79,7 @@ class ActorSnapshot:
 class AuditService:
     """Append-only audit writer."""
 
-    def __init__(self, store: SqliteStore, clock: Clock) -> None:
+    def __init__(self, store: PersistencePort, clock: Clock) -> None:
         self._store = store
         self._clock = clock
 
@@ -85,13 +113,21 @@ class AuditService:
         operation_id: str | None = None,
         world_id: str | None = None,
         payload: dict[str, Any] | None = None,
+        target_snapshot: Mapping[str, Any] | None = None,
         annotation_of: str | None = None,
         when: float | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> str:
-        """Append exactly one audit record (Doc 8 section 10)."""
+        """Append exactly one audit record (Doc 8 section 10).
+
+        ``target_snapshot`` is stored as data in the row, not reconstructed
+        by joining mutable domain records when the audit is later read.
+        """
         audit_id = f'au_{uuid.uuid4().hex[:16]}'
         writer = connection or self._store.writer()
+        record_payload = dict(payload) if payload is not None else {}
+        if target_snapshot is not None:
+            record_payload['target_snapshot'] = dict(target_snapshot)
         writer.execute(
             'INSERT INTO audit_records ('
             '  audit_id, event_type, actor_type,'
@@ -110,9 +146,9 @@ class AuditService:
                 actor.ip,
                 operation_id,
                 world_id,
-                json.dumps(payload) if payload is not None else None,
+                json.dumps(record_payload) if record_payload else None,
                 annotation_of,
-                int(when or self._clock.now()),
+                int(self._clock.now() if when is None else when),
             ),
         )
         if connection is None:

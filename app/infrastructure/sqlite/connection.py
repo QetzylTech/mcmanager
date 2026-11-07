@@ -14,6 +14,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from app.ports.persistence import PersistencePort
+
 # Locked operational contract (Doc 7 section 10).
 _DEFAULT_BUSY_TIMEOUT_MS = 5000
 _WAL_CHECKPOINT_PAGES = 1000  # bounded checkpoint; never a background hammer
@@ -23,7 +25,7 @@ class PersistenceError(Exception):
     """Startup-blocking schema/integrity failure (never silently repaired)."""
 
 
-class SqliteStore:
+class SqliteStore(PersistencePort):
     """Writer + read-only pool for one database file."""
 
     def __init__(

@@ -6,9 +6,10 @@ import importlib
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from flask import Flask
+from flask import Flask, g
 
 from app.domain.value_objects import ActorType, ConfigEditEntity, OperationType, WorldState
 from app.services.configuration import (
@@ -18,7 +19,6 @@ from app.services.configuration import (
 )
 from app.services.operations import OperationStatus
 from app.services.worlds import WorldConflictError, WorldsService
-
 
 _DOCS = Path(__file__).resolve().parents[2] / "docs"
 _NOW = 1_700_000_000
@@ -188,12 +188,34 @@ def test_effective_configuration_merges_singleton_defaults_and_world_overrides(s
 
 def test_effective_configuration_uses_global_values_when_world_override_is_absent(store, clock):
     _seed_configuration(store, with_override=False)
+    service = ConfigurationService(store, clock)
 
-    effective = ConfigurationService(store, clock).resolve_effective("world_1")
+    assert service.resolve_world("world_1") is None
 
-    assert effective["backup_root_path"] == "C:/backups"
-    assert effective["idle_countdown_seconds"] == 120
-    assert effective["offsite_sync_defaults"] == {"target": "global"}
+    assert service.resolve_effective("world_1") == {
+        "timezone": "UTC",
+        "idle_countdown_seconds": 120,
+        "notification_defaults": {"level": "global"},
+        "minecraft_root_path": "C:/worlds",
+        "backup_root_path": "C:/backups",
+        "log_root_path": "C:/logs",
+        "offsite_sync_defaults": {"target": "global"},
+    }
+
+
+def test_configuration_service_resolves_global_and_world_settings(store, clock):
+    _seed_configuration(store)
+    service = ConfigurationService(store, clock)
+
+    global_settings = service.resolve_global()
+    world_settings = service.resolve_world("world_1")
+
+    assert global_settings["notification_defaults"] == {"level": "global"}
+    assert global_settings["offsite_sync_defaults"] == {"target": "global"}
+    assert world_settings is not None
+    assert world_settings["backup_root_override"] == "D:/world-backups"
+    assert world_settings["idle_countdown_override"] == 0
+    assert world_settings["offsite_sync_override"] == {"target": "world"}
 
 
 def test_config_edits_are_durable_operations_with_before_and_after_values(store, clock):
@@ -223,9 +245,16 @@ def test_config_edits_are_durable_operations_with_before_and_after_values(store,
     assert payload["row_id"] == "global"
     assert payload["before"]["timezone"] == "UTC"
     assert payload["after"]["timezone"] == "Pacific/Auckland"
+    audit = store.reader().execute(
+        "SELECT payload FROM audit_records WHERE operation_id = ?",
+        (row["op_id"],),
+    ).fetchone()
+    audit_payload = json.loads(audit["payload"])
+    assert audit_payload["before"]["timezone"] == "UTC"
+    assert audit_payload["after"]["timezone"] == "Pacific/Auckland"
 
 
-def test_stale_config_edit_is_recorded_as_failed_operation(store, clock):
+def test_stale_config_edit_is_rejected_before_operation_creation(store, clock):
     _seed_configuration(store, with_override=False)
     service = ConfigurationService(store, clock)
     update = VersionedUpdate(
@@ -241,12 +270,199 @@ def test_stale_config_edit_is_recorded_as_failed_operation(store, clock):
         service.update_versioned(update)
 
     row = store.reader().execute(
-        "SELECT status, error_code FROM operations WHERE op_type = ?",
+        "SELECT op_id FROM operations WHERE op_type = ?",
         (OperationType.CONFIG_EDIT.value,),
     ).fetchone()
-    assert row is not None
-    assert row["status"] == OperationStatus.FAILED.value
-    assert row["error_code"] == "CONFIG_VERSION_CONFLICT"
+    assert row is None
+    settings = store.reader().execute(
+        "SELECT timezone, version FROM global_settings WHERE settings_id = 'global'"
+    ).fetchone()
+    assert tuple(settings) == ("UTC", 1)
+
+
+def test_settings_api_resolves_and_edits_global_and_world_settings(store, clock):
+    _seed_configuration(store)
+    service = ConfigurationService(store, clock)
+    app = Flask(__name__)
+    app.extensions["mcmanager_container"] = SimpleNamespace(
+        configuration=service,
+        store=store,
+    )
+    app.before_request(lambda: setattr(g, "current_user_id", "u_admin"))
+    from app.web.api import register_api_blueprints
+
+    register_api_blueprints(app)
+    errors = importlib.import_module("app.web.errors")
+    errors.register_error_handlers(app)
+    client = app.test_client()
+
+    global_response = client.get("/api/settings")
+    assert global_response.status_code == 200
+    assert global_response.get_json()["data"]["settings"]["timezone"] == "UTC"
+    assert global_response.get_json()["data"]["version"] == 1
+
+    invalid_global_patch = client.patch(
+        "/api/settings",
+        json={"version": 1, "timezone": {"unexpected": "object"}},
+    )
+    assert invalid_global_patch.status_code == 400
+    assert invalid_global_patch.get_json()["error"]["code"] == "VALIDATION_ERROR"
+
+    global_patch = client.patch(
+        "/api/settings",
+        json={"version": 1, "timezone": "Pacific/Auckland"},
+    )
+    assert global_patch.status_code == 200
+    assert global_patch.get_json()["data"]["settings"]["timezone"] == "Pacific/Auckland"
+    assert global_patch.get_json()["data"]["version"] == 2
+    global_operation = global_patch.get_json()["data"]["operation"]
+    assert global_operation["op_type"] == OperationType.CONFIG_EDIT.value
+    assert global_operation["status"] == OperationStatus.COMPLETED.value
+    assert global_patch.get_json()["meta"]["op_id"] == global_operation["op_id"]
+    global_audit = store.reader().execute(
+        "SELECT event_type, payload FROM audit_records WHERE operation_id = ?",
+        (global_operation["op_id"],),
+    ).fetchone()
+    assert global_audit is not None
+    assert global_audit["event_type"] == "operation.configedit.completed"
+    global_audit_payload = json.loads(global_audit["payload"])
+    assert global_audit_payload["before"]["timezone"] == "UTC"
+    assert global_audit_payload["after"]["timezone"] == "Pacific/Auckland"
+
+    world_response = client.get("/api/worlds/world_1/settings")
+    assert world_response.status_code == 200
+    assert world_response.get_json()["data"]["settings"]["backup_root_path"] == "D:/world-backups"
+    assert world_response.get_json()["data"]["version"] == 1
+
+    patch_response = client.patch(
+        "/api/worlds/world_1/settings",
+        json={"version": 1, "idle_countdown_seconds": 30},
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.get_json()["data"]["settings"]["idle_countdown_seconds"] == 30
+    world_operation = patch_response.get_json()["data"]["operation"]
+    assert world_operation["op_type"] == OperationType.CONFIG_EDIT.value
+    assert world_operation["status"] == OperationStatus.COMPLETED.value
+    assert patch_response.get_json()["meta"]["op_id"] == world_operation["op_id"]
+    clear_override = client.patch(
+        "/api/worlds/world_1/settings",
+        json={"version": 2, "backup_root_path": None},
+    )
+    assert clear_override.status_code == 200
+    assert clear_override.get_json()["data"]["settings"]["backup_root_path"] == "C:/backups"
+    notification_patch = client.patch(
+        "/api/worlds/world_1/settings",
+        json={"version": 3, "notification_defaults": {"level": "world"}},
+    )
+    assert notification_patch.status_code == 400
+
+
+def test_settings_api_creates_first_world_override_from_global_fallback(store, clock):
+    _seed_configuration(store, with_override=False)
+    service = ConfigurationService(store, clock)
+    app = Flask(__name__)
+    app.extensions["mcmanager_container"] = SimpleNamespace(
+        configuration=service,
+        store=store,
+    )
+    app.before_request(lambda: setattr(g, "current_user_id", "u_admin"))
+    from app.web.api import register_api_blueprints
+
+    register_api_blueprints(app)
+    errors = importlib.import_module("app.web.errors")
+    errors.register_error_handlers(app)
+    client = app.test_client()
+
+    fallback = client.get("/api/worlds/world_1/settings").get_json()["data"]
+    assert fallback["version"] == 0
+    assert fallback["settings"]["backup_root_path"] == "C:/backups"
+
+    stale = client.patch(
+        "/api/worlds/world_1/settings",
+        json={"version": 1, "backup_root_path": "D:/stale"},
+    )
+    assert stale.status_code == 409
+    assert stale.get_json()["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+    assert store.reader().execute(
+        "SELECT 1 FROM operations WHERE op_type = ?",
+        (OperationType.CONFIG_EDIT.value,),
+    ).fetchone() is None
+    assert store.reader().execute(
+        "SELECT 1 FROM audit_records WHERE operation_id IS NOT NULL"
+    ).fetchone() is None
+
+    updated = client.patch(
+        "/api/worlds/world_1/settings",
+        json={"version": 0, "backup_root_path": "D:/world-backups"},
+    )
+
+    assert updated.status_code == 200
+    assert updated.get_json()["data"]["version"] == 1
+    assert updated.get_json()["data"]["settings"]["backup_root_path"] == "D:/world-backups"
+
+
+def test_settings_api_returns_version_conflict_without_creating_operation(store, clock):
+    _seed_configuration(store, with_override=False)
+    service = ConfigurationService(store, clock)
+    app = Flask(__name__)
+    app.extensions["mcmanager_container"] = SimpleNamespace(
+        configuration=service,
+        store=store,
+    )
+    app.before_request(lambda: setattr(g, "current_user_id", "u_admin"))
+    from app.web.api import register_api_blueprints
+
+    register_api_blueprints(app)
+    errors = importlib.import_module("app.web.errors")
+    errors.register_error_handlers(app)
+
+    response = app.test_client().patch(
+        "/api/settings",
+        json={"version": 0, "timezone": "Pacific/Auckland"},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+    assert store.reader().execute(
+        "SELECT 1 FROM operations WHERE op_type = ?",
+        (OperationType.CONFIG_EDIT.value,),
+    ).fetchone() is None
+
+
+def test_settings_api_maps_stale_updates_to_409_without_global_error_registration(store, clock):
+    _seed_configuration(store, with_override=False)
+    service = ConfigurationService(store, clock)
+    app = Flask(__name__)
+    app.extensions["mcmanager_container"] = SimpleNamespace(
+        configuration=service,
+        store=store,
+    )
+    app.before_request(lambda: setattr(g, "current_user_id", "u_admin"))
+    from app.web.api import register_api_blueprints
+
+    register_api_blueprints(app)
+
+    response = app.test_client().patch(
+        "/api/worlds/world_1/settings",
+        json={"version": 1, "backup_root_path": "D:/stale"},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+    assert store.reader().execute(
+        "SELECT 1 FROM operations WHERE op_type = ?",
+        (OperationType.CONFIG_EDIT.value,),
+    ).fetchone() is None
+
+
+def test_settings_mutations_require_administrator_middleware():
+    from app.web.middleware import _requires_admin
+
+    app = Flask(__name__)
+    with app.test_request_context("/api/settings", method="PATCH"):
+        assert _requires_admin()
+    with app.test_request_context("/api/worlds/world_1/settings", method="PATCH"):
+        assert _requires_admin()
 
 
 def test_configuration_conflict_is_mapped_to_http_409():

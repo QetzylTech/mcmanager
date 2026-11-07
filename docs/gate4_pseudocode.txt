@@ -1,3 +1,31 @@
+# CURRENT RECONCILIATION — 2026-11-07
+This file is retained as a historical Gate 4 pseudocode snapshot. Documents 6,
+7, 8, 9, 11 and 14 are authoritative for artifacts, persistence, service
+flows, conflicts/retention guards, tests and Minecraft backup/restore behavior.
+The pseudocode below records useful design rationale (atomic archives,
+pre-restore recovery, retention floors and bounded retries), but is not the
+current contract wherever details differ.
+
+Current implementation is under app/services/{backup,restore,cleanup,sync}.py,
+app/infrastructure/backup_engine.py, app/infrastructure/filesystem.py and
+app/ports/. It uses ZIP + SHA-256, staged .part output, archive/checksum
+verification before registration/use, and guarded save coordination for
+running worlds. Restore is off-only, takes a mandatory pre-restore backup and
+attempts compensating rollback after failed verification; the rollback is a
+new Operation. Cleanup currently handles backup artifacts with dry-run
+previews, floors (3 days / 3 artifacts), protection of the last viable
+artifact, and a 500-candidate confirmation cap; stale-world/log cleanup and
+the related HTTP catalog are not implemented. Sync records attempt history,
+supports transient retries (30s/60s waits, three total attempts) and a 50 GiB
+daily cap; permanent failures terminate without retry. Remote sync is separate
+from local artifact creation.
+
+Do not treat the old `suspect` semantics, direct SQL examples, sync status
+updates, or test excerpts below as normative. Use the exact Document 6 deletion
+tiers, Document 7 schema, Document 8 flows and Document 14 §§10–12 decision
+trees. Everything below this notice is retained as superseded historical
+pseudocode; implementation status is not a release-gate claim.
+
 ================================================================================
 MCMANAGER SPECIFICATION — STAGE 4 (GATE 4) PSEUDOCODE
 ================================================================================
@@ -214,7 +242,7 @@ File Scope: src/mcmanager/services/sync.py
 class OffsiteSyncService:
     """Async offsite sync dispatcher with exponential backoff and transfer cap."""
 
-    BACKOFF_DELAYS = [30, 60, 120]  # Seconds retry backoff
+    BACKOFF_DELAYS = [30, 60]  # Waits between three total attempts
     DAILY_TRANSFER_CAP_BYTES = 50 * 1024 * 1024 * 1024  # 50 GB daily limit
 
     def __init__(self, db_conn, storage_adapter):

@@ -3,7 +3,9 @@
 Each spawned process gets stdout/stderr line readers on dedicated reader
 threads. Lines are normalized to ``\\n``, capped (default 64KB, remainder
 dropped with a sentinel), appended to a bounded ring buffer (default 5000
-lines/world), and fanned out to attached sinks.
+lines/world), and fanned out to attached sinks. With
+``VERBOSE_LOGGING=false``, debug output and nonessential raw stdout/stderr
+noise are filtered; readiness markers and warning/error/crash output remain.
 
 Backpressure (C13): each subscriber runs on its own worker thread draining a
 bounded queue. A slow sink never blocks the process reader — when its queue
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -26,6 +29,12 @@ from app.domain.tuning import LOG_LINE_BUFFER_LINES
 
 _SUBSCRIBER_QUEUE_CAPACITY = 256
 _SUBSCRIBER_WORKER_IDLE_S = 0.2
+_DEBUG_MARKER = re.compile(r'\bdebug\b', re.IGNORECASE)
+_IMPORTANT_LOG_MARKER = re.compile(
+    r'\bdone\s*\(|\b(?:starting minecraft server|ready|warning|warn|error|fatal|'
+    r'exception|traceback|crash(?:ed)?|failed|failure)\b',
+    re.IGNORECASE,
+)
 
 
 def verbose_logging_enabled() -> bool:
@@ -39,7 +48,32 @@ def verbose_logging_enabled() -> bool:
 
 
 def is_debug_log_line(channel: str, line: str) -> bool:
-    return channel == 'debug' or '[DEBUG]' in line
+    return channel.strip().casefold() == 'debug' or bool(_DEBUG_MARKER.search(line))
+
+
+def _retain_log_line(channel: str, line: str, *, verbose: bool) -> bool:
+    if verbose:
+        return True
+    if _IMPORTANT_LOG_MARKER.search(line):
+        return True
+    if is_debug_log_line(channel, line):
+        return False
+    return channel.strip().casefold() not in {'stdout', 'stderr'}
+
+
+def _truncate_log_line(line: str, max_line_bytes: int) -> str:
+    encoded = line.encode('utf-8')
+    if len(encoded) <= max_line_bytes:
+        return line
+
+    sentinel = ' ...[line truncated]'
+    sentinel_bytes = sentinel.encode('utf-8')
+    if max_line_bytes < len(sentinel_bytes):
+        return sentinel[:max_line_bytes]
+    prefix = encoded[: max_line_bytes - len(sentinel_bytes)].decode(
+        'utf-8', errors='ignore'
+    )
+    return prefix + sentinel
 
 
 class DurableSessionLog:
@@ -52,8 +86,16 @@ class DurableSessionLog:
 
     def write(self, channel: str, line: str) -> None:
         with self._mutex:
+            path = Path(self.path)
+            safe_channel = re.sub(r'[^A-Za-z0-9_-]+', '_', channel).strip('_')
+            channel_path = path.with_name(
+                f'{path.stem}.{safe_channel or "unknown"}{path.suffix}'
+            )
             with open(self.path, 'a', encoding='utf-8') as handle:
                 handle.write(f'[{channel}] {line}\n')
+                handle.flush()
+            with open(channel_path, 'a', encoding='utf-8') as handle:
+                handle.write(f'{line}\n')
                 handle.flush()
 
 
@@ -64,17 +106,17 @@ def session_log_for(log_dir: str | None, session_id: str) -> DurableSessionLog |
 
 
 def ingest_log_line(
-    buffer: 'LogRingBuffer | RingBuffer',
+    buffer: LogRingBuffer | RingBuffer,
     channel: str,
     line: str,
     *,
     durable_log: DurableSessionLog | None = None,
 ) -> bool:
-    """Filter, ring-buffer, and optionally persist one line.
+    """Filter, ring-buffer, and optionally persist one relevant line.
 
-    Returns False when VERBOSE_LOGGING=false suppressed a debug line.
+    Returns False when VERBOSE_LOGGING=false suppresses debug or raw noise.
     """
-    if is_debug_log_line(channel, line) and not verbose_logging_enabled():
+    if not _retain_log_line(channel, line, verbose=verbose_logging_enabled()):
         return False
     if isinstance(buffer, LogRingBuffer):
         buffer.append(channel, line)
@@ -98,8 +140,9 @@ class LogStreamTailer:
         self._durable = session_log_for(log_dir, session_id)
 
     def process_pipe_output(self, channel_name: str, line_str: str) -> bool:
-        is_debug = is_debug_log_line(channel_name, line_str)
-        if is_debug and not self.verbose_logging:
+        if not _retain_log_line(
+            channel_name, line_str, verbose=self.verbose_logging
+        ):
             return False
         self.ring_buffer.append(
             {'world_id': self.world_id, 'channel': channel_name, 'line': line_str}
@@ -282,8 +325,7 @@ class ProcessLineReader:
             if not line:
                 break
             line = line.rstrip('\r\n')
-            if len(line) > self._max_line_bytes:
-                line = line[: self._max_line_bytes] + ' ...[line truncated]'
+            line = _truncate_log_line(line, self._max_line_bytes)
             if not ingest_log_line(
                 self._buffer, self._channel, line, durable_log=self._durable_log
             ):

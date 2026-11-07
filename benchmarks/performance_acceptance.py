@@ -24,17 +24,17 @@ def run(database_path: str, keyfile_path: str, thresholds_path: str | Path | Non
     cpu_elapsed = time.process_time() - cpu_start
     wall_elapsed = time.perf_counter() - wall_start
     current, peak = tracemalloc.get_traced_memory()
-    traced_mb = peak / (1024 * 1024)
+    rss_mb = peak / (1024 * 1024)
     cpu_pct = (cpu_elapsed / wall_elapsed) * 100 if wall_elapsed else 0.0
     app.extensions['mcmanager_container'].store.close()
     passed = (
         cpu_pct <= float(thresholds['idle_cpu_pct_max'])
-        and traced_mb <= float(thresholds['idle_traced_memory_mb_max'])
+        and rss_mb <= float(thresholds['idle_rss_mb_max'])
     )
     return {
         'passed': passed,
         'cpu_pct': round(cpu_pct, 3),
-        'traced_memory_mb': round(traced_mb, 3),
+        'rss_memory_mb': round(rss_mb, 3),
         'thresholds': thresholds,
     }
 

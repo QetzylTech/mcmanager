@@ -25,9 +25,8 @@ from app.ports.process_control import (
     TerminateResult,
 )
 
-# PID-identity tolerance: two processes can never share a create-time within
-# this window on any supported OS, making the reuse guard reliable.
-_PID_IDENTITY_TOLERANCE_S = 30.0
+# Small allowance for timestamp serialization and OS creation-time precision.
+_PID_IDENTITY_TOLERANCE_S = 1.0
 
 # Escalation: after a forced signal, wait at most this long for the tree to
 # exit before declaring the termination unresolved (Doc 13 C3 / Doc 8 Kill
@@ -188,18 +187,20 @@ class BaseProcessAdapter:
 
     # -- signals ---------------------------------------------------------------
 
-    def _signal_tree_impl(self, process: psutil.Process, signal: Signal) -> SendResult:
+    def _signal_tree_impl(
+        self, process: psutil.Process, handle: ProcessHandle, signal: Signal
+    ) -> SendResult:
         raise NotImplementedError
 
-    def _kill_tree_impl(self, process: psutil.Process) -> None:
+    def _kill_tree_impl(self, process: psutil.Process, handle: ProcessHandle) -> None:
         raise NotImplementedError
 
     def send_signal(self, handle: ProcessHandle, signal: Signal) -> SendResult:
         process = self._resolve_process(handle)
-        if process is None:
+        if process is None or not self.identity_matches(handle):
             return SendResult(delivered=False, error='process_missing')
         try:
-            return self._signal_tree_impl(process, signal)
+            return self._signal_tree_impl(process, handle, signal)
         except (psutil.Error, OSError) as exc:
             return SendResult(delivered=False, error=str(exc))
 
@@ -243,7 +244,13 @@ class BaseProcessAdapter:
             )
 
         if graceful_deadline_s > 0:
-            result = self._signal_tree_impl(process, Signal.TERMINATE)
+            if not self.identity_matches(handle):
+                return TerminateResult(
+                    resolved=False,
+                    exit_class=ExitClass.RECONCILED_MISSING,
+                    error='process_missing',
+                )
+            result = self._signal_tree_impl(process, handle, Signal.TERMINATE)
             if result.delivered:
                 deadline = time.time() + graceful_deadline_s
                 while time.time() < deadline:
@@ -261,8 +268,14 @@ class BaseProcessAdapter:
     def _kill_and_classify(
         self, handle: ProcessHandle, process: psutil.Process
     ) -> TerminateResult:
+        if not self.identity_matches(handle):
+            return TerminateResult(
+                resolved=False,
+                exit_class=ExitClass.RECONCILED_MISSING,
+                error='process_missing',
+            )
         try:
-            self._kill_tree_impl(process)
+            self._kill_tree_impl(process, handle)
         except (psutil.Error, OSError) as exc:
             return TerminateResult(
                 resolved=False, exit_class=ExitClass.FORCED, error=str(exc)

@@ -129,6 +129,11 @@ h2 {
   transform: translateY(1px);
 }
 
+.ui-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .ui-button-blue {
   color: #ffffff;
   background: var(--blue);
@@ -163,6 +168,17 @@ h2 {
   color: #ffffff;
   background: var(--highlight);
   border-color: var(--highlight);
+}
+
+.ui-text-input {
+  min-width: 80px;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
 }
 
 .module-grid {
@@ -211,6 +227,25 @@ h2 {
 .muted {
   color: var(--muted);
   margin: 4px 0 0;
+}
+
+.world-filter-form,
+.world-list-toolbar,
+.world-list-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.world-filter-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.world-list-pagination {
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 @media (max-width: 900px) {

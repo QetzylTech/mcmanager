@@ -50,17 +50,34 @@ def _applied_versions(connection: sqlite3.Connection) -> set[int]:
 def _apply_one(connection: sqlite3.Connection, version: int, name: str, path: Path) -> None:
     """Apply a single migration inside its own transaction."""
     sql = path.read_text(encoding='utf-8')
-    connection.execute('BEGIN')
     try:
-        connection.executescript(sql)
+        connection.execute('BEGIN IMMEDIATE')
+        _execute_script(connection, sql)
         connection.execute(
             'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
             (version, name, int(time.time())),
         )
         connection.commit()
     except sqlite3.Error as exc:
-        connection.rollback()
+        if connection.in_transaction:
+            connection.rollback()
         raise PersistenceError(f'migration {version} ({name}) failed: {exc}') from exc
+
+
+def _execute_script(connection: sqlite3.Connection, sql: str) -> None:
+    """Execute SQL statements individually without executescript's implicit commit."""
+    statement: list[str] = []
+    for character in sql:
+        statement.append(character)
+        if character == ';':
+            candidate = ''.join(statement)
+            if sqlite3.complete_statement(candidate):
+                connection.execute(candidate)
+                statement.clear()
+
+    remainder = ''.join(statement).strip()
+    if remainder:
+        connection.execute(remainder)
 
 
 def run_migrations(store: SqliteStore, migrations_dir: str | Path) -> None:

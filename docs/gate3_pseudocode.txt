@@ -1,4 +1,34 @@
-# ==============================================================================
+# CURRENT RECONCILIATION — 2026-11-07
+This file is retained as a historical Gate 3 pseudocode snapshot. Its sample
+algorithms and source paths are superseded wherever they disagree with the
+numbered documents or the current app/ implementation. The design rationale
+(milestone persistence, terminal audit, derived locks, restart recovery and
+missed-run recording) is retained; the corrections below prevent the sample
+code from being mistaken for a second contract.
+
+Documents 6, 7, 8 and 9 govern operation states/audit, persistence,
+service behavior/tuning and the complete queue/reject/preempt matrix;
+Documents 10 and 12 govern streams, API and layout. Current code is in
+app/services/operations.py, runtime.py, worlds.py, reconciliation.py,
+scheduler.py and app/__init__.py. OperationService persists creation, Running
+and terminal milestones, keeps progress checkpoints in memory, streams updates,
+and writes terminal audit records. Its conflict policy is Doc 9's—not a
+generic lock/reject rule. The current RuntimeService is a facade over
+WorldsService, not the proposed full split; the lifecycle/supervisor
+implementation remains there. Startup reconciliation is wired before
+blueprints and its failure is not intentionally swallowed. Scheduler and
+supervisor workers start from create_app; scheduler tick is 30s per Doc 8.
+These are implemented foundations, not proof of the complete operation catalog
+or a fully asynchronous command dispatcher: lifecycle HTTP work still runs
+synchronously before its 202 response.
+
+Do not use the sample schema column names, SQL, hard-coded paths, readiness
+thresholds, fake time math, or test snippets below as implementation evidence.
+In particular, schedule rules, operation transitions, audit cardinality,
+preemption and restart behavior are governed by Documents 6–9, not this sketch.
+Everything below is retained as superseded historical pseudocode.
+
+==============================================================================
 # MCMANAGER ARCHITECTURE SPECIFICATION: STAGE 3 (GATE 3) PSEUDOCODE
 # Package Scope: Work Package 3.0 (WP 3.1 - WP 3.4)
 # Focus: Control Plane Orchestration, Supervisor Loop & Audit Optimization

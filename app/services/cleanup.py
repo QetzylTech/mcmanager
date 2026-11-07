@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +15,8 @@ from app.domain.tuning import (
     CLEANUP_COUNT_FLOOR,
 )
 from app.domain.value_objects import OperationStatus
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
+from app.ports.persistence import PersistencePort
 from app.services.operations import OperationService
 
 
@@ -36,12 +37,12 @@ class CleanupService:
     """Only service allowed to physically remove Tier 2 backup artifacts."""
 
     def __init__(
-        self, store: SqliteStore, clock: Clock, operations: OperationService | None = None
+        self, store: PersistencePort, clock: Clock, operations: OperationService | None = None
     ) -> None:
         self._store = store
         self._clock = clock
         self._operations = operations or OperationService(store, clock)
-        self._previews: dict[tuple[str | None, str], tuple[str, ...]] = {}
+        self._previews: dict[tuple[str | None, str], str] = {}
 
     def backup_candidates(
         self,
@@ -93,7 +94,26 @@ class CleanupService:
                 )
         return sorted(candidates, key=lambda candidate: candidate.created_at)
 
-    def execute_backup_cleanup(self, candidates: list[CleanupCandidate], *, deleted_by: str = 'system') -> int:
+    def execute_backup_cleanup(
+        self,
+        candidates: list[CleanupCandidate],
+        *,
+        deleted_by: str = 'system',
+        older_than_days: int = CLEANUP_AGE_FLOOR_DAYS,
+        keep_per_category: int = CLEANUP_COUNT_FLOOR,
+        world_id: str | None = None,
+        elevated_confirmation: bool = False,
+    ) -> int:
+        if len(candidates) > CLEANUP_BLAST_RADIUS_CAP and not elevated_confirmation:
+            raise RetentionError('CLEANUP_BLAST_RADIUS')
+        eligible = self.backup_candidates(
+            older_than_days=older_than_days,
+            keep_per_category=keep_per_category,
+            world_id=world_id,
+        )
+        if candidates != eligible:
+            raise RetentionError('CLEANUP_PREVIEW_REQUIRED_OR_STALE')
+
         now = int(self._clock.now())
         connection = self._store.writer()
         deleted = 0
@@ -148,6 +168,13 @@ class CleanupService:
                 keep_per_category=keep_per_category,
                 world_id=world_id,
             )
+            preview_fingerprint = self._preview_fingerprint(
+                candidates,
+                older_than_days=older_than_days,
+                keep_per_category=keep_per_category,
+                world_id=world_id,
+                scope=scope,
+            )
             if (
                 not dry_run
                 and len(candidates) > CLEANUP_BLAST_RADIUS_CAP
@@ -156,7 +183,7 @@ class CleanupService:
                 raise RetentionError('CLEANUP_BLAST_RADIUS')
             key = (world_id, scope)
             candidate_ids = tuple(candidate.artifact_id for candidate in candidates)
-            preview_ids = self._previews.get(key)
+            matched_preview = self._previews.get(key)
             if not dry_run and dry_run_operation_id is not None:
                 preview = self._store.reader().execute(
                     """
@@ -177,24 +204,36 @@ class CleanupService:
                         preview_data.get('scope') == scope
                         and preview_data.get('world_id') == world_id
                     ):
-                        preview_ids = tuple(preview_data.get('targets', ()))
-            if not dry_run and preview_ids != candidate_ids:
+                        matched_preview = preview_data.get('preview_fingerprint')
+                    else:
+                        matched_preview = None
+                else:
+                    matched_preview = None
+            if not dry_run and matched_preview != preview_fingerprint:
                 raise RetentionError('CLEANUP_PREVIEW_REQUIRED_OR_STALE')
             self._operations.transition(op_id, OperationStatus.RUNNING)
             if dry_run:
-                self._previews[key] = candidate_ids
+                self._previews[key] = preview_fingerprint
                 result: dict[str, Any] = {
                     'mode': 'dry_run',
                     'scope': scope,
                     'world_id': world_id,
                     'target_count': len(candidates),
                     'targets': list(candidate_ids),
+                    'older_than_days': older_than_days,
+                    'keep_per_category': keep_per_category,
+                    'preview_fingerprint': preview_fingerprint,
                 }
             else:
                 result = {
                     'mode': 'wet_run',
                     'deleted_count': self.execute_backup_cleanup(
-                        candidates, deleted_by=deleted_by
+                        candidates,
+                        deleted_by=deleted_by,
+                        older_than_days=older_than_days,
+                        keep_per_category=keep_per_category,
+                        world_id=world_id,
+                        elevated_confirmation=elevated_confirmation,
                     ),
                     'target_count': len(candidates),
                 }
@@ -217,3 +256,32 @@ class CleanupService:
                     message=str(exc),
                 )
             raise
+
+    @staticmethod
+    def _preview_fingerprint(
+        candidates: list[CleanupCandidate],
+        *,
+        older_than_days: int,
+        keep_per_category: int,
+        world_id: str | None,
+        scope: str,
+    ) -> str:
+        """Bind confirmation to the policy and exact artifact metadata previewed."""
+        snapshot = {
+            'older_than_days': older_than_days,
+            'keep_per_category': keep_per_category,
+            'scope': scope,
+            'world_id': world_id,
+            'targets': [
+                {
+                    'artifact_id': candidate.artifact_id,
+                    'storage_path': candidate.storage_path,
+                    'world_id': candidate.world_id,
+                    'category': candidate.category,
+                    'created_at': candidate.created_at,
+                }
+                for candidate in candidates
+            ],
+        }
+        canonical = json.dumps(snapshot, sort_keys=True, separators=(',', ':'))
+        return sha256(canonical.encode('utf-8')).hexdigest()

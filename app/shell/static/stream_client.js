@@ -6,13 +6,24 @@
     'snapshot',
     'snapshot.world',
     'world.state',
+    'world.metrics',
     'operation.created',
+    'operation.progress',
     'operation.status',
     'operation.terminal',
+    'notification',
+    'notification.created',
+    'system.stats',
+    'backup.progress',
     'restore.progress',
+    'sync.status',
     'log.line',
     'metrics',
-    'notification.created',
+    'alert',
+    'queue.position',
+    'missed_run',
+    'manager.shutdown',
+    'stream.error',
   ];
 
   class StreamClientManager {
@@ -26,6 +37,7 @@
       this.monitorTimer = null;
       this.electionTimer = null;
       this.closed = false;
+      this.authExpired = false;
 
       try {
         this.channel = typeof BroadcastChannel === 'function'
@@ -68,13 +80,33 @@
           this.leaderId = null;
         }
         this.scheduleElection();
+      } else if (message.type === 'AUTH_RESUMED') {
+        this.authExpired = false;
+        this.peers.set(message.tabId, now);
+        if (this.isLeader && this.tabId < message.tabId) {
+          this.leaderId = this.tabId;
+        } else {
+          this.leaderId = message.tabId;
+          this.resign();
+        }
       } else if (message.type === 'STREAM_EVENT') {
         this.dispatchLocal(message.payload);
+        if (message.payload?.topic === 'manager.shutdown') {
+          this.shutdown();
+          return;
+        }
+        if (
+          message.payload?.topic === 'stream.error'
+          && message.payload?.data?.code === 'AUTH_SESSION_EXPIRED'
+        ) {
+          this.authExpired = true;
+          this.resign();
+        }
       }
     }
 
     elect() {
-      if (this.closed || !this.channel) return;
+      if (this.closed || this.authExpired || !this.channel) return;
       const now = Date.now();
       for (const [peerId, lastSeen] of this.peers) {
         if (now - lastSeen > LEADER_TIMEOUT_MS) this.peers.delete(peerId);
@@ -98,7 +130,7 @@
     }
 
     monitorLeader() {
-      if (this.closed || this.isLeader) return;
+      if (this.closed || this.authExpired || this.isLeader) return;
       const now = Date.now();
       for (const [peerId, lastSeen] of this.peers) {
         if (now - lastSeen > LEADER_TIMEOUT_MS) this.peers.delete(peerId);
@@ -107,7 +139,7 @@
     }
 
     becomeLeader() {
-      if (this.closed || this.isLeader) return;
+      if (this.closed || this.authExpired || this.isLeader) return;
       this.isLeader = true;
       this.leaderId = this.tabId;
       this.openEventSource();
@@ -144,9 +176,14 @@
       }
       const payload = { topic, data, id: event.lastEventId || null };
       this.dispatchLocal(payload);
+      if (topic === 'stream.error' && data && data.code === 'AUTH_SESSION_EXPIRED') {
+        this.authExpired = true;
+        this.resign();
+      }
       if (this.channel) {
         this.channel.postMessage({ type: 'STREAM_EVENT', tabId: this.tabId, payload });
       }
+      if (topic === 'manager.shutdown') this.shutdown();
     }
 
     dispatchLocal(payload) {
@@ -162,6 +199,17 @@
       this.eventSource = null;
       if (this.heartbeatTimer !== null) clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+
+    resumeAfterAuthentication() {
+      if (this.closed) return;
+      this.authExpired = false;
+      this.leaderId = this.tabId;
+      if (this.channel) {
+        this.peers.set(this.tabId, Date.now());
+        this.channel.postMessage({ type: 'AUTH_RESUMED', tabId: this.tabId });
+      }
+      this.becomeLeader();
     }
 
     shutdown() {

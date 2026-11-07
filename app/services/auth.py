@@ -27,9 +27,9 @@ from dataclasses import dataclass
 
 import argon2
 
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.ports.clock import Clock
-from app.ports.secrets_store import SecretType, SecretsStore
+from app.ports.persistence import PersistencePort
+from app.ports.secrets_store import SecretsStore, SecretType
 from app.services.audit import (
     EVENT_LOGIN_FAILED,
     EVENT_LOGIN_LOCKED,
@@ -105,7 +105,7 @@ class AuthenticationService:
 
     def __init__(
         self,
-        store: SqliteStore,
+        store: PersistencePort,
         secrets_store: SecretsStore,
         clock: Clock,
         audit: AuditService,

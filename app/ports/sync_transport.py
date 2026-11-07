@@ -6,6 +6,18 @@ from pathlib import Path
 from typing import Protocol
 
 
+class SyncTransportError(Exception):
+    """Base class for classified sync transport failures."""
+
+
+class TransientSyncTransportError(SyncTransportError):
+    """A transport failure that may succeed on retry."""
+
+
+class PermanentSyncTransportError(SyncTransportError):
+    """A transport failure that should not be retried automatically."""
+
+
 class SyncTransportPort(Protocol):
     """Upload one local artifact to a configured target."""
 

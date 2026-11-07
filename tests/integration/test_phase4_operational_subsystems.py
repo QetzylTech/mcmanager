@@ -1,18 +1,52 @@
 from __future__ import annotations
 
+import shutil
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from app.domain.value_objects import ActorType, ConfigEditEntity, OperationStatus, OperationType, TriggerType
+from app.domain.value_objects import (
+    ActorType,
+    ConfigEditEntity,
+    OperationStatus,
+    OperationType,
+    TriggerType,
+)
+from app.infrastructure.backup_engine import NativeBackupEngine
+from app.infrastructure.filesystem import LocalFilesystem
 from app.services.backup import BackupIntegrityError, BackupService
 from app.services.cleanup import CleanupService, RetentionError
-from app.services.configuration import ConfigurationConflictError, ConfigurationService, VersionedUpdate
+from app.services.configuration import (
+    ConfigurationConflictError,
+    ConfigurationService,
+    VersionedUpdate,
+)
 from app.services.operations import OperationInput, OperationService
 from app.services.restore import RestoreService
 
 from .test_phase3_control_plane import _seed_world
+
+
+@pytest.fixture(autouse=True)
+def sufficient_test_disk(monkeypatch):
+    free = 200 * 1024**3
+    monkeypatch.setattr(
+        shutil,
+        'disk_usage',
+        lambda _path: SimpleNamespace(total=free, used=0, free=free),
+    )
+
+
+def _backup_service(store, clock, coordinator=None) -> BackupService:
+    return BackupService(
+        store,
+        clock,
+        coordinator,
+        NativeBackupEngine(),
+        LocalFilesystem(),
+    )
 
 
 class RecordingSaveCoordinator:
@@ -51,7 +85,7 @@ def test_backup_zip_sha256_registers_only_after_success(store, clock, tmp_path):
     (world_dir / 'level.dat').write_text('world data', encoding='utf-8')
     (world_dir / 'skip.part').write_text('partial', encoding='utf-8')
     coordinator = RecordingSaveCoordinator()
-    service = BackupService(store, clock, coordinator)
+    service = _backup_service(store, clock, coordinator)
 
     result = service.create_world_backup(
         world_id=world_id,
@@ -71,7 +105,7 @@ def test_backup_zip_sha256_registers_only_after_success(store, clock, tmp_path):
     OperationService(store, clock).transition(op['op_id'], OperationStatus.COMPLETED)
 
     failed_op = _operation(store, clock, world_id, OperationType.BACKUP)
-    failing = BackupService(store, clock, RecordingSaveCoordinator(fail_flush=True))
+    failing = _backup_service(store, clock, RecordingSaveCoordinator(fail_flush=True))
     with pytest.raises(RuntimeError):
         failing.create_world_backup(
             world_id=world_id,
@@ -91,7 +125,7 @@ def test_backup_validation_flags_suspect_on_checksum_mismatch(store, clock, tmp_
     world_dir = tmp_path / 'world'
     world_dir.mkdir()
     (world_dir / 'level.dat').write_text('ok', encoding='utf-8')
-    service = BackupService(store, clock)
+    service = _backup_service(store, clock)
     result = service.create_world_backup(
         world_id=world_id,
         world_dir=world_dir,
@@ -109,7 +143,7 @@ def test_backup_validation_flags_suspect_on_checksum_mismatch(store, clock, tmp_
 
 def test_restore_failed_restart_rolls_back_to_pre_restore_backup(store, clock, tmp_path):
     world_id = _seed_world(store)
-    backup_service = BackupService(store, clock)
+    backup_service = _backup_service(store, clock)
     operations = OperationService(store, clock)
     world_dir = tmp_path / 'world'
     world_dir.mkdir()
