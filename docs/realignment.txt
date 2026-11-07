@@ -6,11 +6,13 @@ older plan's observations are preserved as historical rationale, not current
 findings. Its `core/` and `core/STATUS.md` assumptions, recommendation to keep
 the application under core/, and earlier blanket missing-feature findings are
 stale: the repository's application is now at root `app/`, and
-docs/IMPLEMENTATION_STATUS.md (last verified 2026-11-06) records the current
-verification snapshot. Some previously identified gaps have since been
-implemented; others remain partial as recorded below. Numbered Documents
-4–14 remain the product contract; this file and the gate pseudocode do not
-override them.
+docs/IMPLEMENTATION_STATUS.md (last verified 2026-11-07) and
+docs/WORKBOARD.md record the current verification snapshot. The latest
+implementation added durable lifecycle-operation dispatch and expanded the
+administration, catalog, configuration, history, and world-management APIs.
+Some previously identified gaps have since been implemented; others remain
+partial as recorded below. Numbered Documents 4–14 remain the product
+contract; this file and the gate pseudocode do not override them.
 
 Current tree and contract
 ------------------------
@@ -64,35 +66,42 @@ threshold do not.
 Gate 2 — Persistence/domain/auth/configuration. Implemented: Documents 6–7
 domain types and initial migrations, FK enforcement/checking, Argon2id via the
 encrypted secrets store, session hashing/step-up foundations, three-tier
-effective settings and versioned ConfigEdit Operations. The schema is the
+effective settings and versioned ConfigEdit Operations. Selected user, role,
+and permission administration routes are also implemented. The schema is the
 Document 7 model, not gate2's simplified SQL sketch. Remaining product
-coverage includes full authorization/grant management and schema/migration
+coverage includes complete authorization/grant-management and schema/migration
 release verification. Focused Gate 2 tests passed per the recorded status;
 this does not certify every Doc 6/7 invariant.
 
-Gate 3 — Control plane. Implemented: derived world-lock query; milestone-only
-operation persistence and in-memory progress; terminal audit/notification
-integration; conflict policy; scheduler missed-run recording; startup
-reconciliation; supervisor and scheduler workers started by `create_app`.
-`RuntimeService` is presently a facade and `WorldsService` still owns lifecycle
-logic. HTTP lifecycle work executes synchronously before the 202 response, so
-the durable background dispatcher remains unfinished. Documents 6–9 govern
-conflict and state behavior; do not use the old generic pseudocode rules.
+Gate 3 — Control plane. Implemented: derived world-lock query; durable queued
+lifecycle operations with idempotent replay, atomic dispatch, and recovery
+after container rebuild; progress and terminal audit/notification integration;
+conflict policy; scheduler missed-run recording; startup reconciliation;
+supervisor and scheduler workers started by `create_app`. `RuntimeService` is
+presently a facade and `WorldsService` still owns lifecycle logic. Documents
+6–9 govern conflict and state behavior; do not use the old generic pseudocode
+rules.
 
 Gate 4 — Operational subsystems. Implemented: native ZIP/SHA-256 backup,
 storage/save guards, off-only restore with pre-backup and compensating rollback,
 backup-artifact cleanup with preview/floors/blast-radius guard, and separate
 sync with recorded retries/cap. Cleanup is currently backup-artifact scope;
-stale-world/log cleanup and the HTTP catalog remain incomplete. Sync is not
-coupled to local backup validity. Documents 6–9 and 14 govern the details.
+stale-world/log cleanup and the Document 10 backup/restore/cleanup/sync API
+workflows remain incomplete. Sync is not coupled to local backup validity.
+Documents 6–9 and 14 govern the details.
 
 Gate 5 — API/streams/shell. Implemented foundation: session/auth/CSRF/step-up
-middleware, selected API routes, operation reads, authenticated SSE snapshots
-and replay, BroadcastChannel leader/follower client, and no-reload navigation.
-The complete Document 10 catalog, all Document 4/5 workflows, command layer,
-stream auth-expiry/reconnect/deployment evidence and calibrated Doc 11
-performance release gate remain incomplete. Do not claim the old sample's
-route/security semantics or benchmark numbers are current.
+middleware; administration, schedules/templates/Java-runtime catalogs,
+configuration, history, and world-management APIs; durable operation reads
+and lifecycle enqueue routes; authenticated SSE snapshots and replay;
+BroadcastChannel leader/follower client; and no-reload navigation. The
+backup/restore/cleanup/sync API workflows remain unimplemented. Manager
+backup/restore/restart/update/rollback routes are registered but return
+`NOT_IMPLEMENTED` pending a manager lifecycle service. The complete Document
+10 contract, all Document 4/5 workflows, operation cancellation, command
+layer, stream deployment evidence, and calibrated Doc 11 performance release
+gate remain incomplete. Do not claim the old sample's route/security semantics
+or benchmark numbers are current.
 
 Remaining contradictions / decision boundaries
 ----------------------------------------------
