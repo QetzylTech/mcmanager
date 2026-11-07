@@ -432,7 +432,8 @@ class WorldsService:
         actor_user_id: str,
         accepted: bool,
         ip: str | None = None,
-    ) -> dict[str, Any]:
+        idempotency_key: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
         """Record explicit operator acceptance before writing ``eula=true``."""
         if accepted is not True:
             raise WorldLifecycleError("explicit EULA acceptance is required")
@@ -440,6 +441,12 @@ class WorldsService:
             raise WorldLifecycleError("EULA acceptance requires an operator identity")
         if self._audit is None:
             raise WorldLifecycleError("EULA acceptance audit is unavailable")
+        if idempotency_key is not None:
+            existing = self._operations.get_by_idempotency_key(
+                OperationType.CONFIG_EDIT, idempotency_key
+            )
+            if existing is not None:
+                return existing, True
         world = self._world(world_id)
         if world["state"] != WorldState.EULA_REQUIRED.value:
             raise WorldConflictError("world is not awaiting EULA acceptance")
@@ -449,15 +456,18 @@ class WorldsService:
             "before": {"accepted": False},
             "after": {"accepted": True},
         }
-        operation = self._operations.create(
+        operation, replayed = self._operations.create_with_replay(
             OperationInput(
                 op_type=OperationType.CONFIG_EDIT,
                 actor_type=ActorType.USER,
                 actor_user_id=actor_user_id,
                 world_id=world_id,
+                idempotency_key=idempotency_key,
                 data=payload,
             )
         )
+        if replayed:
+            return operation, True
         op_id = operation["op_id"]
         self._operations.transition(op_id, OperationStatus.RUNNING)
         try:
@@ -487,7 +497,7 @@ class WorldsService:
             result = self._operations.get(op_id)
             if result is None:
                 raise WorldLifecycleError("EULA acceptance operation disappeared.")
-            return result
+            return result, False
         except Exception as exc:
             self._operations.transition(
                 op_id,

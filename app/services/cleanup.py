@@ -44,6 +44,47 @@ class CleanupService:
         self._operations = operations or OperationService(store, clock)
         self._previews: dict[tuple[str | None, str], str] = {}
 
+    def delete_backup_artifact(
+        self, artifact_id: str, *, deleted_by: str, force: bool = False
+    ) -> None:
+        """Remove an artifact file while preserving retention floors unless forced."""
+        row = self.validate_backup_artifact_delete(artifact_id, force=force)
+        Path(row["storage_path"]).unlink(missing_ok=True)
+        connection = self._store.writer()
+        connection.execute(
+            "UPDATE backup_artifacts SET deleted_at = ?, deleted_by = ? "
+            "WHERE artifact_id = ? AND deleted_at IS NULL",
+            (int(self._clock.now()), deleted_by, artifact_id),
+        )
+        connection.commit()
+
+    def validate_backup_artifact_delete(
+        self, artifact_id: str, *, force: bool = False
+    ) -> dict[str, Any]:
+        """Check artifact existence and retention rules without mutating state."""
+        row = self._store.reader().execute(
+            "SELECT * FROM backup_artifacts WHERE artifact_id = ? AND deleted_at IS NULL",
+            (artifact_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(artifact_id)
+        siblings = self._store.reader().execute(
+            """
+            SELECT artifact_id, suspect
+            FROM backup_artifacts
+            WHERE world_id IS ? AND category = ? AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            """,
+            (row["world_id"], row["category"]),
+        ).fetchall()
+        remaining = [item for item in siblings if item["artifact_id"] != artifact_id]
+        violates_floor = len(remaining) < CLEANUP_COUNT_FLOOR or not any(
+            item["suspect"] == 0 for item in remaining
+        )
+        if violates_floor and not force:
+            raise RetentionError("BACKUP_RETENTION_GUARD")
+        return dict(row)
+
     def backup_candidates(
         self,
         *,

@@ -57,8 +57,8 @@ VERBOSE_LOGGING filtering and durable session logs; fake-server C1–C14 tests.
 The fake flags are `--crash-after-ms` and `--save-slow-ms`. Windows conformance
 passed in the recorded run; POSIX has not been run. The service and HTTP EULA
 acceptance flow exist (`WorldsService.accept_eula`,
-`app/web/api/system.py`) and audit explicit acceptance; the route still does
-not implement Document 10's ConfigEdit Operation/202 contract. Remaining:
+`app/web/api/system.py`) and record explicit acceptance as a completed,
+idempotent ConfigEdit Operation. Remaining:
 cross-OS acceptance and full Doc 14/Doc 10 conformance. Documents 13–14 govern;
 the gate1 sample's PID dataclass, seconds-based flags and universal readiness
 threshold do not.
@@ -85,9 +85,10 @@ rules.
 Gate 4 — Operational subsystems. Implemented: native ZIP/SHA-256 backup,
 storage/save guards, off-only restore with pre-backup and compensating rollback,
 backup-artifact cleanup with preview/floors/blast-radius guard, and separate
-sync with recorded retries/cap. Cleanup is currently backup-artifact scope;
-stale-world/log cleanup and the Document 10 backup/restore/cleanup/sync API
-workflows remain incomplete. Sync is not coupled to local backup validity.
+sync with recorded retries/cap. The HTTP catalog implements backup,
+restore/rollback, backup-cleanup preview/execute, and sync routes. Cleanup is
+currently backup-artifact scope; stale-world/log candidate policy and workflows
+remain incomplete. Sync is not coupled to local backup validity.
 Documents 6–9 and 14 govern the details.
 
 Gate 5 — API/streams/shell. Implemented foundation: session/auth/CSRF/step-up
@@ -95,13 +96,18 @@ middleware; administration, schedules/templates/Java-runtime catalogs,
 configuration, history, and world-management APIs; durable operation reads
 and lifecycle enqueue routes; authenticated SSE snapshots and replay;
 BroadcastChannel leader/follower client; and no-reload navigation. The
-backup/restore/cleanup/sync API workflows remain unimplemented. Manager
-backup/restore/restart/update/rollback routes are registered but return
-`NOT_IMPLEMENTED` pending a manager lifecycle service. The complete Document
-10 contract, all Document 4/5 workflows, operation cancellation, command
-layer, stream deployment evidence, and calibrated Doc 11 performance release
-gate remain incomplete. Do not claim the old sample's route/security semantics
-or benchmark numbers are current.
+backup/restore/backup-cleanup/sync catalog and operation-cancellation endpoint
+are implemented. Manager backup/restore/restart/update/rollback routes still
+return `NOT_IMPLEMENTED` pending a manager lifecycle service. Cleanup only
+supports backups; stale-world/log candidate policy remains unresolved, and
+running Sync cancellation lacks a transport interrupt hook. A dedicated
+security acceptance suite and cross-platform GitHub Actions job are in place;
+hosted execution is pending. A cached metrics publisher now implements the
+local null/15-second/1-Hz cadence, and saturated clients generate a
+rate-limited alert. Supported-proxy behavior remains incomplete. The full Document 10 contract, all
+Document 4/5 workflows, stream deployment evidence, and calibrated Doc 11
+performance release gate remain incomplete. Do not claim the old sample's
+route/security semantics or benchmark numbers are current.
 
 Remaining contradictions / decision boundaries
 ----------------------------------------------

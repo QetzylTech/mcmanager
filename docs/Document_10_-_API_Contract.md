@@ -72,7 +72,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 |---|---|---|---|
 | GET | `/api/operations` | any | filters `world_id`, `op_type`, `status`, `actor_user_id`; sort `-created_at` |
 | GET | `/api/operations/{op_id}` | any | incl. `checkpoint`, `error_code`, `message`, `data_json` |
-| POST | `/api/operations/{op_id}/cancel` | A | O only from `Queued`/`Validating`, cancellable types; else 409 `OP_NOT_CANCELLABLE` |
+| POST | `/api/operations/{op_id}/cancel` | A | O from `Queued`/`Validating` for cancellable types; a `Running` Sync may also be cooperatively cancelled; else 409 `OP_NOT_CANCELLABLE` |
 | GET | `/api/worlds/{world_id}/operations` | any | world-scoped shorthand |
 
 ### Backups & restores
@@ -209,7 +209,7 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 - Stream shutdown: clean shutdown ends streams with final `event: manager.shutdown`; on crash no such event — clients detect dropped connection and reconnect with `Last-Event-ID`.
 - Proxy buffering: deployment must disable intermediate buffering for `/stream`; Doc 11 E2E covers this on the supported deployment shape.
 - Auth expiry mid-stream: session expiry/revocation closes stream with 401-equivalent terminal `event: stream.error`, `data: {"code": "AUTH_SESSION_EXPIRED"}`; clients stop reconnecting until authentication succeeds, then the shell calls `resumeAfterAuthentication()` to reconnect one leader and resume its peers.
-- Slow clients: fan-out drops the slowest sink rather than blocking the event source (Doc 13 §3.3 backpressure); dropped-client alert surfaces at most once per minute per client.
+- Slow clients: fan-out drops the saturated sink rather than blocking the event source (Doc 13 §3.3 backpressure). The manager emits an `alert` event with category `slow_client_disconnected`, severity `high`, and `details.stream`; it emits at most one such alert per client every 60 seconds. A stable hub `client_id` groups a client's subscriptions; without one, the SSE subscription is the client.
 
 ### Endpoints
 
@@ -239,7 +239,7 @@ All require valid session cookie. CSRF not applicable (GET, read-only).
 | `restore.progress` | `{world_id, operation_id, stage:"validating\|pre_backup\|staging\|archiving\|switching\|recording", pct?, reverted:false}` |
 | `sync.status` | `{sync_id, artifact_id, status:"pending\|succeeded\|failed", attempt_number, outcome?}` |
 | `log.line` | `{world_id, session_id, channel:"stdout\|stderr\|minecraft\|backup\|restore\|manager", line, line_no, ts}` |
-| `alert` | `{category:"critical_storage\|suspicious_activity\|unauthorized_attempt", severity:"critical\|high", message, details}` |
+| `alert` | `{category:"critical_storage\|suspicious_activity\|unauthorized_attempt\|slow_client_disconnected", severity:"critical\|high", message, details}` |
 | `queue.position` | `{op_id, op_type, queue_position}` |
 | `missed_run` | `{missed_run_id, schedule_id, schedule_name_snapshot, expected_run_at}` |
 
@@ -269,6 +269,7 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `AUTH_STEP_UP_REQUIRED` | 403 | S routes | Step-up window absent |
 | `AUTH_STEP_UP_EXPIRED` | 403 | S routes | Window elapsed mid-session |
 | `FORBIDDEN` | 403 | any | Authenticated but denied (always audit-logged) |
+| `HTTPS_REQUIRED` | 403 | non-loopback HTTP | Remote connections must use HTTPS |
 | `FORBIDDEN_LAST_SUPERADMIN` | 409 | user mgmt | Last-active-Superadmin guard |
 | `NOT_FOUND` | 404 | any | Generic (`*_NOT_FOUND` preferred) |
 | `WORLD_NOT_FOUND` | 404 | worlds | Unknown/deleted world_id |
@@ -282,7 +283,7 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `EULA_NOT_ACCEPTED` | 409 | start | World EULA not accepted (`eula_required`); operator must accept via explicit audited route (Doc 14 §5) |
 | `JAVA_INCOMPATIBLE` | 409 | start/create | Resolved Java major outside the server type/version's supported range (Doc 14 §4/§7); rejected before spawn, never discover-after-launch |
 | `OP_NOT_FOUND` | 404 | operations | Unknown op_id |
-| `OP_NOT_CANCELLABLE` | 409 | cancel | Type/status not cancellable (`Queued`/`Validating` only) |
+| `OP_NOT_CANCELLABLE` | 409 | cancel | Type/status not cancellable (only Sync is cancellable from `Running`) |
 | `OP_ALREADY_TERMINAL` | 409 | cancel/transition | Terminal ops immutable |
 | `OP_CONFLICT_IN_FLIGHT` | 409 | reject-path ops | In-flight op blocks this type (Doc 9 matrix) |
 | `OP_QUEUED` | 202 | queue-path ops | Not an error: queued single-flight; `meta.queue_position` |

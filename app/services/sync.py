@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from datetime import time as datetime_time
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 from app.domain.tuning import SYNC_BACKOFF_BASE_S, SYNC_TRANSIENT_RETRIES
@@ -21,8 +21,16 @@ from app.domain.value_objects import (
 )
 from app.ports.clock import Clock, SystemClock
 from app.ports.persistence import PersistencePort
-from app.ports.sync_transport import PermanentSyncTransportError, SyncTransportPort
-from app.services.operations import OperationInput, OperationService
+from app.ports.sync_transport import (
+    PermanentSyncTransportError,
+    SyncTransportCancelled,
+    SyncTransportPort,
+)
+from app.services.operations import (
+    OperationInput,
+    OperationService,
+    OperationStateError,
+)
 
 
 class SyncError(Exception):
@@ -50,7 +58,7 @@ class SyncService:
         self._transport = transport
         self._clock = clock or SystemClock()
         self._operations = operations or OperationService(store, self._clock)
-        self._sleep = sleeper or time.sleep
+        self._sleep = sleeper
 
     def get_bytes_transferred_today(self) -> int:
         now = datetime.fromtimestamp(self._clock.now(), UTC)
@@ -70,7 +78,9 @@ class SyncService:
         ).fetchone()
         return int(row['transferred'])
 
-    def dispatch_sync(self, artifact_id: str, target_id: str) -> str:
+    def dispatch_sync(
+        self, artifact_id: str, target_id: str, *, operation_id: str | None = None
+    ) -> str:
         """Upload an artifact and return its durable sync-record id.
 
         This method is intended to be dispatched by a worker. BackupService
@@ -96,16 +106,24 @@ class SyncService:
         target = self._resolve_target(target_id)
 
         now = int(self._clock.now())
-        operation = self._operations.create(
-            OperationInput(
-                op_type=OperationType.SYNC,
-                actor_type=ActorType.SYSTEM,
-                world_id=artifact['world_id'],
-                data={'artifact_id': artifact_id, 'sync_target_id': target_id},
-            ),
-            initial_status=OperationStatus.RUNNING,
-            allow_world_conflict=True,
-        )
+        operation = self._operations.get(operation_id) if operation_id is not None else None
+        if operation_id is not None and operation is None:
+            raise SyncError(f'OP_NOT_FOUND: {operation_id}')
+        if operation is None:
+            operation = self._operations.create(
+                OperationInput(
+                    op_type=OperationType.SYNC,
+                    actor_type=ActorType.SYSTEM,
+                    world_id=artifact['world_id'],
+                    data={'artifact_id': artifact_id, 'sync_target_id': target_id},
+                ),
+                initial_status=OperationStatus.RUNNING,
+                allow_world_conflict=True,
+            )
+        elif operation['status'] != OperationStatus.RUNNING.value:
+            operation = self._operations.transition(
+                operation['op_id'], OperationStatus.RUNNING
+            )
         sync_id = f'sy_{uuid.uuid4().hex[:16]}'
         connection = self._store.writer()
         connection.execute(
@@ -127,52 +145,128 @@ class SyncService:
         )
         connection.commit()
 
+        cancel_event = self._operations.register_cancellation(operation['op_id'])
         succeeded = False
-        for attempt_number in range(1, SYNC_TRANSIENT_RETRIES + 1):
-            started_at = int(self._clock.now())
-            error_message: str | None = None
-            outcome = SyncOutcome.SUCCEEDED
-            try:
-                self._transport.upload_file(target_id, Path(artifact['storage_path']))
-                succeeded = True
-            except PermanentSyncTransportError as exc:
-                outcome = SyncOutcome.FAILED_PERMANENT
-                error_message = str(exc)[:1000]
-            except Exception as exc:
-                outcome = SyncOutcome.FAILED_TRANSIENT
-                error_message = str(exc)[:1000]
-            finished_at = int(self._clock.now())
-            self._record_attempt(
-                sync_id,
-                attempt_number,
-                started_at,
-                finished_at,
-                outcome,
-                error_message,
-            )
-            if succeeded or outcome == SyncOutcome.FAILED_PERMANENT:
-                break
-            if attempt_number < SYNC_TRANSIENT_RETRIES:
-                self._sleep(self.BACKOFF_DELAYS[attempt_number - 1])
+        try:
+            for attempt_number in range(1, SYNC_TRANSIENT_RETRIES + 1):
+                started_at = int(self._clock.now())
+                error_message: str | None = None
+                outcome = SyncOutcome.SUCCEEDED
+                try:
+                    if self._is_cancelled(operation['op_id'], cancel_event):
+                        raise SyncTransportCancelled('sync cancelled')
+                    self._transport.upload_file(
+                        target_id, Path(artifact['storage_path']), cancel_event
+                    )
+                    if self._is_cancelled(operation['op_id'], cancel_event):
+                        raise SyncTransportCancelled('sync cancelled')
+                except SyncTransportCancelled as exc:
+                    outcome = SyncOutcome.FAILED_TRANSIENT
+                    error_message = str(exc)[:1000]
+                except PermanentSyncTransportError as exc:
+                    outcome = SyncOutcome.FAILED_PERMANENT
+                    error_message = str(exc)[:1000]
+                except Exception as exc:
+                    outcome = SyncOutcome.FAILED_TRANSIENT
+                    error_message = str(exc)[:1000]
 
-        terminal_status = (
-            SyncRecordStatus.SUCCEEDED if succeeded else SyncRecordStatus.FAILED
-        )
-        finished_at = int(self._clock.now())
-        connection = self._store.writer()
-        connection.execute(
-            'UPDATE sync_records SET status = ?, finished_at = ? WHERE sync_id = ?',
-            (terminal_status.value, finished_at, sync_id),
-        )
-        connection.commit()
-        self._operations.transition(
-            operation['op_id'],
-            OperationStatus.COMPLETED if succeeded else OperationStatus.FAILED,
-            error_code=None if succeeded else 'SYNC_FAILED',
-            message=None if succeeded else 'offsite upload exhausted transient retries',
-            data={'sync_id': sync_id, 'status': terminal_status.value},
-        )
+                terminal_attempt = (
+                    outcome != SyncOutcome.FAILED_TRANSIENT
+                    or attempt_number == SYNC_TRANSIENT_RETRIES
+                )
+                if terminal_attempt and not self._is_cancelled(
+                    operation['op_id'], cancel_event
+                ):
+                    terminal_operation_status = (
+                        OperationStatus.COMPLETED
+                        if outcome == SyncOutcome.SUCCEEDED
+                        else OperationStatus.FAILED
+                    )
+                    try:
+                        self._operations.transition(
+                            operation['op_id'],
+                            terminal_operation_status,
+                            error_code=(
+                                None
+                                if terminal_operation_status
+                                == OperationStatus.COMPLETED
+                                else 'SYNC_FAILED'
+                            ),
+                            message=(
+                                None
+                                if terminal_operation_status
+                                == OperationStatus.COMPLETED
+                                else 'offsite upload exhausted transient retries'
+                            ),
+                            data={
+                                'sync_id': sync_id,
+                                'status': (
+                                    SyncRecordStatus.SUCCEEDED.value
+                                    if terminal_operation_status
+                                    == OperationStatus.COMPLETED
+                                    else SyncRecordStatus.FAILED.value
+                                ),
+                            },
+                        )
+                    except OperationStateError:
+                        if not self._is_cancelled(operation['op_id'], cancel_event):
+                            raise
+                        outcome = SyncOutcome.FAILED_TRANSIENT
+                        error_message = 'sync cancelled'
+
+                finished_at = int(self._clock.now())
+                self._record_attempt(
+                    sync_id,
+                    attempt_number,
+                    started_at,
+                    finished_at,
+                    outcome,
+                    error_message,
+                )
+                if outcome == SyncOutcome.SUCCEEDED:
+                    succeeded = True
+                    break
+                if (
+                    outcome == SyncOutcome.FAILED_PERMANENT
+                    or attempt_number == SYNC_TRANSIENT_RETRIES
+                    or self._is_cancelled(operation['op_id'], cancel_event)
+                ):
+                    break
+                delay = self.BACKOFF_DELAYS[attempt_number - 1]
+                if self._sleep is None:
+                    cancel_event.wait(delay)
+                else:
+                    self._sleep(delay)
+
+            terminal_status = (
+                SyncRecordStatus.SUCCEEDED if succeeded else SyncRecordStatus.FAILED
+            )
+            finished_at = int(self._clock.now())
+            connection = self._store.writer()
+            connection.execute(
+                'UPDATE sync_records SET status = ?, finished_at = ? WHERE sync_id = ?',
+                (terminal_status.value, finished_at, sync_id),
+            )
+            connection.commit()
+
+            current_operation = self._operations.get(operation['op_id'])
+            if current_operation is not None and current_operation['status'] == OperationStatus.RUNNING.value:
+                self._operations.transition(
+                    operation['op_id'],
+                    OperationStatus.FAILED,
+                    error_code='SYNC_FAILED',
+                    message='offsite upload exhausted transient retries',
+                    data={'sync_id': sync_id, 'status': terminal_status.value},
+                )
+        finally:
+            self._operations.unregister_cancellation(operation['op_id'], cancel_event)
         return sync_id
+
+    def _is_cancelled(self, op_id: str, cancel_event: Event) -> bool:
+        if cancel_event.is_set():
+            return True
+        operation = self._operations.get(op_id)
+        return operation is None or operation['status'] == OperationStatus.CANCELLED.value
 
     def _resolve_target(self, target_id: str) -> dict[str, Any]:
         row = self._store.reader().execute(

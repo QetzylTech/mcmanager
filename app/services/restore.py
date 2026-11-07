@@ -69,6 +69,7 @@ class RestoreService:
         operation_id: str,
         operator_user_id: str,
         was_running: bool,
+        rollback_of_restore_id: str | None = None,
     ) -> RestoreResult:
         world = self._store.reader().execute(
             'SELECT state FROM world_instances WHERE world_id = ?', (world_id,)
@@ -101,6 +102,7 @@ class RestoreService:
             pre_restore_artifact_id=pre_backup.artifact_id,
             operator_user_id=operator_user_id,
             outcome='success',
+            rollback_of_restore_id=rollback_of_restore_id,
         )
 
         if not was_running:

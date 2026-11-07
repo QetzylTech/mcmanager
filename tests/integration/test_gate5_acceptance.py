@@ -345,8 +345,106 @@ def test_security_headers_cover_html_and_api_responses(gate5_app, path):
     assert "default-src 'self'" in csp
     assert "script-src 'self'" in csp
     assert "style-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
     assert response.headers.get("X-Frame-Options") == "DENY"
     assert response.headers.get("X-Content-Type-Options") == "nosniff"
+    if path.startswith("/api/"):
+        assert "no-store" in response.headers.get("Cache-Control", "")
+
+
+def test_non_loopback_http_is_rejected_and_https_csrf_cookie_is_secure(gate5_app):
+    container = gate5_app.extensions["mcmanager_container"]
+    container.auth.provision_first_superadmin(
+        username="secure-admin",
+        password="secure-admin-password",
+        device_id="secure-device",
+        device_name="Secure Device",
+        ip="192.0.2.10",
+    )
+    client = gate5_app.test_client()
+    insecure = client.get(
+        "/api/health",
+        environ_overrides={"REMOTE_ADDR": "192.0.2.10"},
+    )
+    assert insecure.status_code == 403
+    _json_error(insecure, "HTTPS_REQUIRED")
+    assert not any(
+        cookie.startswith("csrf_token=") for cookie in insecure.headers.getlist("Set-Cookie")
+    )
+
+    secure = client.get(
+        "/",
+        base_url="https://manager.example.test",
+        environ_overrides={"REMOTE_ADDR": "192.0.2.10"},
+    )
+    csrf_token = client.get_cookie("csrf_token", domain="manager.example.test").value
+    login = client.post(
+        "/api/auth/login",
+        base_url="https://manager.example.test",
+        json={
+            "username": "secure-admin",
+            "password": "secure-admin-password",
+            "device_id": "secure-device",
+            "device_name": "Secure Device",
+        },
+        headers={"X-CSRF-Token": csrf_token},
+        environ_overrides={"REMOTE_ADDR": "192.0.2.10"},
+    )
+    assert secure.status_code == 200
+    assert login.status_code == 201
+    cookies = login.headers.getlist("Set-Cookie")
+    assert all("; Secure" in cookie for cookie in cookies)
+
+
+def test_metrics_stream_starts_with_nonblank_snapshot(gate5_app):
+    container = gate5_app.extensions["mcmanager_container"]
+    session = _login(container)
+    client = gate5_app.test_client()
+    client.set_cookie("mcmanager_session", session.token)
+
+    response = client.get("/stream/metrics", buffered=False)
+    try:
+        frame = next(response.response).decode("utf-8")
+        assert "event: metrics" in frame
+        data_line = frame.split("data: ", maxsplit=1)[1].splitlines()[0]
+        data = json.loads(data_line)
+        assert data["metrics"] is not None
+        assert "cpu_pct" in data["metrics"]
+        assert "ram_mb" in data["metrics"]
+        assert "storage_pct" in data["metrics"]
+    finally:
+        response.close()
+
+
+def test_login_route_returns_lockout_after_five_failures(gate5_app):
+    container = gate5_app.extensions["mcmanager_container"]
+    container.auth.provision_first_superadmin(
+        username="locked-admin",
+        password="locked-admin-password",
+        device_id="locked-device",
+        device_name="Locked Device",
+        ip="127.0.0.1",
+    )
+    client = gate5_app.test_client()
+    client.get("/")
+    csrf_token = client.get_cookie("csrf_token").value
+    headers = {"X-CSRF-Token": csrf_token}
+    for _ in range(5):
+        failed = client.post(
+            "/api/auth/login",
+            json={"username": "locked-admin", "password": "wrong-password"},
+            headers=headers,
+        )
+        assert failed.status_code == 401
+        _json_error(failed, "AUTH_INVALID_CREDENTIALS")
+
+    locked = client.post(
+        "/api/auth/login",
+        json={"username": "locked-admin", "password": "locked-admin-password"},
+        headers=headers,
+    )
+    assert locked.status_code == 429
+    _json_error(locked, "AUTH_LOCKED")
 
 
 def test_start_returns_202_operation_envelope(gate5_app, monkeypatch):

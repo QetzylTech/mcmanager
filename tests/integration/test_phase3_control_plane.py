@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import queue
 
 import pytest
 
+import app.services.realtime as realtime
 from app.domain.tuning import SCHEDULER_TICK_INTERVAL_S
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
+from app.ports.host_metrics import HostMetricSnapshot
 from app.services.operations import OperationConflictError, OperationInput, OperationService
-from app.services.realtime import LogFanout, RealtimeHub
+from app.services.realtime import LogFanout, RealtimeHub, StreamEvent
 from app.services.scheduler import SchedulerService
 
 
@@ -151,3 +154,118 @@ def test_realtime_hub_replay_and_log_fanout():
     event = logs.append(world_id='w', session_id='s', channel='minecraft', line='ready', ts=123)
     assert event.event == 'log.line'
     assert logs.buffered('w')[0]['line_no'] == 1
+
+
+def test_metrics_hub_encodes_once_for_fifty_subscribers(monkeypatch):
+    hub = RealtimeHub()
+    subscribers = [hub.subscribe('metrics') for _ in range(50)]
+    encoded_events = []
+    encode = StreamEvent.encode
+
+    def count_encode(event):
+        encoded_events.append(event)
+        return encode(event)
+
+    monkeypatch.setattr(StreamEvent, 'encode', count_encode)
+
+    event = hub.publish('metrics', 'metrics', {'sample': 1})
+    frames = [next(subscriber.frames()) for subscriber in subscribers]
+
+    assert encoded_events == [event]
+    assert frames == [frames[0]] * 50
+    assert 'event: metrics' in frames[0]
+
+
+def test_metrics_service_caches_once_for_fifty_subscribers(container, clock, monkeypatch):
+    service = container.metrics
+    collected = []
+
+    def collect():
+        collected.append(clock.now())
+        return HostMetricSnapshot(25.0, (20.0, 30.0), 512.0, 40.0)
+
+    monkeypatch.setattr(service._host_metrics, 'collect', collect)
+    assert service.tick() is None
+    assert collected == []
+
+    subscribers = [container.realtime.subscribe('metrics') for _ in range(50)]
+    try:
+        assert service.tick() == 1.0
+        frames = [next(subscriber.frames()) for subscriber in subscribers]
+        assert frames == [frames[0]] * len(subscribers)
+        assert '"cpu_pct":25.0' in frames[0]
+        assert len(collected) == 1
+
+        clock.advance(1)
+        assert service.tick() == 1.0
+        assert len(collected) == 1
+
+        clock.advance(15)
+        assert service.tick() == 1.0
+        assert len(collected) == 2
+    finally:
+        for subscriber in subscribers:
+            container.realtime.unsubscribe('metrics', subscriber)
+
+
+def test_metrics_service_refreshes_every_fifteen_seconds_for_active_world(
+    container, clock, monkeypatch
+):
+    world_id = _seed_world(container.store)
+    container.store.writer().execute(
+        "UPDATE world_instances SET state = 'running' WHERE world_id = ?",
+        (world_id,),
+    )
+    container.store.writer().commit()
+    service = container.metrics
+    collected = []
+
+    def collect():
+        collected.append(clock.now())
+        return HostMetricSnapshot(10.0, (10.0,), 256.0, 20.0)
+
+    monkeypatch.setattr(service._host_metrics, 'collect', collect)
+    assert service.tick() == 15.0
+    assert len(collected) == 1
+    clock.advance(15)
+    assert service.tick() == 15.0
+    assert len(collected) == 2
+
+
+def test_realtime_hub_drops_full_slow_subscriber_without_blocking_fanout():
+    hub = RealtimeHub()
+    slow = hub.subscribe('metrics')
+    fast = hub.subscribe('metrics')
+    fast_frames = fast.frames()
+
+    for sample in range(201):
+        hub.publish('metrics', 'metrics', {'sample': sample})
+        assert 'event: metrics' in next(fast_frames)
+
+    assert slow.closed
+    assert hub.subscriber_count('metrics') == 1
+
+    hub.publish('metrics', 'metrics', {'sample': 201})
+    assert '"sample":201' in next(fast_frames)
+
+
+def test_stream_subscriber_emits_fifteen_second_heartbeat(monkeypatch):
+    hub = RealtimeHub()
+    subscriber = hub.subscribe('metrics')
+
+    class FakeTime:
+        def __init__(self):
+            self.values = iter((100.0, 115.0, 115.0))
+
+        def monotonic(self):
+            return next(self.values)
+
+    def empty_get(*, timeout=None):
+        raise queue.Empty
+
+    monkeypatch.setattr(realtime, 'time', FakeTime())
+    monkeypatch.setattr(subscriber._queue, 'get', empty_get)
+    frames = subscriber.frames()
+
+    assert next(frames) == ': ping\n\n'
+    frames.close()

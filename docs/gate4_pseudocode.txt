@@ -14,8 +14,9 @@ running worlds. Restore is off-only, takes a mandatory pre-restore backup and
 attempts compensating rollback after failed verification; the rollback is a
 new Operation. Cleanup currently handles backup artifacts with dry-run
 previews, floors (3 days / 3 artifacts), protection of the last viable
-artifact, and a 500-candidate confirmation cap; stale-world/log cleanup and
-the related HTTP catalog are not implemented. Sync records attempt history,
+artifact, and a 500-candidate confirmation cap. Backup, restore/rollback,
+backup-cleanup preview/execute, and sync catalog routes are implemented and
+tested; stale-world/log cleanup scopes remain open. Sync records attempt history,
 supports transient retries (30s/60s waits, three total attempts) and a 50 GiB
 daily cap; permanent failures terminate without retry. Remote sync is separate
 from local artifact creation.

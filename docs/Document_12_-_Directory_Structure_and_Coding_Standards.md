@@ -248,6 +248,17 @@ Benchmarks live in `benchmarks/` with `thresholds.json` (Doc 11).
 | `pytest` | runner | `pyproject.toml [tool.pytest.ini_options]` | testpaths=tests; addopts `--strict-markers` |
 | `import-linter` | import-graph enforcement | `pyproject.toml [tool.importlinter]` | contracts for the §4 dependency rules (layering + leaf platform + DI-root-only) |
 
+Run the repository static gate from the repository root after installing
+`requirements-dev.txt`:
+
+```powershell
+python -m ruff check app tests
+python -m black --check app tests
+python -m isort --check-only app tests
+python -m mypy app
+lint-imports
+```
+
 Rules carried over from ARCHITECTURE and made mechanical:
 - Functions focused and small; black/ruff enforce formatting; Doc 11 review + behavior criteria enforce size/cohesion; no hard 80-line function limit (readability wins) — instead a lint rule warns on functions >60 lines for review.
 - Clear docstrings: ruff `D` rules enabled for `domain/`/`services/`/`ports/`/`commands/` (public functions require docstrings; private helpers exempt).

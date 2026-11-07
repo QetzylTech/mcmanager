@@ -522,11 +522,21 @@ def test_eula_acceptance_is_explicit_and_audited(tmp_path):
             )
         assert "eula=false" in (world_dir / "eula.txt").read_text(encoding="utf-8")
 
-        container.worlds.accept_eula(
+        operation, replayed = container.worlds.accept_eula(
             world_id="world_accept_eula",
             actor_user_id="u_admin",
             accepted=True,
+            idempotency_key="accept-world-eula",
         )
+        assert replayed is False
+        replay, replayed = container.worlds.accept_eula(
+            world_id="world_accept_eula",
+            actor_user_id="u_admin",
+            accepted=True,
+            idempotency_key="accept-world-eula",
+        )
+        assert replayed is True
+        assert replay["op_id"] == operation["op_id"]
 
         assert "eula=true" in (world_dir / "eula.txt").read_text(encoding="utf-8")
         assert _state(container.store, "world_accept_eula") == WorldState.OFF.value
@@ -537,6 +547,11 @@ def test_eula_acceptance_is_explicit_and_audited(tmp_path):
         ).fetchone()
         assert audit["actor_user_id"] == "u_admin"
         assert audit["world_id"] == "world_accept_eula"
+        assert container.store.reader().execute(
+            "SELECT count(*) FROM audit_records "
+            "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
+            ("world_accept_eula",),
+        ).fetchone()[0] == 1
         operation = container.store.reader().execute(
             "SELECT op_type, status, data_json FROM operations WHERE world_id = ?",
             ("world_accept_eula",),
@@ -617,12 +632,26 @@ def test_eula_accept_api_requires_step_up_and_records_operator(tmp_path):
         )
         assert rejected.status_code == 400
 
+        accepted_headers = {
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "accept-world-eula-api",
+        }
         accepted = client.post(
             "/api/worlds/world_eula_api/eula/accept",
             json={"accepted": True},
-            headers={"X-CSRF-Token": csrf},
+            headers=accepted_headers,
         )
         assert accepted.status_code == 200
+        accepted_payload = accepted.get_json()
+        replay = client.post(
+            "/api/worlds/world_eula_api/eula/accept",
+            json={"accepted": True},
+            headers=accepted_headers,
+        )
+        assert replay.status_code == 200
+        replay_payload = replay.get_json()
+        assert replay_payload["meta"]["idempotency_key"] == "accept-world-eula-api"
+        assert replay_payload["meta"]["op_id"] == accepted_payload["meta"]["op_id"]
         assert "eula=true" in (world_dir / "eula.txt").read_text(encoding="utf-8")
         audit = container.store.reader().execute(
             "SELECT actor_user_id, event_type FROM audit_records "
@@ -630,6 +659,11 @@ def test_eula_accept_api_requires_step_up_and_records_operator(tmp_path):
             ("world_eula_api",),
         ).fetchone()
         assert audit["actor_user_id"] == user_id
+        assert container.store.reader().execute(
+            "SELECT count(*) FROM audit_records "
+            "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
+            ("world_eula_api",),
+        ).fetchone()[0] == 1
     finally:
         app.extensions["mcmanager_shutdown"]()
 

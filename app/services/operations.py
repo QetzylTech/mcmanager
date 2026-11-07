@@ -39,6 +39,14 @@ _RUNTIME_TYPES = {
     OperationType.STOP.value,
     OperationType.KILL.value,
 }
+_CANCELLABLE_TYPES = {
+    OperationType.CREATE_WORLD.value,
+    OperationType.BACKUP.value,
+    OperationType.RESTORE.value,
+    OperationType.CLEANUP.value,
+    OperationType.SYNC.value,
+    OperationType.DELETE_WORLD.value,
+}
 
 
 class OperationConflictError(Exception):
@@ -47,6 +55,10 @@ class OperationConflictError(Exception):
 
 class OperationStateError(Exception):
     """Raised for invalid operation status transitions."""
+
+
+class OperationNotCancellableError(Exception):
+    """Raised when an operation type or status cannot be cancelled."""
 
 
 @dataclass(frozen=True)
@@ -78,7 +90,31 @@ class OperationService:
         self._notifications = notifications
         self._progress_cache: dict[str, dict[str, Any]] = {}
         self._pending_checkpoints: dict[str, dict[str, Any]] = {}
+        self._cancellation_events: dict[str, set[threading.Event]] = {}
+        self._cancellation_lock = threading.Lock()
         self._progress_lock = threading.RLock()
+
+    def register_cancellation(self, op_id: str) -> threading.Event:
+        """Register a cooperative cancellation signal for active operation work."""
+        event = threading.Event()
+        with self._cancellation_lock:
+            row = self._store.reader().execute(
+                'SELECT status FROM operations WHERE op_id = ?', (op_id,)
+            ).fetchone()
+            if row is None or row['status'] == OperationStatus.CANCELLED.value:
+                event.set()
+            self._cancellation_events.setdefault(op_id, set()).add(event)
+        return event
+
+    def unregister_cancellation(self, op_id: str, event: threading.Event) -> None:
+        """Remove a finished worker's cancellation signal."""
+        with self._cancellation_lock:
+            events = self._cancellation_events.get(op_id)
+            if events is None:
+                return
+            events.discard(event)
+            if not events:
+                self._cancellation_events.pop(op_id, None)
 
     def has_in_flight_operation(self, world_id: str, *, exclude_op_id: str | None = None) -> bool:
         """Derived world lock query (Doc 9 section 1.1)."""
@@ -283,13 +319,16 @@ class OperationService:
         try:
             connection.execute('BEGIN IMMEDIATE')
             current = connection.execute(
-                'SELECT world_id FROM operations WHERE op_id = ? AND status = ?',
+                'SELECT world_id, op_type FROM operations WHERE op_id = ? AND status = ?',
                 (op_id, OperationStatus.QUEUED.value),
             ).fetchone()
             if current is None:
                 connection.commit()
                 return None
-            if current['world_id'] is not None:
+            if (
+                current['world_id'] is not None
+                and current['op_type'] != OperationType.SYNC.value
+            ):
                 active_statuses = (
                     OperationStatus.CREATED.value,
                     OperationStatus.VALIDATING.value,
@@ -821,3 +860,71 @@ class OperationService:
             'SELECT * FROM operations WHERE op_id = ?', (op_id,)
         ).fetchone()
         return dict(row) if row is not None else None
+
+    def cancel(self, op_id: str) -> dict[str, Any]:
+        """Atomically cancel an eligible operation and append its terminal audit."""
+        connection = self._store.writer()
+        now = int(self._clock.now())
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute(
+                'SELECT * FROM operations WHERE op_id = ?', (op_id,)
+            ).fetchone()
+            if row is None:
+                raise OperationStateError(f'operation not found: {op_id}')
+
+            current = dict(row)
+            current_status = current['status']
+            cancellable_status = current_status in {
+                OperationStatus.QUEUED.value,
+                OperationStatus.VALIDATING.value,
+            } or (
+                current_status == OperationStatus.RUNNING.value
+                and current['op_type'] == OperationType.SYNC.value
+            )
+            if current['op_type'] not in _CANCELLABLE_TYPES or not cancellable_status:
+                raise OperationNotCancellableError(op_id)
+
+            cursor = connection.execute(
+                """
+                UPDATE operations
+                SET status = ?, finished_at = ?, error_code = NULL,
+                    message = ?, updated_at = ?
+                WHERE op_id = ? AND op_type = ? AND status = ?
+                """,
+                (
+                    OperationStatus.CANCELLED.value,
+                    now,
+                    'Cancelled by administrator.',
+                    now,
+                    op_id,
+                    current['op_type'],
+                    current_status,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise OperationNotCancellableError(op_id)
+
+            cancelled = dict(
+                connection.execute(
+                    'SELECT * FROM operations WHERE op_id = ?', (op_id,)
+                ).fetchone()
+            )
+            self._write_terminal_audit(connection, cancelled)
+            if self._notifications is not None:
+                self._notifications.publish_terminal_operation(
+                    cancelled, connection=connection
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+        with self._progress_lock:
+            self._progress_cache.pop(op_id, None)
+            self._pending_checkpoints.pop(op_id, None)
+        with self._cancellation_lock:
+            for event in self._cancellation_events.get(op_id, ()):
+                event.set()
+        self._publish_terminal(cancelled)
+        return cancelled

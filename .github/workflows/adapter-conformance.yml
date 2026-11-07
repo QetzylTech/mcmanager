@@ -1,0 +1,21 @@
+name: Adapter Conformance
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  adapter-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run adapter conformance tests
+        run: python -m pytest --no-cov -q tests/adapters/test_conformance.py

@@ -14,9 +14,8 @@ The ProcessControlPort and ProcessHandle are the richer port/value-object
 design in Documents 13 and 12, not the dataclass sketch below. Minecraft
 readiness targets are type/capability-dependent under Document 14 §3; a
 universal “level 4” threshold is not the contract. EULA acceptance is explicit,
-audited and step-up protected; the service helper and HTTP route exist, but
-the route does not yet implement Document 10's ConfigEdit-Operation/202
-contract.
+audited and step-up protected; the HTTP route persists a completed ConfigEdit
+Operation and replays requests by idempotency key.
 
 Implementation accepted to date: process launches use argv; adapters guard PID
 identity; the 5000-line tail filters debug/noisy raw output by VERBOSE_LOGGING
@@ -25,10 +24,10 @@ under tests/adapters/. The fake-server options are --crash-after-ms and
 --save-slow-ms (plus the documented EULA/save modes), not the old seconds/
 boolean options below. Windows conformance has passed; POSIX conformance has
 not been run in the recorded verification. The EULA service and HTTP route
-exist (`WorldsService.accept_eula`, `app/web/api/system.py`) and audit/write
-explicit acceptance; this route does not yet implement Document 10's
-ConfigEdit-Operation/202 contract. Do not treat the sample /tmp cwd,
-src/mcmanager paths, or any pseudocode as current implementation evidence.
+exist (`WorldsService.accept_eula`, `app/web/api/system.py`) and record explicit
+acceptance as an idempotent ConfigEdit Operation. Do not treat the sample
+/tmp cwd, src/mcmanager paths, or any pseudocode as current implementation
+evidence.
 
 All material below this reconciliation is the superseded historical snapshot.
 Use Documents 13/14 and the app/ implementation paths above for current work.

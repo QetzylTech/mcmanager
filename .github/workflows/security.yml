@@ -1,0 +1,33 @@
+name: Security Acceptance
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  security:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run security acceptance suite
+        run: >-
+          python -m pytest --no-cov -q
+          tests/integration/test_gate5_acceptance.py
+          tests/integration/test_auth.py
+          tests/integration/test_secrets.py
+          tests/integration/test_audit.py
+          tests/integration/test_document10_catalog_apis.py

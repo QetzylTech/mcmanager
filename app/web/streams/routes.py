@@ -34,6 +34,7 @@ def _subscribe(
     snapshot_event: str,
     snapshot_payload: Callable[[], dict[str, Any]],
     auth_check: Callable[[], bool],
+    on_close: Callable[[], None] | None = None,
 ) -> Response:
     subscriber = hub.subscribe(stream, last_event_id=_last_event_id())
     snapshot = snapshot_payload()
@@ -44,6 +45,13 @@ def _subscribe(
             yield from subscriber.frames(auth_check=auth_check)
         finally:
             hub.unsubscribe(stream, subscriber)
+            if on_close is not None:
+                on_close()
+
+    def close_subscriber() -> None:
+        hub.unsubscribe(stream, subscriber)
+        if on_close is not None:
+            on_close()
 
     response = Response(
         stream_with_context(generate()),
@@ -53,7 +61,7 @@ def _subscribe(
             "X-Accel-Buffering": "no",
         },
     )
-    response.call_on_close(lambda: hub.unsubscribe(stream, subscriber))
+    response.call_on_close(close_subscriber)
     return response
 
 
@@ -244,9 +252,7 @@ def metrics() -> Response:
         container.realtime,
         "metrics",
         snapshot_event="metrics",
-        snapshot_payload=lambda: {
-            "metrics": None,
-            "freshness": int(container.clock.now()),
-        },
+        snapshot_payload=container.metrics.stream_snapshot,
         auth_check=_auth_check_for_request(container),
+        on_close=container.metrics.notify_subscribers_changed,
     )

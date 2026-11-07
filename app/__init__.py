@@ -12,6 +12,7 @@ from flask import Flask
 
 from app.bootstrap import build_container
 from app.domain.tuning import SCHEDULER_TICK_INTERVAL_S, SUPERVISOR_POLL_IDLE_S
+from app.domain.value_objects import OperationType
 from app.ports.clock import Clock
 from app.shell.routes import shell_bp
 from app.web.api import register_api_blueprints
@@ -57,6 +58,38 @@ def _operation_worker(container: Any, stop_event: threading.Event) -> None:
             except Exception:
                 _logger.exception('Queued operation dispatch failed')
         stop_event.wait(0.25)
+
+
+def _catalog_operation_worker(container: Any, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        dispatcher = getattr(container, 'catalog_operations', None)
+        dispatch = getattr(dispatcher, 'dispatch_queued_operations', None)
+        if callable(dispatch):
+            try:
+                dispatch(
+                    (OperationType.BACKUP, OperationType.RESTORE, OperationType.CLEANUP)
+                )
+            except Exception:
+                _logger.exception('Queued backup/restore/cleanup dispatch failed')
+        stop_event.wait(0.25)
+
+
+def _sync_operation_worker(container: Any, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        dispatcher = getattr(container, 'catalog_operations', None)
+        dispatch = getattr(dispatcher, 'dispatch_queued_operations', None)
+        if callable(dispatch):
+            try:
+                dispatch((OperationType.SYNC,))
+            except Exception:
+                _logger.exception('Queued sync dispatch failed')
+        stop_event.wait(0.25)
+
+
+def _metrics_worker(container: Any, stop_event: threading.Event) -> None:
+    metrics = getattr(container, 'metrics', None)
+    if metrics is not None:
+        metrics.run(stop_event)
 
 
 def create_app(
@@ -116,6 +149,24 @@ def create_app(
             name='mcmanager-operation-dispatcher',
             daemon=True,
         ),
+        threading.Thread(
+            target=_catalog_operation_worker,
+            args=(container, stop_event),
+            name='mcmanager-catalog-operation-dispatcher',
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_sync_operation_worker,
+            args=(container, stop_event),
+            name='mcmanager-sync-operation-dispatcher',
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_metrics_worker,
+            args=(container, stop_event),
+            name='mcmanager-metrics-publisher',
+            daemon=True,
+        ),
     ]
     app.extensions['mcmanager_workers'] = tuple(workers)
     shutdown_lock = threading.Lock()
@@ -127,6 +178,9 @@ def create_app(
             if shutdown_complete:
                 return
             stop_event.set()
+            metrics = getattr(container, 'metrics', None)
+            if metrics is not None:
+                metrics.notify_subscribers_changed()
             started_workers = [worker for worker in workers if worker.ident is not None]
             for worker in started_workers:
                 worker.join(timeout=5)

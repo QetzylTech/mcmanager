@@ -16,7 +16,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
-from app.domain.tuning import LOG_LINE_BUFFER_LINES, SSE_REPLAY_BUFFER_EVENTS
+from app.domain.tuning import (
+    LOG_LINE_BUFFER_LINES,
+    SSE_HEARTBEAT_S,
+    SSE_REPLAY_BUFFER_EVENTS,
+)
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,7 @@ class StreamEvent:
 class StreamSubscriber:
     def __init__(self) -> None:
         self._queue: queue.Queue[str | None] = queue.Queue(maxsize=200)
+        self._client_key: object | str = object()
         self.closed = False
 
     def put(self, frame: str) -> bool:
@@ -52,9 +57,9 @@ class StreamSubscriber:
                 self._queue.put_nowait(None)
 
     def frames(self, *, auth_check: Callable[[], bool] | None = None) -> Iterable[str]:
-        next_keepalive = time.monotonic() + 15
+        next_keepalive = time.monotonic() + SSE_HEARTBEAT_S
         while True:
-            timeout = 15.0
+            timeout = float(SSE_HEARTBEAT_S)
             if auth_check is not None:
                 timeout = min(1, max(0, next_keepalive - time.monotonic()))
             try:
@@ -67,7 +72,7 @@ class StreamSubscriber:
                     break
                 if time.monotonic() >= next_keepalive:
                     yield ': ping\n\n'
-                    next_keepalive = time.monotonic() + 15
+                    next_keepalive = time.monotonic() + SSE_HEARTBEAT_S
                 continue
             if item is None:
                 break
@@ -94,6 +99,7 @@ class RealtimeHub:
         self._next_sequence: dict[str, int] = {}
         self._buffers: dict[str, deque[StreamEvent]] = {}
         self._subscribers: dict[str, list[StreamSubscriber]] = {}
+        self._slow_client_alerted_at: dict[object | str, float] = {}
         self._lock = threading.RLock()
         self._closed = False
 
@@ -102,8 +108,16 @@ class RealtimeHub:
         with self._lock:
             return self._closed
 
-    def subscribe(self, stream: str, *, last_event_id: int | None = None) -> StreamSubscriber:
+    def subscribe(
+        self,
+        stream: str,
+        *,
+        last_event_id: int | None = None,
+        client_id: str | None = None,
+    ) -> StreamSubscriber:
         subscriber = StreamSubscriber()
+        if client_id is not None:
+            subscriber._client_key = client_id
         with self._lock:
             self._subscribers.setdefault(stream, []).append(subscriber)
             for event in self.replay(stream, last_event_id=last_event_id):
@@ -143,17 +157,49 @@ class RealtimeHub:
 
     def publish(self, stream: str, event: str, data: dict[str, Any]) -> StreamEvent:
         with self._lock:
-            sequence = self._next_sequence.get(stream, 1)
-            self._next_sequence[stream] = sequence + 1
-            stream_event = StreamEvent(sequence=sequence, event=event, data=data)
-            self._buffers.setdefault(stream, deque(maxlen=self._replay_limit)).append(stream_event)
-            frame = stream_event.encode()
-            live = []
-            for subscriber in self._subscribers.get(stream, []):
-                if subscriber.put(frame):
-                    live.append(subscriber)
-            self._subscribers[stream] = live
+            stream_event, dropped = self._publish_locked(stream, event, data)
+            while dropped:
+                subscriber = dropped.pop()
+                now = time.monotonic()
+                while self._slow_client_alerted_at:
+                    oldest_key = next(iter(self._slow_client_alerted_at))
+                    if now - self._slow_client_alerted_at[oldest_key] < 60:
+                        break
+                    del self._slow_client_alerted_at[oldest_key]
+                last_alerted_at = self._slow_client_alerted_at.get(subscriber._client_key)
+                if last_alerted_at is not None and now - last_alerted_at < 60:
+                    continue
+                self._slow_client_alerted_at[subscriber._client_key] = now
+                _, additional_drops = self._publish_locked(
+                    'events',
+                    'alert',
+                    {
+                        'category': 'slow_client_disconnected',
+                        'severity': 'high',
+                        'message': 'A slow stream client was disconnected.',
+                        'details': {'stream': stream},
+                    },
+                )
+                dropped.extend(additional_drops)
             return stream_event
+
+    def _publish_locked(
+        self, stream: str, event: str, data: dict[str, Any]
+    ) -> tuple[StreamEvent, list[StreamSubscriber]]:
+        sequence = self._next_sequence.get(stream, 1)
+        self._next_sequence[stream] = sequence + 1
+        stream_event = StreamEvent(sequence=sequence, event=event, data=data)
+        self._buffers.setdefault(stream, deque(maxlen=self._replay_limit)).append(stream_event)
+        frame = stream_event.encode()
+        live = []
+        dropped = []
+        for subscriber in self._subscribers.get(stream, []):
+            if subscriber.put(frame):
+                live.append(subscriber)
+            else:
+                dropped.append(subscriber)
+        self._subscribers[stream] = live
+        return stream_event, dropped
 
     def replay(self, stream: str, *, last_event_id: int | None) -> list[StreamEvent]:
         with self._lock:

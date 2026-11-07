@@ -12,9 +12,9 @@ evidence are tracked in [WORKBOARD.md](WORKBOARD.md).
 MCManager has a tested application foundation and substantial control-plane
 functionality. It is an **early functional prototype, not yet an
 operator-ready MVP** for dependable day-to-day server management. The main
-product gaps are the remaining backup/restore/cleanup/sync API workflows,
-complete shell workflows, manager lifecycle operations, and cross-platform,
-security, and performance release acceptance.
+product gaps are stale-world/log cleanup policy and workflows, complete shell
+workflows, manager lifecycle operations, safe cancellation of in-flight sync,
+and cross-platform, deployment, and performance release acceptance.
 
 ## Gate status
 
@@ -24,7 +24,7 @@ security, and performance release acceptance.
 | 2 - Persistence and domain | Core slices Done | Migration/persistence checks, domain lifecycle validation, effective configuration, ConfigEdit operations and conflict mapping | Broader release/security acceptance; see workboard |
 | 3 - Control plane | Core slices Done | Durable queued operations, progress/replay, conflict matrix, terminal audit, crash-safe reconciliation, scheduler/missed-run behavior | Full release acceptance beyond the focused suites |
 | 4 - Operational subsystems | Review | Backup integrity, save coordination, restore rollback, cleanup floors, sync retry/cap, and filesystem hardening have focused Windows tests | Three symlink checks, POSIX and live RCON/NAS acceptance remain unverified |
-| 5 - API, streams, and shell | Partial | Auth/CSRF/step-up foundations, world APIs, settings/catalog/admin APIs, durable operations, SSE replay/auth/topic behavior, shared browser connection and world-list workflow | Backup/restore/cleanup/sync APIs, manager lifecycle operations, operation cancellation, full shell workflows, metrics/proxy and security acceptance |
+| 5 - API, streams, and shell | Partial | Auth/CSRF/step-up foundations, world/settings/admin APIs, backup/restore/backup-cleanup/sync catalog workflows, queued and Running Sync cancellation, SSE replay/auth/topic behavior, shared browser connection, local security acceptance suite, cached metrics publisher, and rate-limited slow-client alerts | Stale-world/log cleanup policy, manager lifecycle operations, full shell workflows, supported-proxy validation, hosted security-job execution |
 
 ## Latest recorded verification
 
@@ -34,8 +34,10 @@ Windows / Python 3.13.14, updated 2026-11-07:
 |---|---|
 | `python -m pytest --no-cov -q -k "not performance_acceptance_smoke"` | **448 passed, 3 skipped, 1 deselected**. The skips are symlink tests requiring a Windows privilege unavailable on this host; the deselected smoke is the long calibrated performance test. |
 | `node --test tests\browser\test_gate5_browser.test.cjs` | **2 passed**, including 10-tab stream sharing/failover, documented event forwarding, auth expiry/recovery, and manager shutdown. |
+| Dedicated security acceptance modules | **53 passed** on Windows; scoped Ruff and diff checks passed. The separate GitHub Actions job is added; hosted execution is pending. |
+| Metrics/control-plane/presentation/Gate 5 integration | **42 passed, 1 deselected**; scoped Ruff passed. The deselected test is the long performance smoke. |
 | Scoped Ruff, compilation, and focused mypy checks | Passed for the feature slices recorded on the workboard; this is not a repository-wide static-gate pass. |
-| Repository-wide static checks | Not green: the recorded baseline reported 52 Ruff errors, Black would reformat 74 files, isort reported 14 files, mypy failed, and import-linter reported `app layers BROKEN`. |
+| Repository-wide static checks | Not green: Ruff reports 46 errors; Black would reformat 76 files; isort reports 9 files; mypy reports 217 errors; `lint-imports` is unavailable in the selected interpreter. |
 
 The three Windows symlink skips are an environment limitation, not passing
 acceptance. POSIX adapter conformance and live RCON/NAS integration have not
@@ -45,16 +47,19 @@ be inferred from the deselected smoke test.
 
 ## Major remaining product work
 
-- Implement and test the Document 10 backup, restore/rollback, cleanup, and
-  sync API catalog.
+- Complete Document 10 cleanup scopes: the backup scope is implemented, but
+  stale-world/log candidate eligibility and retention policy need a governing
+  decision before destructive workflows can be completed.
 - Complete the 17 shell modules as real manager/world workflows, including
   explicit world context switching.
 - Implement manager restart/update/rollback and manager backup/restore
   operations; several registered endpoints currently return
   `NOT_IMPLEMENTED`.
-- Implement the documented operation-cancellation endpoint.
-- Verify and complete metrics cadence, streaming behavior through the
-  supported proxy shape, and the dedicated security acceptance suite.
+- Verify streaming through the supported proxy shape; the cached metrics
+  publisher, local cadence/fan-out checks, and rate-limited slow-client alerts
+  now pass.
+- Run the dedicated security acceptance GitHub Actions job on a hosted PR or
+  push; its local 53-test suite passes.
 - Run the real Minecraft adapter integration spike across Vanilla, Paper,
   Fabric, and Forge, and run C1-C14 on a supported POSIX host.
 - Restore green repository-wide lint, format, type, and import-boundary gates.

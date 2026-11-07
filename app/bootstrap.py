@@ -20,6 +20,7 @@ from pathlib import Path
 
 from app.infrastructure.backup_engine import NativeBackupEngine
 from app.infrastructure.filesystem import LocalFilesystem
+from app.infrastructure.metrics import PsutilHostMetrics
 from app.infrastructure.minecraft.adapter import MinecraftServerAdapter
 from app.infrastructure.minecraft.rcon import RconClient
 from app.infrastructure.secrets import SqliteSecretsStore, provision_keyfile
@@ -35,8 +36,10 @@ from app.ports.process_control import ProcessControlPort
 from app.services.audit import AuditService
 from app.services.auth import AuthenticationService
 from app.services.backup import BackupService
+from app.services.catalog_operations import CatalogOperationDispatcher
 from app.services.cleanup import CleanupService
 from app.services.configuration import ConfigurationService
+from app.services.metrics import MetricsService
 from app.services.notifications import NotificationService
 from app.services.operations import OperationService
 from app.services.realtime import LogFanout, RealtimeHub
@@ -69,8 +72,10 @@ class Container:
     reconciliation: ReconciliationService
     scheduler: SchedulerService
     realtime: RealtimeHub
+    metrics: MetricsService
     logs: LogFanout
     backups: BackupService
+    catalog_operations: CatalogOperationDispatcher
     restore: RestoreService
     cleanup: CleanupService
     sync: SyncService
@@ -120,6 +125,12 @@ def build_container(
     notifications = NotificationService(store, clock)
     auth = AuthenticationService(store, secrets, clock, audit)
     realtime = RealtimeHub()
+    metrics = MetricsService(
+        store,
+        clock,
+        realtime,
+        PsutilHostMetrics(Path(database_path).resolve().parent),
+    )
     operations = OperationService(
         store, clock, audit, realtime, notifications=notifications
     )
@@ -151,6 +162,9 @@ def build_container(
     runtime = RuntimeService(worlds)
     restore = RestoreService(store, clock, operations, backups, runtime)
     sync = SyncService(store, NasSyncTransport(store), clock, operations)
+    catalog_operations = CatalogOperationDispatcher(
+        store, clock, operations, configuration, backups, restore, cleanup, sync
+    )
     reconciliation = ReconciliationService(runtime)
 
     return Container(
@@ -167,8 +181,10 @@ def build_container(
         reconciliation=reconciliation,
         scheduler=scheduler,
         realtime=realtime,
+        metrics=metrics,
         logs=logs,
         backups=backups,
+        catalog_operations=catalog_operations,
         restore=restore,
         cleanup=cleanup,
         sync=sync,

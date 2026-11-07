@@ -6,6 +6,7 @@ from flask import Flask
 
 from app.web.api.administration import administration_bp
 from app.web.api.auth_routes import auth_bp
+from app.web.api.backup_catalogs import backup_catalogs_bp
 from app.web.api.catalogs import catalogs_bp
 from app.web.api.configuration import configuration_bp
 from app.web.api.history import history_bp
@@ -18,6 +19,7 @@ def register_api_blueprints(app: Flask) -> None:
     app.register_blueprint(administration_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(catalogs_bp)
+    app.register_blueprint(backup_catalogs_bp)
     app.register_blueprint(configuration_bp)
     app.register_blueprint(history_bp)
     app.register_blueprint(pages_bp)

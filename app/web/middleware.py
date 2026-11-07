@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import secrets
 from typing import Any
 
@@ -38,6 +39,13 @@ def _is_public_request() -> bool:
     )
 
 
+def _is_loopback_request() -> bool:
+    try:
+        return ipaddress.ip_address(request.remote_addr or "").is_loopback
+    except ValueError:
+        return False
+
+
 def _requires_step_up() -> bool:
     method: str = request.method
     if method not in _STATE_CHANGING_METHODS:
@@ -49,6 +57,17 @@ def _requires_step_up() -> bool:
         or path.endswith("/kill")
         or path.endswith("/eula/accept")
         or path.endswith("/runtime-config")
+        or path == "/api/cleanup/execute"
+        or (
+            method == "DELETE"
+            and path.startswith("/api/backups/")
+            and path.count("/") == 3
+        )
+        or (
+            method == "POST"
+            and path.startswith("/api/worlds/")
+            and (path.endswith("/restores") or path.endswith("/restores/rollback"))
+        )
         or (
             method == "DELETE"
             and path.startswith("/api/worlds/")
@@ -85,9 +104,21 @@ def _requires_admin() -> bool:
         and len(segments) >= 5
         and segments[3] == "logs"
     )
+    admin_catalog_reads = method == "GET" and path in {
+        "/api/backups",
+        "/api/cleanup/runs",
+        "/api/sync/records",
+        "/api/sync/targets",
+    }
     return (
         path == "/api/diagnostics"
         or path == "/api/settings"
+        or (
+            method == "POST"
+            and path.startswith("/api/operations/")
+            and len(segments) == 4
+            and segments[3] == "cancel"
+        )
         or (path.startswith("/api/worlds/") and path.endswith("/settings"))
         or path.startswith("/api/supervisor/")
         or path.endswith("/stop")
@@ -96,7 +127,17 @@ def _requires_admin() -> bool:
         or path.endswith("/runtime-config")
         or protected_world_files
         or protected_world_logs
+        or admin_catalog_reads
         or path.endswith("/delete-preview")
+        or path.endswith("/cleanup-preview")
+        or path == "/api/cleanup/dry-run"
+        or path == "/api/cleanup/execute"
+        or path == "/api/sync/retry"
+        or (
+            method == "DELETE"
+            and path.startswith("/api/backups/")
+            and path.count("/") == 3
+        )
         or (
             method in _STATE_CHANGING_METHODS
             and (
@@ -124,6 +165,10 @@ def _requires_superadmin() -> bool:
         path == "/api/setup" and request.method == "POST"
     ) or path.startswith(("/api/users", "/api/roles", "/api/permissions", "/api/devices")) or (
         path in {"/api/manager/update", "/api/manager/rollback"}
+    ) or (
+        request.method == "DELETE"
+        and path.startswith("/api/backups/")
+        and request.args.get("force", "").lower() in {"true", "1"}
     )
 
 
@@ -132,6 +177,12 @@ def register_middleware(app: Flask) -> None:
 
     @app.before_request
     def authenticate_and_validate_csrf() -> Any:
+        if not request.is_secure and not _is_loopback_request():
+            return error(
+                "HTTPS_REQUIRED",
+                "HTTPS is required for non-loopback connections.",
+                status=403,
+            )
         if request.path == "/api/setup" and request.method == "POST":
             container = app.extensions.get("mcmanager_container")
             if container is not None:
@@ -233,17 +284,20 @@ def register_middleware(app: Flask) -> None:
     def add_security_headers(response: Response) -> Response:
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'",
+            "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'",
         )
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-XSS-Protection", "0")
+        if request.path.startswith(("/api/", "/stream/")):
+            response.headers.setdefault("Cache-Control", "no-store")
 
         response_sets_csrf = any(
             value.startswith("csrf_token=") for value in response.headers.getlist("Set-Cookie")
         )
-        if not response_sets_csrf and hasattr(g, "current_session"):
+        cookie_context_is_secure = request.is_secure or _is_loopback_request()
+        if cookie_context_is_secure and not response_sets_csrf and hasattr(g, "current_session"):
             csrf_token = session_csrf_token(g.current_session.token)
             if request.cookies.get("csrf_token") != csrf_token:
                 response.set_cookie(
@@ -254,7 +308,11 @@ def register_middleware(app: Flask) -> None:
                     samesite="Lax",
                     path="/",
                 )
-        elif not response_sets_csrf and not request.cookies.get("csrf_token"):
+        elif (
+            cookie_context_is_secure
+            and not response_sets_csrf
+            and not request.cookies.get("csrf_token")
+        ):
             response.set_cookie(
                 "csrf_token",
                 secrets.token_urlsafe(32),

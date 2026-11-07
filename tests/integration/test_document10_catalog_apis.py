@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -8,6 +9,7 @@ import pytest
 
 import app.bootstrap as bootstrap
 from app import create_app
+from app.ports.secrets_store import SecretType
 from app.services.worlds import WorldsService
 from app.web.middleware import session_csrf_token
 
@@ -202,6 +204,66 @@ def test_admin_catalog_endpoints_enforce_superadmin_and_csrf(catalog_app):
 
     assert client.post("/api/notifications/read-all").status_code == 403
     assert client.get("/api/java-runtimes").status_code == 200
+
+
+def test_last_superadmin_cannot_be_disabled_or_deleted(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+    row = container.store.reader().execute(
+        "SELECT u.user_id FROM users u "
+        "JOIN role_assignments ra ON ra.user_id = u.user_id "
+        "JOIN roles r ON r.role_id = ra.role_id "
+        "WHERE r.name = 'Superadmin' AND u.deleted_at IS NULL LIMIT 1"
+    ).fetchone()
+    user_id = row["user_id"]
+
+    disabled = client.patch(
+        f"/api/users/{user_id}",
+        json={"status": "disabled"},
+        headers=headers,
+    )
+    deleted = client.delete(f"/api/users/{user_id}", headers=headers)
+
+    assert disabled.status_code == 409
+    assert disabled.json["error"]["code"] == "FORBIDDEN_LAST_SUPERADMIN"
+    assert deleted.status_code == 409
+    assert deleted.json["error"]["code"] == "FORBIDDEN_LAST_SUPERADMIN"
+    remaining = container.store.reader().execute(
+        "SELECT status, deleted_at FROM users WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    assert remaining["status"] == "active"
+    assert remaining["deleted_at"] is None
+
+
+def test_sync_target_api_never_exposes_secret_values(catalog_app):
+    client, _headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+    plaintext = "sync-credential-must-not-leak"
+    secret_id = container.secrets.store(
+        secret_type=SecretType.SYNC_CREDENTIAL,
+        associated_entity_type="manager",
+        associated_entity_id="security-test",
+        plaintext=plaintext,
+    )
+    now = int(container.clock.now())
+    writer = container.store.writer()
+    writer.execute(
+        """INSERT INTO sync_targets (
+            sync_target_id, scope, world_id, target_type, config, secret_id,
+            enabled, version, deleted_at, deleted_by, created_at, updated_at
+        ) VALUES ('security-sync-target', 'global', NULL, 'nas', '{}', ?, 1,
+                  1, NULL, NULL, ?, ?)""",
+        (secret_id, now, now),
+    )
+    writer.commit()
+
+    response = client.get("/api/sync/targets")
+    payload = json.dumps(response.get_json())
+
+    assert response.status_code == 200
+    assert secret_id in payload
+    assert plaintext not in payload
+    assert "encrypted_value" not in payload
 
 
 def test_non_superadmin_can_use_personal_notifications_but_not_admin_catalogs(catalog_app):

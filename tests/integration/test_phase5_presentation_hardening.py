@@ -189,6 +189,7 @@ def test_sse_endpoints_emit_nonblank_snapshots(tmp_path, migrations_dir, clock):
                 body = next(iter(response.response)).decode()
                 assert response.status_code == 200
                 assert response.mimetype == "text/event-stream"
+                assert response.headers["X-Accel-Buffering"] == "no"
                 assert event_name in body
                 assert "data:" in body
             finally:

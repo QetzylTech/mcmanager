@@ -14,7 +14,9 @@ from argon2 import PasswordHasher
 
 import app.bootstrap as bootstrap
 from app import create_app
+from app.domain.value_objects import ActorType, OperationStatus, OperationType
 from app.ports.secrets_store import SecretType
+from app.services.operations import OperationInput
 from app.services.worlds import WorldsService, _world_mutation_dispatch_lock
 from tests.integration._gate3_support import seed_world
 
@@ -124,6 +126,103 @@ def test_world_routes_require_auth_and_admin_role(world_api_app):
     user_client.set_cookie("mcmanager_session", user_session.token)
     user_client.get("/api/session")
     forbidden = user_client.get("/api/worlds/world/files")
+    assert forbidden.status_code == 403
+    assert forbidden.get_json()["error"]["code"] == "AUTH_FORBIDDEN"
+
+
+@pytest.mark.parametrize(
+    ("op_type", "status"),
+    [
+        (OperationType.CREATE_WORLD, OperationStatus.QUEUED),
+        (OperationType.BACKUP, OperationStatus.VALIDATING),
+        (OperationType.RESTORE, OperationStatus.QUEUED),
+        (OperationType.CLEANUP, OperationStatus.VALIDATING),
+        (OperationType.SYNC, OperationStatus.RUNNING),
+        (OperationType.DELETE_WORLD, OperationStatus.QUEUED),
+    ],
+)
+def test_admin_can_cancel_allowed_operation_once(
+    world_api_app, op_type: OperationType, status: OperationStatus
+):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, csrf = _admin_client(world_api_app)
+    operation = container.operations.create(
+        OperationInput(op_type=op_type, actor_type=ActorType.SYSTEM),
+        initial_status=status,
+    )
+    headers = {"X-CSRF-Token": csrf}
+    path = f"/api/operations/{operation['op_id']}/cancel"
+
+    cancelled = client.post(path, headers=headers)
+
+    assert cancelled.status_code == 200
+    payload = cancelled.get_json()
+    assert payload["ok"] is True
+    assert payload["meta"]["op_id"] == operation["op_id"]
+    assert payload["data"]["operation"]["status"] == OperationStatus.CANCELLED.value
+    audit_count = container.store.reader().execute(
+        "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+        (operation["op_id"],),
+    ).fetchone()[0]
+    assert audit_count == 1
+
+    repeated = client.post(path, headers=headers)
+
+    assert repeated.status_code == 409
+    assert repeated.get_json()["error"]["code"] == "OP_NOT_CANCELLABLE"
+    assert container.operations.get(operation["op_id"])["status"] == OperationStatus.CANCELLED.value
+    assert container.store.reader().execute(
+        "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+        (operation["op_id"],),
+    ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    ("op_type", "status"),
+    [
+        (OperationType.START, OperationStatus.QUEUED),
+        (OperationType.BACKUP, OperationStatus.RUNNING),
+        (OperationType.BACKUP, OperationStatus.CREATED),
+    ],
+)
+def test_cancel_rejects_disallowed_type_or_status(
+    world_api_app, op_type: OperationType, status: OperationStatus
+):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, csrf = _admin_client(world_api_app)
+    operation = container.operations.create(
+        OperationInput(op_type=op_type, actor_type=ActorType.SYSTEM),
+        initial_status=status,
+    )
+
+    response = client.post(
+        f"/api/operations/{operation['op_id']}/cancel",
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "OP_NOT_CANCELLABLE"
+    assert container.operations.get(operation["op_id"])["status"] == status.value
+    assert container.store.reader().execute(
+        "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+        (operation["op_id"],),
+    ).fetchone()[0] == 0
+
+
+def test_cancel_requires_authentication_and_admin_role(world_api_app):
+    anonymous = world_api_app.test_client().post("/api/operations/missing/cancel")
+    assert anonymous.status_code == 401
+    assert anonymous.get_json()["error"]["code"] == "AUTH_SESSION_INVALID"
+
+    container = world_api_app.extensions["mcmanager_container"]
+    user_session = _add_regular_user(container)
+    user_client = world_api_app.test_client()
+    user_client.set_cookie("mcmanager_session", user_session.token)
+    user_client.get("/api/session")
+    forbidden = user_client.post(
+        "/api/operations/missing/cancel",
+        headers={"X-CSRF-Token": user_client.get_cookie("csrf_token").value},
+    )
     assert forbidden.status_code == 403
     assert forbidden.get_json()["error"]["code"] == "AUTH_FORBIDDEN"
 

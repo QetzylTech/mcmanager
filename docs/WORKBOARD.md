@@ -259,6 +259,53 @@ is integrated and reviewed.
   RCON implementations. Port/readiness/Java/bootstrap/world-lifecycle tests
   passed (69) on Windows; scoped Ruff passed.
 
+### KB-G5-5 — Implement world CRUD, EULA, files, and logs APIs
+
+- **WBS:** WP 5.1; realignment G5-7/G5-10
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
+- **Depends on:** KB-G1-3, KB-G5-1, KB-G5-2 (Done)
+- **Acceptance:** Document 10 world create/update/delete, runtime config,
+  EULA, file management, and log routes enforce their documented guards;
+  Operation-creating writes return durable documented operation envelopes.
+- **Evidence:** the focused world-management, Gate 5 auth/async, and lifecycle
+  suites passed (37); scoped Ruff, py_compile, and diff checks passed. Coverage
+  includes guarded CRUD/runtime/EULA/files/log access, queued/idempotent world
+  changes, FileEdit recovery, and ConfigEdit EULA response metadata. Follow-up
+  EULA idempotency replay tests passed (2) and scoped Ruff passed after adding
+  same-key operation replay and single-acceptance audit assertions.
+
+### KB-G5-4 — Implement settings, schedules, runtime, and administration APIs
+
+- **WBS:** WP 5.1; realignment G5-9/G5-10
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
+- **Depends on:** KB-G5-1, KB-G5-2, KB-G2-3, KB-G3-5 (Done)
+- **Acceptance:** Document 10 settings, schedules/missed-runs, templates,
+  Java runtimes, admin, notifications, and audit routes are implemented and
+  covered by authorized success/error tests.
+- **Evidence:** `tests/integration/test_document10_catalog_apis.py`,
+  `tests/integration/test_schema_migrations.py`, and
+  `tests/integration/test_scheduler_service.py` passed (25); scoped Ruff,
+  compile, and diff checks passed. Manager backup/restore/restart/update/
+  rollback endpoints are a separate KB-G5-8 deliverable.
+
+### KB-DOC-STATUS — Reconcile current status and audit evidence
+
+- **WBS/Docs:** `IMPLEMENTATION_STATUS.md`, `realignment.txt`, and gate
+  reconciliation headers
+- **Priority:** P2 · **Owner:** Copilot current session · **Updated:** 2026-11-07
+- **Depends on:** KB-G2-DOMAIN, KB-G2-MIGRATION, KB-G4-VERIFY (Done)
+- **Acceptance:** recorded test commands/counts match a dated fresh run; gate
+  claims agree with verified acceptance; obsolete packaging notes and
+  contradictions are explicitly superseded rather than silently retained.
+- **Evidence:** implementation status, realignment, and gate 1/4/5
+  reconciliation headers now reflect the current API, security, and metrics
+  implementation and retain explicit unresolved dependencies. Fresh focused
+  runs passed: security acceptance (53), metrics/control-plane/presentation/
+  Gate 5 (42, 1 long performance test deselected), and EULA replay (2).
+  Scoped Ruff and the repository diff check passed. Repository-wide static
+  gates, calibrated performance, POSIX, hosted CI, and proxy behavior remain
+  explicitly open rather than being presented as passing.
+
 ### KB-G1-3 — Enforce Minecraft readiness and EULA product flow
 
 - **WBS:** WP 1.5; realignment G1-3
@@ -440,37 +487,6 @@ is integrated and reviewed.
 
 ## Review
 
-### KB-G5-5 — Implement world CRUD, EULA, files, and logs APIs
-
-- **WBS:** WP 5.1; realignment G5-7/G5-10
-- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
-- **Depends on:** KB-G1-3, KB-G5-1, KB-G5-2 (Done)
-- **Acceptance:** Document 10 world create/update/delete, runtime config,
-  EULA, file management, and log routes enforce their documented guards;
-  Operation-creating writes return durable documented operation envelopes.
-- **Evidence:** the focused world-management, Gate 5 auth/async, and lifecycle
-  suites passed (37); scoped Ruff, py_compile, and diff checks passed. Coverage
-  includes guarded CRUD/runtime/EULA/files/log access, queued/idempotent world
-  changes, FileEdit recovery, and ConfigEdit EULA response metadata.
-
-### KB-G5-4 — Implement settings, schedules, runtime, and administration APIs
-
-- **WBS:** WP 5.1; realignment G5-9/G5-10
-- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
-- **Depends on:** KB-G5-1, KB-G5-2, KB-G2-3, KB-G3-5 (Done)
-- **Acceptance:** Document 10 settings, schedules/missed-runs, templates,
-  Java runtimes, admin, notifications, and audit routes are implemented and
-  covered by authorized success/error tests.
-- **Evidence:** `tests/integration/test_document10_catalog_apis.py`,
-  `tests/integration/test_schema_migrations.py`, and
-  `tests/integration/test_scheduler_service.py` passed (25); scoped Ruff,
-  compile, and diff checks passed. Schedule, missed-run, template, Java
-  runtime, user/role/permission/device, notification, and audit routes have
-  authorized integration coverage. Manager backup/restore/restart/update/
-  rollback endpoints are registered but return `NOT_IMPLEMENTED` because the
-  application has no manager lifecycle service; implementation is tracked by
-  KB-G5-8.
-
 ### KB-G4-VERIFY — Close Gate 4 against its exact acceptance checks
 
 - **WBS/Docs:** WP 4.1–4.4; Documents 6, 8, 9, 11, and 14.
@@ -493,25 +509,77 @@ is integrated and reviewed.
   checks remain unverified because Windows denied symlink creation
   (`WinError 1314`); POSIX and live RCON/NAS integration were not run.
 
+### KB-G5-11 — Add the dedicated security acceptance suite
+
+- **WBS/Docs:** Document 11 §§1.2, 2, and 4.3; Documents 7 and 8 §9
+- **Priority:** P1 · **Owner:** Copilot agent Security-CI · **Updated:** 2026-11-07
+- **Depends on:** KB-G5-1, KB-G5-4, KB-G5-5 (Done)
+- **Status:** Review
+- **Acceptance:** dedicated security coverage for direct-route authz,
+  privilege escalation, CSRF/step-up expiry, throttling/lockout, Argon2id and
+  session rotation, encrypted secrets and response redaction, security
+  headers/non-loopback cookie behavior, last-Superadmin protection, and audit
+  immutability.
+- **Evidence:** `python -m pytest --no-cov -q
+  --basetemp=dev_artifacts/scratch/verify-security-final
+  tests/integration/test_gate5_acceptance.py tests/integration/test_auth.py
+  tests/integration/test_secrets.py tests/integration/test_audit.py
+  tests/integration/test_document10_catalog_apis.py` passed (53) on Windows.
+  Scoped Ruff and `git -c core.whitespace=cr-at-eol diff --check` passed.
+  Coverage includes HTTPS rejection without cookie issuance, Secure cookies,
+  CSP frame restrictions, API no-store, HTTP login lockout, last-Superadmin
+  protection, sync-secret redaction, Argon2id, session rotation, and immutable
+  audits. `.github/workflows/security.yml` runs this set in its own job.
+- **Remaining:** The Ubuntu and Python 3.11 matrix legs need a hosted run;
+  local verification used Windows / Python 3.13.
+
 ## To Do
 
 ### KB-G0-5 — Restore green repository static gates
 
 - **WBS/Docs:** Document 12 §8
-- **Priority:** P1 · **Owner:** Unassigned
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G0-1
+- **Status:** Blocked
 - **Acceptance:** Ruff, Black, isort, mypy, and import-linter pass on the
   configured project scope; add those commands to the documented/CI gate.
   Avoid broad formatting churn without coordinating it as a dedicated slice.
+- **Evidence:** Windows / Python 3.13 baseline: `python -m ruff check app tests`
+  reports 46 errors; `python -m black --check app tests` reports 76 files to
+  reformat after aligning Black with Document 12's single-quote style;
+  `python -m isort --check-only app tests` reports 9 files; `python -m mypy app`
+  reports 217 errors. `lint-imports` cannot start because the command is not
+  installed in the selected interpreter, though `import-linter` is declared in
+  `requirements-dev.txt`. Document 12 §8 now records the canonical commands.
+- **Blocker:** The remaining Black set includes protected shell/backup files;
+  mypy failures include process adapters and protected API slices. These files
+  and their tests are outside this card's authorized edit scope. Install the
+  declared dev dependencies and coordinate those feature slices before claiming
+  all gates green. Root security and adapter-conformance workflows now exist,
+  but there is no general static-gate workflow; the earlier workflow under
+  `legacy implementation/` still references the legacy layout.
 
 ### KB-G5-3 — Implement backup, restore, cleanup, and sync API catalog
 
 - **WBS:** WP 5.1; realignment G5-8/G5-11
-- **Priority:** P1 · **Owner:** Unassigned
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G5-1, KB-G5-2, KB-G4-VERIFY
+- **Status:** Review
 - **Acceptance:** Document 10 routes exist with authorization, request/
   response schemas, error mapping, and tests for backup, restore/rollback,
   cleanup preview/execute, and sync.
+- **Evidence:** `tests/integration/test_backup_catalog_api.py` covers durable
+  backup deletion, idempotent replay, retention rejection, deletion/audit, and
+  Superadmin + step-up force guards alongside the other catalog workflows.
+  The focused deletion test passed; all 4 module tests passed before the module
+  command exited on the global 80% coverage gate (44.46%). Scoped Ruff passed
+  on changed Python files. Backup-scope cleanup preview/execute is covered.
+- **Remaining:** Document 10 also defines `stale_worlds` and `logs` cleanup
+  scopes, but the route currently returns `CLEANUP_SCOPE_UNSUPPORTED` for both.
+  Documents 5/8 do not define candidate eligibility or retention parameters
+  for those scopes, so destructive cleanup requires a governing policy
+  decision; do not mark this card Done until that contract is resolved and
+  those workflows are implemented/tested.
 
 ### KB-G5-6 — Complete real workflows for the 17 shell modules
 
@@ -547,53 +615,64 @@ is integrated and reviewed.
 ### KB-G5-9 — Add cancellable-operation API behavior
 
 - **WBS/Docs:** WP 5.1; Documents 9 and 10 Operations
-- **Priority:** P1 · **Owner:** Unassigned
+- **Priority:** P1 · **Owner:** Copilot agent Sync-Cancel · **Updated:** 2026-11-07
 - **Depends on:** KB-G5-1, KB-G5-2 (Done)
+- **Status:** Done
 - **Acceptance:** implement `POST /api/operations/{op_id}/cancel` for only
-  cancellable operation types in `Queued` or `Validating`, enforce documented
-  authorization and idempotency, return the canonical conflict/error
-  envelopes otherwise, and verify terminal audit behavior.
+  cancellable operation types in `Queued` or `Validating` (Sync may also be
+  cancelled while `Running` per Document 8), enforce documented authorization
+  and idempotency, return the canonical conflict/error envelopes otherwise,
+  and verify terminal audit behavior.
+- **Evidence:** `python -m pytest --no-cov -q
+  tests/integration/test_world_management_api.py -k cancel` passed (10 passed,
+  2 deselected); the combined Sync/cancellation/metrics/slow-client unit set
+  passed (23). Scoped Ruff passed. Coverage includes cancellable queued types,
+  Running Sync cooperative cancellation, partial NAS upload removal, one
+  terminal audit, terminal failed SyncRecord/failed_transient attempt, and no
+  retry after cancellation.
+
+## Blocked
 
 ### KB-G5-10 — Verify metrics cadence and streaming deployment behavior
 
 - **WBS/Docs:** WP 5.2; Documents 10 MetricsCadence and 11 §§1.2, 4.1
-- **Priority:** P1 · **Owner:** Unassigned
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G5-7 (Done)
+- **Status:** Blocked
 - **Acceptance:** verify `/stream/metrics`, zero-client/all-worlds-off
   suppression, 15-second cached refresh, 1Hz fan-out while subscribed,
   heartbeat and slow-client behavior, and no per-client recomputation.
   Exercise the supported deployment proxy with buffering disabled and record
   reconnect/stream results; add or fix tests for uncovered behavior.
-
-### KB-G5-11 — Add the dedicated security acceptance suite
-
-- **WBS/Docs:** Document 11 §§1.2, 2, and 4.3; Documents 7 and 8 §9
-- **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** KB-G5-1, KB-G5-4, KB-G5-5
-- **Acceptance:** run a dedicated security suite/CI job for direct-route authz,
-  privilege escalation, CSRF and step-up expiry, throttling/lockout,
-  Argon2id and session rotation, encrypted secrets and response redaction,
-  security headers/non-loopback cookie behavior, last-Superadmin protection,
-  and audit immutability. Fix gaps without weakening assertions.
-
-### KB-DOC-STATUS — Reconcile current status and audit evidence
-
-- **WBS/Docs:** `IMPLEMENTATION_STATUS.md`, `realignment.txt`
-- **Priority:** P2 · **Owner:** Unassigned
-- **Depends on:** KB-G2-DOMAIN, KB-G2-MIGRATION, KB-G4-VERIFY
-- **Acceptance:** recorded test commands/counts match a dated fresh run; gate
-  claims agree with verified acceptance; obsolete packaging notes and
-  contradictions are explicitly superseded rather than silently retained.
-
-## Blocked
+- **Evidence:** `python -m pytest --no-cov -q -k
+  "not performance_acceptance_smoke"
+  tests/integration/test_phase3_control_plane.py
+  tests/integration/test_phase5_presentation_hardening.py
+  tests/integration/test_gate5_acceptance.py` passed (42 passed, 1 deselected)
+  on Windows. The MetricsService now refreshes a shared host/world snapshot
+  every 15 seconds when any world is active, publishes the cached snapshot at
+  1 Hz to connected clients, and performs no collection/emission when there
+  are no clients and all worlds are off. Tests cover a nonblank authenticated
+  `/stream/metrics` snapshot, cache refresh, 50-subscriber fan-out without
+  per-subscriber collection, slow-subscriber removal, and the 15-second
+  heartbeat. Scoped Ruff passed for the implementation and tests.
+- **Remaining:** The repository has no supported deployment proxy
+  configuration; `X-Accel-Buffering: no` is not evidence the proxy honors it.
+  Document 11's 50-client/1Hz numbers are not a benchmark result; calibrated
+  stream performance and CPU-flatness remain blocked on reference hardware.
 
 ### KB-G1-6 — Run C1–C14 on a POSIX host
 
 - **WBS:** WP 1.6; realignment G1-6
-- **Priority:** P1 · **Owner:** Unassigned
-- **Blocked by:** No POSIX host/CI result is available in this work session.
+- **Priority:** P1 · **Owner:** Copilot agent POSIX-CI · **Updated:** 2026-11-07
+- **Status:** Blocked
+- **Blocked by:** Hosted POSIX workflow result is still pending; the workflow
+  is configured but has not run on GitHub Actions.
 - **Acceptance:** run `tests/adapters/test_conformance.py` on a supported POSIX
   OS and attach the complete result; fix any platform-specific failures.
+- **Evidence:** `.github/workflows/adapter-conformance.yml` runs the suite on
+  `ubuntu-latest`; the local Windows invocation exceeded the runner limit, so
+  no platform conformance pass is claimed.
 
 ### KB-PERF-01 — Calibrate and pass performance release acceptance
 

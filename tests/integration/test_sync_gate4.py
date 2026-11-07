@@ -3,15 +3,25 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from app.domain.value_objects import OperationStatus, OperationType
+from app.domain.value_objects import (
+    ActorType,
+    OperationStatus,
+    OperationType,
+    SyncOutcome,
+    SyncRecordStatus,
+)
 from app.infrastructure.sync_transport.nas import NasSyncTransport
-from app.ports.sync_transport import PermanentSyncTransportError
-from app.services.operations import OperationService
+from app.ports.sync_transport import (
+    PermanentSyncTransportError,
+    SyncTransportCancelled,
+)
+from app.services.operations import OperationInput, OperationService
 from app.services.sync import SyncError, SyncService
 from tests.integration.test_gate4_acceptance import _create_operation, _seed_world
 
@@ -71,7 +81,7 @@ def test_sync_retry_timeline_and_attempt_history_are_write_once(
         def __init__(self) -> None:
             self.call_times: list[int] = []
 
-        def upload_file(self, _target_id, _source_path) -> None:
+        def upload_file(self, _target_id, _source_path, _cancel_event=None) -> None:
             self.call_times.append(int(clock.now()))
             if len(self.call_times) < 3:
                 raise OSError('temporary NAS outage')
@@ -133,7 +143,11 @@ def test_daily_transfer_cap_stops_sync_without_touching_local_artifact(
         type(
             'Transport',
             (),
-            {'upload_file': lambda _self, _target, source: transport_calls.append(Path(source))},
+            {
+                'upload_file': lambda _self, _target, source, _cancel_event=None: (
+                    transport_calls.append(Path(source))
+                )
+            },
         )(),
         clock,
         sleeper=_fake_wait(clock, []),
@@ -165,7 +179,7 @@ def test_transport_failure_does_not_invalidate_local_backup(
     delays: list[float] = []
 
     class FailingTransport:
-        def upload_file(self, _target_id, _source_path) -> None:
+        def upload_file(self, _target_id, _source_path, _cancel_event=None) -> None:
             raise OSError('NAS unreachable')
 
     sync_id = SyncService(
@@ -194,7 +208,7 @@ def test_permanent_transport_failure_is_recorded_without_retry(
     calls: list[Path] = []
 
     class MisconfiguredTransport:
-        def upload_file(self, _target_id, source_path) -> None:
+        def upload_file(self, _target_id, source_path, _cancel_event=None) -> None:
             calls.append(Path(source_path))
             raise PermanentSyncTransportError('target configuration is invalid')
 
@@ -247,3 +261,136 @@ def test_mounted_nas_copies_artifact_basename_under_target_root(
     assert sorted(path.name for path in target_root.iterdir()) == [
         Path(artifact.storage_path).name
     ]
+
+
+def test_running_sync_cancellation_stops_transfer_and_retry(
+    store, clock, tmp_path
+):
+    artifact = _create_artifact(store, clock, tmp_path)
+    operations = OperationService(store, clock)
+    sync_operation = operations.create(
+        OperationInput(
+            op_type=OperationType.SYNC,
+            actor_type=ActorType.SYSTEM,
+            data={'artifact_id': artifact.artifact_id},
+        ),
+        initial_status=OperationStatus.RUNNING,
+        allow_world_conflict=True,
+    )
+    transfer_started = threading.Event()
+    calls: list[Path] = []
+
+    class CooperativeTransport:
+        def upload_file(self, _target_id, source_path, cancel_event=None) -> None:
+            calls.append(Path(source_path))
+            transfer_started.set()
+            if cancel_event is None or not cancel_event.wait(timeout=5):
+                raise AssertionError('transfer did not receive cancellation')
+            raise SyncTransportCancelled('NAS upload cancelled')
+
+    service = SyncService(store, CooperativeTransport(), clock, operations)
+    sync_ids: list[str] = []
+    errors: list[BaseException] = []
+
+    def dispatch() -> None:
+        try:
+            sync_ids.append(
+                service.dispatch_sync(
+                    artifact.artifact_id,
+                    'cancel-nas',
+                    operation_id=sync_operation['op_id'],
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=dispatch)
+    worker.start()
+    assert transfer_started.wait(timeout=5)
+    cancelled = operations.cancel(sync_operation['op_id'])
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert calls == [Path(artifact.storage_path)]
+    assert cancelled['status'] == OperationStatus.CANCELLED.value
+    assert len(sync_ids) == 1
+    sync_id = sync_ids[0]
+    record = store.reader().execute(
+        'SELECT status, finished_at FROM sync_records WHERE sync_id = ?',
+        (sync_id,),
+    ).fetchone()
+    assert record['status'] == SyncRecordStatus.FAILED.value
+    assert record['finished_at'] is not None
+    attempts = store.reader().execute(
+        'SELECT attempt_number, outcome FROM sync_attempts WHERE sync_id = ?',
+        (sync_id,),
+    ).fetchall()
+    assert [(row['attempt_number'], row['outcome']) for row in attempts] == [
+        (1, SyncOutcome.FAILED_TRANSIENT.value)
+    ]
+    assert store.reader().execute(
+        'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
+        (sync_operation['op_id'],),
+    ).fetchone()[0] == 1
+
+
+def test_mounted_nas_cancellation_removes_partial_upload(
+    store, clock, tmp_path, monkeypatch
+):
+    artifact = _create_artifact(store, clock, tmp_path)
+    source_path = Path(artifact.storage_path)
+    source_path.write_bytes(b'a' * (2 * 1024 * 1024))
+    target_root = tmp_path / 'mounted' / 'cancelled-nas-share'
+    connection = store.writer()
+    connection.execute(
+        """
+        INSERT INTO sync_targets (
+            sync_target_id, scope, world_id, target_type, config, secret_id,
+            enabled, version, deleted_at, deleted_by, created_at, updated_at
+        ) VALUES (?, 'global', NULL, 'nas', ?, 'gate4_secret',
+                  1, 1, NULL, NULL, ?, ?)
+        """,
+        (
+            'cancelled-mounted-nas',
+            json.dumps({'path': str(target_root)}),
+            int(clock.now()),
+            int(clock.now()),
+        ),
+    )
+    connection.commit()
+    cancel_event = threading.Event()
+    original_open = Path.open
+
+    class CancellingReader:
+        def __init__(self, source):
+            self._source = source
+            self._cancel_after_read = True
+
+        def __enter__(self):
+            self._source.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._source.__exit__(*args)
+
+        def read(self, size=-1):
+            chunk = self._source.read(size)
+            if self._cancel_after_read:
+                self._cancel_after_read = False
+                cancel_event.set()
+            return chunk
+
+    def open_with_cancellation(path, *args, **kwargs):
+        opened = original_open(path, *args, **kwargs)
+        return CancellingReader(opened) if path == source_path else opened
+
+    monkeypatch.setattr(Path, 'open', open_with_cancellation)
+
+    with pytest.raises(SyncTransportCancelled):
+        NasSyncTransport(store).upload_file(
+            'cancelled-mounted-nas', source_path, cancel_event
+        )
+
+    assert not (target_root / source_path.name).exists()
+    assert list(target_root.iterdir()) == []

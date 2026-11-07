@@ -123,6 +123,14 @@ Referenced by Doc 13 (C9/C10), Doc 10 (`OP_TIMEOUT`, `AUTH_THROTTLED`), Doc 11 (
 | CrashDetected | N/A (system observation) | N/A | No |
 | DeleteWorld | No | Configurable, scales with world size — default 30min | While `Queued`/`Validating` only, before file removal |
 
+- **Running Sync cancellation:** the in-flight attempt is appended once with
+  outcome `failed_transient` and a cancellation message; the `SyncRecord`
+  becomes terminal `failed`; the Operation becomes terminal `Cancelled` and
+  receives its single terminal audit. No automatic retry follows. A later
+  operator retry creates a new Sync Operation and SyncRecord. The source
+  artifact remains unchanged, and the NAS adapter removes any unpublished
+  temporary upload before returning.
+
 - General rule: `Cancelled` only reachable from `Queued`/`Validating`. Nothing cancellable once `Running` — real-world side effects can't be safely unwound. Kill is the safe way to interrupt a `running` world; in-flight Backup/Restore must run to terminal.
 - **Kill is the single exception to "nothing is cancellable once `Running`":** dispatching Kill atomically cancels in-flight `Stop` (`error_code = 'superseded_by_kill'`) and becomes sole in-flight Operation, keeping the derived world lock unambiguous (Doc 9 §6, Doc 6 §2.4). Kill's own runtime-process interruption is its `Running` work and is not cancelled.
 - Sync is the deliberate exception to both general rules (auto-retry, cancel-while-Running) — network transfer failures/aborts carry no irreversibility risk; the thing being moved already exists safely elsewhere.

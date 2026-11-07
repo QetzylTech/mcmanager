@@ -14,6 +14,7 @@ from flask import Blueprint, Response, current_app, g, jsonify, request
 from app.commands.world import WorldLifecycleCommands
 from app.domain.value_objects import OperationType, ServerType, WorldState
 from app.services.diagnostics import DiagnosticsService
+from app.services.operations import OperationNotCancellableError, OperationStateError
 from app.services.worlds import (
     WorldConflictError,
     WorldLifecycleError,
@@ -240,6 +241,25 @@ def get_operation(op_id: str):
     return ok({'operation': _operation_payload(operation)})
 
 
+@system_bp.post('/operations/<op_id>/cancel')
+def cancel_operation(op_id: str):
+    try:
+        operation = _container().operations.cancel(op_id)
+    except OperationStateError:
+        return error('OP_NOT_FOUND', 'Operation not found.', meta={'op_id': op_id})
+    except OperationNotCancellableError:
+        return error(
+            'OP_NOT_CANCELLABLE',
+            'Operation cannot be cancelled in its current state.',
+            details={'op_id': op_id},
+            meta={'op_id': op_id},
+        )
+    return ok(
+        {'operation': _operation_payload(operation)},
+        meta={'op_id': op_id},
+    )
+
+
 @system_bp.post('/worlds/<world_id>/start')
 def world_start(world_id: str):
     idempotency_key = _request_idempotency_key()
@@ -274,12 +294,16 @@ def world_eula_accept(world_id: str):
             'Explicit EULA acceptance is required.',
             status=400,
         )
+    idempotency_key = _request_idempotency_key()
+    if idempotency_key is None:
+        return error('VALIDATION_ERROR', 'Idempotency-Key must not be empty.', status=400)
     try:
-        operation = _container().worlds.accept_eula(
+        operation, replayed = _container().worlds.accept_eula(
             world_id=world_id,
             actor_user_id=g.current_user_id,
             accepted=True,
             ip=request.remote_addr,
+            idempotency_key=idempotency_key,
         )
     except WorldNotFoundError:
         return error('NOT_FOUND', 'World not found.', status=404)
@@ -289,7 +313,11 @@ def world_eula_accept(world_id: str):
         return error('EULA_ACCEPT_FAILED', str(exc), status=422)
     return ok(
         {'world_id': world_id, 'eula': 'accepted', 'operation': operation},
-        meta={'op_id': operation['op_id']},
+        status=200,
+        meta={
+            'op_id': operation['op_id'],
+            'idempotency_key': operation.get('idempotency_key') or idempotency_key,
+        },
     )
 
 

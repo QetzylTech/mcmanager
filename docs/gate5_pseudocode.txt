@@ -8,9 +8,10 @@ current route contract or implementation wherever they differ.
 Current application paths are app/web/{middleware.py,errors.py,api/,streams/},
 app/shell/{routes.py,templates/,static/}, app/services/realtime.py and
 app/__init__.py. Implemented API scope includes auth/session, system and page
-reads, world list/detail and lifecycle actions, operation reads, and SSE
-endpoints; the full Document 10 catalog and real page workflows remain
-incomplete. Middleware validates the live session and a session-bound
+reads, world list/detail and lifecycle actions, operation reads, backup/
+restore/backup-cleanup/sync catalog routes, cancellation, and SSE endpoints;
+the full Document 10 catalog and real page workflows remain incomplete.
+Middleware validates the live session and a session-bound
 double-submit CSRF token, applies the currently wired admin/step-up checks and
 security headers. Do not copy the sample's unbound token check, route names,
 cookie policy or response envelope: Document 10's cookie/auth/error/status
@@ -22,8 +23,10 @@ complete. Shell fragments are navigable, but most remain scaffolds.
 The sample metrics numbers are not approved thresholds. Document 11 requires
 a measured reference-host profile, 300-second CPU/RSS evidence, 50-client
 stream fan-out and 1000-lines/sec log ingestion with documented limits. The
-profile is unavailable; do not fabricate thresholds or claim the performance
-release gate passed. Everything below is retained as superseded historical
+metrics publisher now implements the local null/15-second/1-Hz cadence, but
+the reference profile and supported-proxy evidence are unavailable; do not
+fabricate thresholds or claim the performance release gate passed. Everything
+below is retained as superseded historical
 pseudocode, not a replacement for Documents 4–12 or the implementation.
 
 ================================================================================
