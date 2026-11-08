@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.bootstrap import build_container
 from app.domain.tuning import SCHEDULER_TICK_INTERVAL_S, SUPERVISOR_POLL_IDLE_S
@@ -98,14 +99,23 @@ def create_app(
     keyfile_path: str | Path,
     migrations_dir: str | Path | None = None,
     clock: Clock | None = None,
+    trusted_proxy_hops: int = 0,
 ) -> Flask:
     """Build the web app, register thin page/API/stream blueprints."""
+    if type(trusted_proxy_hops) is not int or trusted_proxy_hops < 0:
+        raise ValueError('trusted_proxy_hops must be a non-negative integer')
     app = Flask(
         __name__,
         template_folder='shell/templates',
         static_folder='shell/static',
         static_url_path='/static',
     )
+    if trusted_proxy_hops:
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=trusted_proxy_hops,
+            x_proto=trusted_proxy_hops,
+        )
     container = build_container(
         database_path=database_path,
         keyfile_path=keyfile_path,

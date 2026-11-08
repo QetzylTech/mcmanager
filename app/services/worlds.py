@@ -55,6 +55,7 @@ from app.ports.minecraft import (
     MinecraftRconError,
     MinecraftRconPort,
     MinecraftServerPort,
+    parse_properties,
 )
 from app.ports.persistence import PersistencePort
 from app.ports.process_control import (
@@ -1371,12 +1372,9 @@ class WorldsService:
         props_path = world_dir / "server.properties"
         props: dict[str, str] = {}
         if props_path.exists():
-            for line in props_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or "=" not in stripped:
-                    continue
-                key, _, value = stripped.partition("=")
-                props[key.strip()] = value.strip()
+            props = parse_properties(
+                props_path.read_text(encoding="utf-8", errors="replace")
+            )
         props["enable-rcon"] = "true"
         props["rcon.port"] = str(rcon_port)
         props["rcon.password"] = password

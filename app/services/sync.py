@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from datetime import time as datetime_time
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from typing import Any
 
 from app.domain.tuning import SYNC_BACKOFF_BASE_S, SYNC_TRANSIENT_RETRIES
@@ -59,6 +59,8 @@ class SyncService:
         self._clock = clock or SystemClock()
         self._operations = operations or OperationService(store, self._clock)
         self._sleep = sleeper
+        self._transfer_reservation_lock = Lock()
+        self._reserved_transfer_bytes = 0
 
     def get_bytes_transferred_today(self) -> int:
         now = datetime.fromtimestamp(self._clock.now(), UTC)
@@ -105,47 +107,54 @@ class SyncService:
             raise SyncError('SYNC_CAP_EXCEEDED')
         target = self._resolve_target(target_id)
 
-        now = int(self._clock.now())
-        operation = self._operations.get(operation_id) if operation_id is not None else None
-        if operation_id is not None and operation is None:
-            raise SyncError(f'OP_NOT_FOUND: {operation_id}')
-        if operation is None:
-            operation = self._operations.create(
-                OperationInput(
-                    op_type=OperationType.SYNC,
-                    actor_type=ActorType.SYSTEM,
-                    world_id=artifact['world_id'],
-                    data={'artifact_id': artifact_id, 'sync_target_id': target_id},
+        transfer_size = int(artifact['size_bytes'])
+        self._reserve_transfer(transfer_size)
+        try:
+            now = int(self._clock.now())
+            operation = self._operations.get(operation_id) if operation_id is not None else None
+            if operation_id is not None and operation is None:
+                raise SyncError(f'OP_NOT_FOUND: {operation_id}')
+            if operation is None:
+                operation = self._operations.create(
+                    OperationInput(
+                        op_type=OperationType.SYNC,
+                        actor_type=ActorType.SYSTEM,
+                        world_id=artifact['world_id'],
+                        data={'artifact_id': artifact_id, 'sync_target_id': target_id},
+                    ),
+                    initial_status=OperationStatus.RUNNING,
+                    allow_world_conflict=True,
+                )
+            elif operation['status'] != OperationStatus.RUNNING.value:
+                operation = self._operations.transition(
+                    operation['op_id'], OperationStatus.RUNNING
+                )
+            sync_id = f'sy_{uuid.uuid4().hex[:16]}'
+            connection = self._store.writer()
+            connection.execute(
+                """
+                INSERT INTO sync_records (
+                    sync_id, artifact_id, sync_target_id, operation_id, status,
+                    started_at, finished_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+                """,
+                (
+                    sync_id,
+                    artifact_id,
+                    target['sync_target_id'],
+                    operation['op_id'],
+                    SyncRecordStatus.PENDING.value,
+                    now,
+                    now,
                 ),
-                initial_status=OperationStatus.RUNNING,
-                allow_world_conflict=True,
             )
-        elif operation['status'] != OperationStatus.RUNNING.value:
-            operation = self._operations.transition(
-                operation['op_id'], OperationStatus.RUNNING
-            )
-        sync_id = f'sy_{uuid.uuid4().hex[:16]}'
-        connection = self._store.writer()
-        connection.execute(
-            """
-            INSERT INTO sync_records (
-                sync_id, artifact_id, sync_target_id, operation_id, status,
-                started_at, finished_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
-            """,
-            (
-                sync_id,
-                artifact_id,
-                target['sync_target_id'],
-                operation['op_id'],
-                SyncRecordStatus.PENDING.value,
-                now,
-                now,
-            ),
-        )
-        connection.commit()
+            connection.commit()
 
-        cancel_event = self._operations.register_cancellation(operation['op_id'])
+            cancel_event = self._operations.register_cancellation(operation['op_id'])
+        except Exception:
+            self._release_transfer(transfer_size)
+            raise
+
         succeeded = False
         try:
             for attempt_number in range(1, SYNC_TRANSIENT_RETRIES + 1):
@@ -260,7 +269,19 @@ class SyncService:
                 )
         finally:
             self._operations.unregister_cancellation(operation['op_id'], cancel_event)
+            self._release_transfer(transfer_size)
         return sync_id
+
+    def _reserve_transfer(self, size_bytes: int) -> None:
+        with self._transfer_reservation_lock:
+            reserved_total = self.get_bytes_transferred_today() + self._reserved_transfer_bytes
+            if reserved_total + size_bytes > self.DAILY_TRANSFER_CAP_BYTES:
+                raise SyncError('SYNC_CAP_EXCEEDED')
+            self._reserved_transfer_bytes += size_bytes
+
+    def _release_transfer(self, size_bytes: int) -> None:
+        with self._transfer_reservation_lock:
+            self._reserved_transfer_bytes -= size_bytes
 
     def _is_cancelled(self, op_id: str, cancel_event: Event) -> bool:
         if cancel_event.is_set():

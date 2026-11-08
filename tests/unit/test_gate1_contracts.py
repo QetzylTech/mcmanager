@@ -11,6 +11,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from app.domain.value_objects import Signal
+from app.platform.process import windows as windows_process
 from app.platform.process.base import BaseProcessAdapter
 from app.platform.process.posix import PosixHandle
 from app.platform.process.tailing import (
@@ -19,9 +20,10 @@ from app.platform.process.tailing import (
     LogStreamTailer,
     ProcessLineReader,
     ingest_log_line,
+    read_durable_log,
 )
-from app.platform.process.windows import WindowsHandle
-from app.ports.process_control import ProcessHandle, SendResult
+from app.platform.process.windows import WindowsHandle, WindowsProcessAdapter
+from app.ports.process_control import ProbeFingerprint, ProcessHandle, SendResult
 from app.services.save_coordination import RconSaveCoordinator, RuntimeSessionRcon
 from app.services.worlds import WorldsService
 from tests.adapters.fake_server.fake_adapter import FakeHandle
@@ -39,6 +41,28 @@ def test_process_handle_field_names_are_uniform():
     assert set(ProcessHandle.__annotations__) == _HANDLE_FIELDS
     for handle_type in (PosixHandle, WindowsHandle, FakeHandle):
         assert {field.name for field in fields(handle_type)} >= _HANDLE_FIELDS
+
+
+def test_windows_fingerprint_reattaches_named_job(monkeypatch):
+    class Process:
+        def is_running(self):
+            return True
+
+    adapter = WindowsProcessAdapter()
+    monkeypatch.setattr(windows_process, '_pid_matches', lambda _pid, _epoch: True)
+    monkeypatch.setattr(windows_process.psutil, 'Process', lambda _pid: Process())
+    monkeypatch.setattr(windows_process, '_open_job_object', lambda world_id: 731)
+
+    result = adapter.probe(
+        'world-reattach',
+        '',
+        fingerprint=ProbeFingerprint(pid=1234, spawn_epoch=1.0),
+    )
+
+    assert result.found
+    assert isinstance(result.handle, WindowsHandle)
+    assert result.handle.job_handle == 731
+    assert adapter._job_handles['world-reattach'] == 731
 
 
 def test_send_signal_rechecks_identity_immediately_before_delivery(monkeypatch):
@@ -147,6 +171,30 @@ def test_verbose_logging_filters_only_debug_and_persists_session_lines(
     assert 'appended after restart' in (
         tmp_path / 'session.stderr.log'
     ).read_text(encoding='utf-8')
+
+
+def test_durable_log_reader_replays_by_utf8_byte_cursor(tmp_path):
+    path = tmp_path / 'session.log'
+    durable = DurableSessionLog(str(path))
+    durable.write('stdout', 'ready')
+    durable.write('stderr', 'world loaded: 界')
+
+    records, offset = read_durable_log(path)
+    assert [(channel, line) for _, _, channel, line in records] == [
+        ('stdout', 'ready'),
+        ('stderr', 'world loaded: 界'),
+    ]
+    first_record = path.read_bytes().splitlines(keepends=True)[0]
+    assert records[0][1] == len(first_record)
+    replayed, replay_offset = read_durable_log(path, records[0][1])
+    assert replayed == [records[1]]
+    assert replay_offset == offset
+
+    with path.open('ab') as handle:
+        handle.write(b'[stdout] partial')
+    partial, partial_offset = read_durable_log(path, offset)
+    assert partial == []
+    assert partial_offset == offset
 
 
 def test_graceful_stop_tries_rcon_before_stdin_fallback():

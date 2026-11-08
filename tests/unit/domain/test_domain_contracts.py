@@ -7,8 +7,10 @@ from pathlib import Path
 
 from app.domain.deletion_tiers import DeletionTier, get_deletion_tier
 from app.domain.value_objects import (
+    EulaState,
     OperationStatus,
     OperationType,
+    ServerReadinessLevel,
     WorldState,
 )
 
@@ -79,6 +81,22 @@ def test_world_state_enum_matches_the_documented_closed_set() -> None:
 def test_operation_enums_match_the_documented_closed_sets() -> None:
     assert {operation.value for operation in OperationType} == EXPECTED_OPERATION_TYPES
     assert {status.value for status in OperationStatus} == EXPECTED_OPERATION_STATUSES
+
+
+def test_eula_and_server_readiness_enums_match_the_documented_contract() -> None:
+    assert {state.value for state in EulaState} == {
+        'not_present',
+        'unaccepted',
+        'accepted',
+    }
+    assert [level.rank for level in ServerReadinessLevel] == list(range(5))
+    assert [level.value for level in ServerReadinessLevel] == [
+        'process_alive',
+        'port_bound',
+        'rcon_ready',
+        'probe_ok',
+        'operationally_valid',
+    ]
 
 
 def test_deletion_tiers_match_the_complete_documented_classification() -> None:

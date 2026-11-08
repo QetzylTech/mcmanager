@@ -20,10 +20,12 @@ lazy.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -45,6 +47,8 @@ from app.ports.process_control import (
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
 JobObjectExtendedLimitInformation = 9
+JOB_OBJECT_ALL_ACCESS = 0x001F001F
+ERROR_ALREADY_EXISTS = 183
 
 _IDENTITY_TOLERANCE_S = 1.0
 
@@ -109,6 +113,11 @@ def _load_kernel32() -> dict[str, object] | None:
 
     _setup('CreateJobObjectW', [wintypes.LPVOID, wintypes.LPCWSTR], wintypes.HANDLE)
     _setup(
+        'OpenJobObjectW',
+        [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR],
+        wintypes.HANDLE,
+    )
+    _setup(
         'SetInformationJobObject',
         [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD],
         wintypes.BOOL,
@@ -121,6 +130,7 @@ def _load_kernel32() -> dict[str, object] | None:
 
     _kernel32 = {
         'create_job': kernel32.CreateJobObjectW,
+        'open_job': kernel32.OpenJobObjectW,
         'set_info': kernel32.SetInformationJobObject,
         'assign': kernel32.AssignProcessToJobObject,
         'terminate_job': kernel32.TerminateJobObject,
@@ -131,14 +141,23 @@ def _load_kernel32() -> dict[str, object] | None:
     return _kernel32
 
 
-def _create_job_object() -> int:
-    """Create a Job Object with KILL_ON_JOB_CLOSE **not** set (ruling 10)."""
+def _job_object_name(world_id: str) -> str:
+    world_hash = hashlib.sha256(world_id.encode('utf-8')).hexdigest()
+    return f'Local\\McManager-{world_hash}'
+
+
+def _create_job_object(world_id: str) -> int:
+    """Create a named job without KILL_ON_JOB_CLOSE (ruling 10)."""
     api = _load_kernel32()
     if not api:
         raise OSError('kernel32 unavailable (non-Windows host)')
-    job = api['create_job'](None, None)  # type: ignore[operator]
+    ctypes.set_last_error(0)
+    job = api['create_job'](None, _job_object_name(world_id))  # type: ignore[operator]
     if not job:
         raise OSError(ctypes.get_last_error() or 1, 'CreateJobObject failed')
+    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        api['close_handle'](job)  # type: ignore[operator]
+        raise OSError(ERROR_ALREADY_EXISTS, 'Job Object already exists for world')
 
     info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
     info.BasicLimitInformation.LimitFlags = 0
@@ -149,6 +168,14 @@ def _create_job_object() -> int:
         api['close_handle'](job)  # type: ignore[operator]
         raise OSError(ctypes.get_last_error() or 1, 'SetInformationJobObject failed')
     return int(job)
+
+
+def _open_job_object(world_id: str) -> int | None:
+    api = _load_kernel32()
+    if not api:
+        return None
+    job = api['open_job'](JOB_OBJECT_ALL_ACCESS, False, _job_object_name(world_id))  # type: ignore[operator]
+    return int(job) if job else None
 
 
 def _assign_process_to_job(job_handle: int, process_handle: int) -> None:
@@ -195,7 +222,10 @@ class WindowsProcessAdapter(BaseProcessAdapter):
         argv = request.launch_command
         if not isinstance(argv, list):
             return SpawnResult(handle=None, started_at=time.time(), spawn_error='no_argv')
-        job_handle = _create_job_object()
+        try:
+            job_handle = _create_job_object(request.world_id)
+        except OSError as exc:
+            return SpawnResult(handle=None, started_at=time.time(), spawn_error=str(exc))
         try:
             popen = subprocess.Popen(
                 request.launch_command,
@@ -236,10 +266,8 @@ class WindowsProcessAdapter(BaseProcessAdapter):
         api = _load_kernel32()
         if not api:
             return
-        try:
+        with suppress(ctypes.ArgumentError, OSError):
             api['close_handle'](job_handle)  # type: ignore[operator]
-        except (ctypes.ArgumentError, OSError):
-            pass
 
     def _start_readers(self, entry: RegistryEntry, request: SpawnRequest) -> None:
         popen = entry.popen
@@ -344,12 +372,15 @@ class WindowsProcessAdapter(BaseProcessAdapter):
                 argv = []
             if not any(fingerprint.launch_marker in arg for arg in argv):
                 return ProbeResult(found=False)
+        job_handle = _open_job_object(world_id)
+        if job_handle is None:
+            return ProbeResult(found=False)
         handle = WindowsHandle(
             world_id=world_id,
             pid=fingerprint.pid,
             spawn_epoch=fingerprint.spawn_epoch,
             process_group_id=fingerprint.pid,
-            job_handle=0,  # job handle cannot be rebuilt from a pid
+            job_handle=job_handle,
         )
         entry = RegistryEntry(
             handle=handle,
@@ -358,6 +389,7 @@ class WindowsProcessAdapter(BaseProcessAdapter):
             spawn_epoch=fingerprint.spawn_epoch,
         )
         self._registry.register(entry)
+        self._job_handles[world_id] = job_handle
         return ProbeResult(found=True, handle=handle, matched_launch=True)
 
     def close_handle(self, handle: ProcessHandle) -> None:
@@ -381,7 +413,7 @@ class WindowsProcessAdapter(BaseProcessAdapter):
 
         for channel in entry.buffer.channels():
             buffer = entry.buffer.channel(channel)
-            for line_no, line in buffer.tail(since_offset):
+            for _line_no, line in buffer.tail(since_offset):
                 if callable(sink):
                     sink(
                         world_id=handle.world_id,

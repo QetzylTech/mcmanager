@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import psutil
@@ -99,10 +100,8 @@ def cleanup(adapter, handle) -> None:
         if status.alive:
             adapter.terminate(handle, graceful_deadline_s=3)
     finally:
-        try:
+        with suppress(Exception):
             adapter.close_handle(handle)
-        except Exception:
-            pass
 
 
 # --------------------------------------------------------------------------- C1
@@ -291,9 +290,12 @@ def test_c6_orphan_containment(kind, tmp_path):
         try:
             assert wait_for(lambda: adapter.poll(handle).alive, 10)
             assert wait_for(lambda: _grandchildren(handle.pid), 10)
+            descendant_pids = _grandchildren(handle.pid)
             outcome = adapter.terminate(handle, graceful_deadline_s=0)
             assert outcome.resolved and outcome.exit_class is ExitClass.FORCED
-            assert wait_for(lambda: not _grandchildren(handle.pid), 10)
+            assert wait_for(
+                lambda: not any(_pid_is_running(pid) for pid in descendant_pids), 10
+            )
         finally:
             cleanup(adapter, handle)
     else:
@@ -316,6 +318,13 @@ def _grandchildren(pid: int) -> list[int]:
         return [child.pid for child in parent.children(recursive=True)]
     except psutil.NoSuchProcess:
         return []
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
 
 
 # --------------------------------------------------------------------------- C7
@@ -436,8 +445,15 @@ def test_c11_boot_reconciliation(kind, tmp_path):
     world_id = f'c11-{kind}'
     port = free_port()
     rcon_port = free_port()
+    extra_args = ('--spawn-grandchild',) if kind == 'native' else ()
     result = adapter.spawn(
-        build_request(world_id, str(tmp_path), port, '--rcon-port=%d' % rcon_port)
+        build_request(
+            world_id,
+            str(tmp_path),
+            port,
+            *extra_args,
+            f'--rcon-port={rcon_port}',
+        )
     )
     assert result.handle is not None
     handle = result.handle
@@ -455,6 +471,17 @@ def test_c11_boot_reconciliation(kind, tmp_path):
         assert probe.found, 'boot reconciliation failed to re-attach a live world'
         assert probe.matched_launch
         assert boot_adapter.poll(probe.handle).alive
+
+        if kind == 'native' and sys.platform.startswith('win'):
+            descendant_pids = _grandchildren(handle.pid)
+            assert descendant_pids, 'fake server did not create its child process'
+            adapter.close_handle(handle)
+            outcome = boot_adapter.terminate(probe.handle, graceful_deadline_s=0)
+            assert outcome.resolved, outcome.error
+            assert wait_for(
+                lambda: not any(_pid_is_running(pid) for pid in descendant_pids), 10
+            )
+            return
 
         # The stdin pipe cannot be rebuilt after re-attachment (Doc 13
         # section 5.1) — RCON is the documented control channel instead.

@@ -97,14 +97,19 @@ def test_health_monitors_scheduler_sqlite_writer_and_process_adapter(
         response = app.test_client().get("/api/health")
         payload = response.get_json()
         assert response.status_code == 200
-        data = payload["data"]
-        assert data["scheduler"]["status"] == "ok"
-        assert data["scheduler"]["tick_interval_seconds"] == 30
-        assert data["sqlite_writer"]["status"] == "ok"
-        assert data["process_adapter"]["status"] == "ok"
-        assert data["process_adapter"]["adapter"]
-        assert data["reconciliation"]["status"] == "ok"
-        assert data["reconciliation"]["phase"] == "healthy"
+        assert payload["data"] == {"status": "ok", "db": "ok", "version": "dev"}
+
+        client, _headers = _authenticated_admin_client(app)
+        diagnostics = client.get("/api/diagnostics").get_json()["data"]
+        assert diagnostics["scheduler"]["status"] == "ok"
+        assert diagnostics["scheduler"]["tick_interval_seconds"] == 30
+        assert diagnostics["sqlite_writer"]["status"] == "ok"
+        assert diagnostics["process_adapter"]["status"] == "ok"
+        assert diagnostics["process_adapter"]["adapter"]
+        assert diagnostics["foreign_key_check"] == {"status": "ok", "violations": 0}
+        assert diagnostics["operation_backlog"] == {"queued": 0, "in_flight": 0}
+        assert diagnostics["reconciliation"]["status"] == "ok"
+        assert diagnostics["reconciliation"]["phase"] == "healthy"
     finally:
         next(app_iter, None)
 
@@ -126,9 +131,11 @@ def test_health_reports_reconciliation_failure(tmp_path, migrations_dir, clock, 
         with pytest.raises(RuntimeError, match="process probe failed"):
             container.reconciliation.reconcile()
 
-        response = app.test_client().get("/api/health")
+        assert app.test_client().get("/api/health").status_code == 200
+        client, _headers = _authenticated_admin_client(app)
+        response = client.get("/api/diagnostics")
         payload = response.get_json()
-        assert response.status_code == 503
+        assert response.status_code == 200
         assert payload["data"]["reconciliation"] == {
             "status": "down",
             "phase": "failed",
@@ -150,7 +157,11 @@ def test_health_reports_degrades_to_503_when_writer_down(tmp_path, migrations_di
         app.extensions["mcmanager_shutdown"]()
         response = client.get("/api/health")
         assert response.status_code == 503
-        assert response.get_json()["data"]["sqlite_writer"]["status"] == "down"
+        assert response.get_json()["data"] == {
+            "status": "degraded",
+            "db": "down",
+            "version": "dev",
+        }
     finally:
         next(app_iter, None)
 

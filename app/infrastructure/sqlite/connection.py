@@ -97,6 +97,18 @@ class SqliteStore(PersistencePort):
             connection = self._readers[-1]
         return connection
 
+    def backup_to(self, target: str) -> None:
+        """Create a consistent SQLite snapshot using SQLite's backup API."""
+        destination_path = Path(target)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination = sqlite3.connect(str(destination_path), check_same_thread=False)
+        try:
+            destination.execute('PRAGMA foreign_keys = ON')
+            destination.execute(f'PRAGMA busy_timeout = {self._busy_timeout_ms}')
+            self.writer().backup(destination)
+        finally:
+            destination.close()
+
     # -- transaction helpers ---------------------------------------------------
 
     def transaction(self) -> sqlite3.Connection:

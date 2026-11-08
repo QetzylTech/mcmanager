@@ -36,6 +36,7 @@ def gate5_app(migrations_dir, clock, monkeypatch):
             keyfile_path=keyfile_path,
             migrations_dir=migrations_dir,
             clock=clock,
+            trusted_proxy_hops=1,
         )
         yield app
     finally:
@@ -83,6 +84,16 @@ def test_session_and_stream_routes_reject_anonymous_requests(gate5_app):
     assert session_response.status_code == 401
     _json_error(session_response, "AUTH_SESSION_INVALID")
     assert stream_response.status_code == 401
+
+
+def test_first_run_setup_status_is_public_and_read_only(gate5_app):
+    response = gate5_app.test_client().get("/api/setup")
+
+    assert response.status_code == 200
+    assert response.json["data"] == {
+        "setup_completed": False,
+        "first_superadmin_required": True,
+    }
 
 
 @pytest.mark.parametrize(
@@ -394,6 +405,22 @@ def test_non_loopback_http_is_rejected_and_https_csrf_cookie_is_secure(gate5_app
     assert login.status_code == 201
     cookies = login.headers.getlist("Set-Cookie")
     assert all("; Secure" in cookie for cookie in cookies)
+
+
+def test_trusted_proxy_https_headers_produce_secure_csrf_cookie(gate5_app):
+    response = gate5_app.test_client().get(
+        "/",
+        headers={
+            "X-Forwarded-For": "192.0.2.10",
+            "X-Forwarded-Proto": "https",
+        },
+    )
+
+    assert response.status_code == 200
+    assert any(
+        cookie.startswith("csrf_token=") and "; Secure" in cookie
+        for cookie in response.headers.getlist("Set-Cookie")
+    )
 
 
 def test_metrics_stream_starts_with_nonblank_snapshot(gate5_app):

@@ -227,6 +227,72 @@ def test_cancel_requires_authentication_and_admin_role(world_api_app):
     assert forbidden.get_json()["error"]["code"] == "AUTH_FORBIDDEN"
 
 
+def test_operation_catalog_routes_filter_page_and_return_canonical_errors(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, _csrf = _admin_client(world_api_app)
+    seed_world(container.store, world_id="operation-api-world")
+    actor_user_id = client.get("/api/session").json["data"]["user_id"]
+    first = container.operations.create(
+        OperationInput(
+            op_type=OperationType.START,
+            actor_type=ActorType.USER,
+            actor_user_id=actor_user_id,
+            world_id="operation-api-world",
+            idempotency_key="operation-api-start",
+            data={"source": "api-test"},
+        ),
+        initial_status=OperationStatus.QUEUED,
+    )
+    container.operations.create(
+        OperationInput(op_type=OperationType.BACKUP, actor_type=ActorType.SYSTEM),
+        initial_status=OperationStatus.RUNNING,
+    )
+
+    listing = client.get(
+        "/api/operations?world_id=operation-api-world&op_type=Start&status=Queued"
+        f"&actor_user_id={actor_user_id}&sort=-created_at&limit=1"
+    )
+    assert listing.status_code == 200
+    assert listing.json["data"]["operations"][0]["op_id"] == first["op_id"]
+    assert listing.json["data"]["operations"][0]["data"] == {"source": "api-test"}
+    assert listing.json["meta"]["pagination"] == {"limit": 1, "offset": 0, "total": 1}
+
+    world_listing = client.get("/api/worlds/operation-api-world/operations")
+    assert world_listing.status_code == 200
+    assert len(world_listing.json["data"]["operations"]) == 1
+    assert client.get("/api/worlds/missing/operations").json["error"]["code"] == "WORLD_NOT_FOUND"
+    assert client.get("/api/operations?sort=-unknown").json["error"]["code"] == "VALIDATION_ERROR"
+    assert client.get("/api/operations?status=unknown").json["error"]["code"] == "VALIDATION_ERROR"
+    assert client.get("/api/operations/missing").json["error"]["code"] == "OP_NOT_FOUND"
+
+
+def test_system_stats_use_cached_metrics_snapshot(world_api_app, monkeypatch):
+    client, _csrf = _admin_client(world_api_app)
+    snapshot = {
+        "metrics": {
+            "cpu_pct": 12.5,
+            "cpu_per_core_pct": [12.5],
+            "ram_mb": 256.0,
+            "storage_pct": 40.0,
+            "worlds_count": 3,
+            "world_states": {"off": 3},
+            "at": 1234,
+        },
+        "freshness": 1234,
+    }
+    monkeypatch.setattr(
+        world_api_app.extensions["mcmanager_container"].metrics,
+        "stream_snapshot",
+        lambda: snapshot,
+    )
+
+    response = client.get("/api/system/stats")
+
+    assert response.status_code == 200
+    assert response.json["data"] == snapshot["metrics"]
+    assert response.json["meta"]["freshness"] == snapshot["freshness"]
+
+
 def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     container = world_api_app.extensions["mcmanager_container"]
     client, csrf = _admin_client(world_api_app)

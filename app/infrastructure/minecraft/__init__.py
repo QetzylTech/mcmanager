@@ -10,8 +10,8 @@ from app.infrastructure.minecraft.capabilities import (
 from app.infrastructure.minecraft.eula import accept, current_state, provision_eula_file
 from app.infrastructure.minecraft.gate import (
     ERROR_EULA_NOT_ACCEPTED,
-    ERROR_JAVA_INCOMPATIBLE,
     ERROR_JAR_MISSING,
+    ERROR_JAVA_INCOMPATIBLE,
     ERROR_PORT_CONFLICT,
     ERROR_WORLD_DIR_MISSING,
     GateResult,
@@ -33,8 +33,10 @@ from app.infrastructure.minecraft.properties_schema import (
     allowed_keys,
     is_valid_key,
     is_valid_value,
+    parse_properties,
     validate_properties,
 )
+from app.infrastructure.minecraft.rcon import SAFE_COMMANDS, RconClient, RconError
 from app.infrastructure.minecraft.readiness import (
     DEFAULT_TARGET_LEVELS,
     build_state,
@@ -42,7 +44,6 @@ from app.infrastructure.minecraft.readiness import (
     port_is_bound,
     target_level_for,
 )
-from app.infrastructure.minecraft.rcon import RconClient, RconError, SAFE_COMMANDS
 
 __all__ = [
     'CAPABILITY_MATRIX',
@@ -73,6 +74,8 @@ __all__ = [
     'is_valid_value',
     'java_compatible',
     'port_is_bound',
+    'parse_properties',
+    'ping_protocol',
     'provision_eula_file',
     'recommended_java',
     'target_level_for',

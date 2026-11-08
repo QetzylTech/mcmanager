@@ -17,6 +17,7 @@ from app.domain.value_objects import (
 )
 from app.ports.clock import Clock
 from app.ports.persistence import PersistencePort
+from app.services.notifications import NotificationService
 from app.services.operations import OperationConflictError, OperationInput, OperationService
 
 _CONFLICTING_SCHEDULE_OPERATION_TYPES = (
@@ -45,11 +46,16 @@ class SchedulerService:
     tick_interval_seconds = SCHEDULER_TICK_INTERVAL_S
 
     def __init__(
-        self, store: PersistencePort, clock: Clock, operations: OperationService
+        self,
+        store: PersistencePort,
+        clock: Clock,
+        operations: OperationService,
+        notifications: NotificationService | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._operations = operations
+        self._notifications = notifications
 
     def tick(self) -> SchedulerTickResult:
         now = int(self._clock.now())
@@ -160,6 +166,12 @@ class SchedulerService:
                     detected,
                 ),
             )
+            if self._notifications is not None:
+                self._notifications.publish_missed_run(
+                    schedule_name,
+                    world_id=schedule['world_id'],
+                    connection=connection,
+                )
             connection.commit()
         except Exception:
             connection.rollback()

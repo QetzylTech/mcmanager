@@ -14,9 +14,12 @@ from dataclasses import dataclass, field
 from app.domain.value_objects import ServerType
 from app.ports.minecraft import (
     PropertySpec,
+    _version_tuple,
     default_property_specs,
     validate_property_schema,
-    _version_tuple,
+)
+from app.ports.minecraft import (
+    parse_properties as parse_properties,
 )
 
 # Core manager-owned properties (Doc 14 section 6.1) — touched only through
@@ -124,7 +127,16 @@ def validate_properties(
 
 def is_valid_key(key: str, server_type: ServerType, mc_version: str) -> bool:
     """Doc 14 section 6.2: is this property key valid for the version?"""
-    return key in _merged_specs()
+    specs = _merged_specs()
+    spec = specs.get(key)
+    if spec is None:
+        return False
+    if _version_tuple(mc_version) < _version_tuple(spec.min_supported_version):
+        return False
+    return not (
+        spec.max_supported_version is not None
+        and _version_tuple(mc_version) > _version_tuple(spec.max_supported_version)
+    )
 
 
 def is_valid_value(
@@ -144,4 +156,6 @@ def is_valid_value(
 
 def allowed_keys(server_type: ServerType, mc_version: str) -> list[str]:
     """All valid keys for the version, sorted (UI catalog)."""
-    return sorted(_merged_specs().keys())
+    return sorted(
+        key for key in _merged_specs() if is_valid_key(key, server_type, mc_version)
+    )

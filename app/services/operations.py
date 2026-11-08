@@ -854,6 +854,55 @@ class OperationService:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_operations(
+        self,
+        *,
+        world_id: str | None = None,
+        op_type: str | None = None,
+        status: str | None = None,
+        actor_user_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort: tuple[tuple[str, bool], ...] = (("created_at", True),),
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return a filtered operation page and its total row count."""
+        sort_columns = {
+            "created_at": "created_at",
+            "op_type": "op_type",
+            "status": "status",
+            "world_id": "world_id",
+            "actor_user_id": "actor_user_id",
+        }
+        if not sort or any(field not in sort_columns for field, _ in sort):
+            raise ValueError("unsupported operation sort field")
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("world_id", world_id),
+            ("op_type", op_type),
+            ("status", status),
+            ("actor_user_id", actor_user_id),
+        ):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                params.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        connection = self._store.reader()
+        total = connection.execute(
+            "SELECT count(*) FROM operations" + where, params
+        ).fetchone()[0]
+        ordering = ", ".join(
+            f"{sort_columns[field]} {'DESC' if descending else 'ASC'}"
+            for field, descending in sort
+        )
+        ordering += ", op_id DESC"
+        rows = connection.execute(
+            "SELECT * FROM operations" + where + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        return [dict(row) for row in rows], int(total)
+
     def get(self, op_id: str) -> dict[str, Any] | None:
         """Return the persisted operation record for a read-only API view."""
         row = self._store.reader().execute(

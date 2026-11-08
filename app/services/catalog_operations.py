@@ -12,6 +12,7 @@ from app.ports.persistence import PersistencePort
 from app.services.backup import BackupIntegrityError, BackupService
 from app.services.cleanup import CleanupService, RetentionError
 from app.services.configuration import ConfigurationService
+from app.services.manager_lifecycle import ManagerLifecycleService
 from app.services.operations import OperationService
 from app.services.restore import RestorePreconditionError, RestoreService
 from app.services.sync import SyncError, SyncService
@@ -37,6 +38,7 @@ class CatalogOperationDispatcher:
         restore: RestoreService,
         cleanup: CleanupService,
         sync: SyncService,
+        manager_lifecycle: ManagerLifecycleService,
     ) -> None:
         self._store = store
         self._clock = clock
@@ -46,6 +48,7 @@ class CatalogOperationDispatcher:
         self._restore = restore
         self._cleanup = cleanup
         self._sync = sync
+        self._manager_lifecycle = manager_lifecycle
 
     def dispatch_queued_operations(
         self, operation_types: tuple[OperationType, ...] | None = None
@@ -115,6 +118,10 @@ class CatalogOperationDispatcher:
             data = {}
         op_type = OperationType(operation["op_type"])
         if op_type is OperationType.BACKUP:
+            if operation["world_id"] is None and data.get("scope") == "manager":
+                return self._manager_lifecycle.execute_backup(
+                    operation_id=operation["op_id"]
+                )
             world = self._world(operation["world_id"])
             result = self._backups.create_world_backup(
                 world_id=world["world_id"],

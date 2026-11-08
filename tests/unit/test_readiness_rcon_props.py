@@ -15,6 +15,9 @@ from app.domain.value_objects import ServerReadinessLevel, ServerType
 from app.infrastructure.minecraft.capabilities import capabilities_for
 from app.infrastructure.minecraft.properties_schema import (
     CORE_MANAGER_PROPERTIES,
+    allowed_keys,
+    is_valid_key,
+    parse_properties,
     validate_properties,
 )
 from app.infrastructure.minecraft.rcon import SAFE_COMMANDS, RconClient, RconError
@@ -333,6 +336,25 @@ def test_core_manager_properties_closed_set():
     assert 'server-port' in CORE_MANAGER_PROPERTIES
     assert 'enable-rcon' in CORE_MANAGER_PROPERTIES
     assert 'level-seed' in CORE_MANAGER_PROPERTIES
+
+
+def test_properties_parser_handles_comments_delimiters_and_continuations():
+    parsed = parse_properties(
+        '# comment\n! another comment\nserver-port: 25565\n'
+        'motd hello\\\n  world\nlevel-name=over\\=world\n'
+    )
+
+    assert parsed == {
+        'server-port': '25565',
+        'motd': 'helloworld',
+        'level-name': 'over=world',
+    }
+
+
+def test_property_key_catalog_respects_version_support():
+    assert is_valid_key('generator-settings', ServerType.VANILLA, '1.12')
+    assert not is_valid_key('generator-settings', ServerType.VANILLA, '1.13')
+    assert 'generator-settings' not in allowed_keys(ServerType.VANILLA, '1.13')
 
 
 def test_capability_matrix_for_types():

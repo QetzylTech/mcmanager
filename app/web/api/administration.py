@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from argon2 import PasswordHasher
 from flask import Blueprint, current_app, g, request
 
-from app.domain.value_objects import ActorType, ConfigEditEntity
+from app.domain.value_objects import ActorType, ConfigEditEntity, OperationStatus
 from app.ports.secrets_store import SecretType
 from app.services.configuration import ConfigurationConflictError, VersionedUpdate
 from app.web.errors import error, ok
@@ -108,38 +109,77 @@ def complete_setup():
     return ok({"setup_completed": True, "user_id": user_id}, status=201)
 
 
-def _unsupported_manager_action(action: str):
-    # The current container has no manager lifecycle/update service to own these actions.
+def _blocked_manager_action(action: str, decision: str):
     return error(
         "NOT_IMPLEMENTED",
-        f"Manager {action} requires the manager lifecycle service.",
+        f"Manager {action} is blocked until product decisions are made: {decision}",
         status=501,
+    )
+
+
+def _manager_operation_response(operation: dict, *, replayed: bool):
+    payload = dict(operation)
+    if payload.get("data_json"):
+        try:
+            payload["data"] = json.loads(payload["data_json"])
+        except (TypeError, json.JSONDecodeError):
+            payload["data"] = None
+    terminal = payload.get("status") in {
+        OperationStatus.COMPLETED.value,
+        OperationStatus.FAILED.value,
+        OperationStatus.CANCELLED.value,
+        OperationStatus.TIMED_OUT.value,
+    }
+    return ok(
+        {"operation": payload},
+        status=200 if replayed or terminal else 202,
+        meta={
+            "op_id": payload["op_id"],
+            "idempotency_key": payload.get("idempotency_key"),
+        },
     )
 
 
 @administration_bp.post("/manager/backup")
 def manager_backup():
-    return _unsupported_manager_action("backup")
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip() or uuid.uuid4().hex
+    operation, replayed = _container().manager_lifecycle.request_backup(
+        actor_user_id=g.current_user_id,
+        idempotency_key=idempotency_key,
+    )
+    return _manager_operation_response(operation, replayed=replayed)
 
 
 @administration_bp.post("/manager/restore")
 def manager_restore():
-    return _unsupported_manager_action("restore")
+    return _blocked_manager_action(
+        "restore",
+        "define the restore scope, encryption-key handling, schema compatibility, and recovery of active sessions/processes",
+    )
 
 
 @administration_bp.post("/manager/restart")
 def manager_restart():
-    return _unsupported_manager_action("restart")
+    return _blocked_manager_action(
+        "restart",
+        "define the host supervisor/relaunch contract and handling of in-flight operations and world processes",
+    )
 
 
 @administration_bp.post("/manager/update")
 def manager_update():
-    return _unsupported_manager_action("update")
+    return _blocked_manager_action(
+        "update",
+        "define trusted version sources, package verification, staged replacement, migrations, and post-update health checks",
+    )
 
 
 @administration_bp.post("/manager/rollback")
 def manager_rollback():
-    return _unsupported_manager_action("rollback")
+    return _blocked_manager_action(
+        "rollback",
+        "define rollback target selection, data compatibility, and recovery from a partial rollback",
+    )
 
 
 @administration_bp.get("/users")

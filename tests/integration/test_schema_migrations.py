@@ -31,6 +31,20 @@ def test_foreign_key_check_passes_after_migration(store: SqliteStore) -> None:
     assert violations == []
 
 
+def test_all_migrated_foreign_keys_restrict_deletes(store: SqliteStore) -> None:
+    tables = store.reader().execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    foreign_keys = [
+        (table['name'], key['table'], key['on_delete'].upper())
+        for table in tables
+        for key in store.reader().execute(f"PRAGMA foreign_key_list({table['name']})")
+    ]
+
+    assert foreign_keys
+    assert [foreign_key for foreign_key in foreign_keys if foreign_key[2] != 'RESTRICT'] == []
+
+
 def test_migration_runner_blocks_on_foreign_key_violations(
     store: SqliteStore, tmp_path: Path
 ) -> None:

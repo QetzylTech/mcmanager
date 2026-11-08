@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef2ff">
+  <title>MC Manager | V4 Prototype</title>
+  <link rel="stylesheet" href="static/v4.css">
+  <script defer src="static/v4.js"></script>
+</head>
+<body>
+  <nav class="site-nav" id="siteNav" aria-label="Primary navigation">
+    <div class="brand-block">
+      <span class="brand-mark" aria-hidden="true">MC</span>
+      <span><strong>MC Manager</strong><small>Server operations</small></span>
+    </div>
+    <label class="context-field" for="contextSelect">Working context
+      <select class="ui-text-input" id="contextSelect" aria-label="Manager or selected world">
+        <option value="manager">Manager</option>
+      </select>
+    </label>
+    <div id="navGroups" class="nav-groups"></div>
+    <div class="nav-footer">
+      <div class="identity-row"><span class="avatar">A</span><span><strong>Alex Morgan</strong><small>Superadmin</small></span></div>
+      <label class="theme-switch"><input id="themeToggle" type="checkbox"><span>Dark theme</span></label>
+    </div>
+  </nav>
+
+  <main class="main-shell" id="mainShell">
+    <header class="utility-bar">
+      <button class="ui-button ui-button-general nav-toggle" id="navToggle" type="button" aria-label="Open navigation" aria-expanded="false">Menu</button>
+      <div class="utility-context"><span class="eyebrow">MC MANAGER</span><span class="context-crumb" id="contextCrumb">Manager context</span></div>
+      <div class="utility-actions">
+        <span class="status-indicator" data-tone="positive" id="managerStatus">Manager online</span>
+        <button class="ui-button ui-button-general" type="button" data-action="notifications">Notifications <span class="notification-count" id="notificationCount">2</span></button>
+      </div>
+    </header>
+
+    <article class="page-pane" id="pagePane">
+      <header class="pane-title-area">
+        <div class="title-copy"><p class="eyebrow" id="pageEyebrow">MANAGER</p><h1 id="pageTitle">Homepage</h1></div>
+        <div class="pane-head-actions" id="pageActions"></div>
+      </header>
+      <div class="page-content" id="pageContent" aria-live="polite"></div>
+    </article>
+    <div class="toast-region" id="toastRegion" role="status" aria-live="polite"></div>
+    <dialog class="action-dialog" id="actionDialog" aria-labelledby="dialogTitle"></dialog>
+  </main>
+</body>
+</html>

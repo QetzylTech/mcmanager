@@ -151,6 +151,75 @@ class PropertySpec:
     enum_values: tuple[str, ...] = ()
 
 
+def parse_properties(text: str) -> dict[str, str]:
+    """Parse Minecraft properties, including comments and Java separators."""
+    result: dict[str, str] = {}
+    logical_lines: list[str] = []
+    pending = ''
+    for line in text.splitlines():
+        candidate = pending + line.lstrip() if pending else line
+        trailing_slashes = len(candidate) - len(candidate.rstrip('\\'))
+        if trailing_slashes % 2:
+            pending = candidate[:-1]
+            continue
+        logical_lines.append(candidate)
+        pending = ''
+    if pending:
+        logical_lines.append(pending)
+
+    escapes = {'t': '\t', 'n': '\n', 'r': '\r', 'f': '\f'}
+
+    def unescape(value: str) -> str:
+        decoded: list[str] = []
+        index = 0
+        while index < len(value):
+            char = value[index]
+            if char != '\\' or index + 1 == len(value):
+                decoded.append(char)
+                index += 1
+                continue
+            next_char = value[index + 1]
+            if next_char == 'u' and index + 5 < len(value):
+                digits = value[index + 2 : index + 6]
+                try:
+                    decoded.append(chr(int(digits, 16)))
+                except ValueError:
+                    decoded.extend(('\\', next_char))
+                    index += 2
+                    continue
+                index += 6
+                continue
+            decoded.append(escapes.get(next_char, next_char))
+            index += 2
+        return ''.join(decoded)
+
+    for line in logical_lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith(('#', '!')):
+            continue
+        escaped = False
+        separator = len(line)
+        for index, char in enumerate(line):
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char in '=: \t\f':
+                separator = index
+                break
+        key = line[:separator].strip()
+        value_start = separator
+        while value_start < len(line) and line[value_start] in ' \t\f':
+            value_start += 1
+        if value_start < len(line) and line[value_start] in '=:':
+            value_start += 1
+        while value_start < len(line) and line[value_start] in ' \t\f':
+            value_start += 1
+        if key:
+            result[unescape(key)] = unescape(line[value_start:])
+    return result
+
+
 def validate_property_schema(
     *,
     key: str,

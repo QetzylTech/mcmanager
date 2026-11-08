@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from flask import Blueprint, Response, current_app, g, request
@@ -53,10 +54,16 @@ def _set_session_cookies(response: Response, *, token: str) -> None:
     )
 
 
-def _session_identity(user_id: str) -> dict[str, Any]:
+def _iso_timestamp(value: int | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+
+
+def _session_identity(user_id: str, session_id_hash: str | None = None) -> dict[str, Any]:
+    container = _container()
     row = (
-        _container()
-        .store.reader()
+        container.store.reader()
         .execute(
             "SELECT u.username, u.display_name, GROUP_CONCAT(r.name) AS roles "
             "FROM users u LEFT JOIN role_assignments ra "
@@ -69,11 +76,32 @@ def _session_identity(user_id: str) -> dict[str, Any]:
     )
     if row is None:
         raise SessionError("session user no longer exists")
+    grants = container.store.reader().execute(
+        "SELECT DISTINCT p.permission_id, p.action_category, p.world_id "
+        "FROM permissions p LEFT JOIN role_assignments ra "
+        "ON ra.role_id = p.role_id AND ra.user_id = ? AND ra.deleted_at IS NULL "
+        "WHERE p.deleted_at IS NULL AND (p.user_id = ? OR ra.user_id IS NOT NULL) "
+        "ORDER BY p.action_category, p.world_id, p.permission_id",
+        (user_id, user_id),
+    ).fetchall()
+    device = None
+    if session_id_hash is not None:
+        device_row = container.store.reader().execute(
+            "SELECT d.device_id, d.device_name, d.status, d.last_seen_at "
+            "FROM client_sessions s LEFT JOIN devices d ON d.device_id = s.device_id "
+            "WHERE s.session_id = ?",
+            (session_id_hash,),
+        ).fetchone()
+        if device_row is not None and device_row["device_id"] is not None:
+            device = dict(device_row)
+            device["last_seen_at"] = _iso_timestamp(device["last_seen_at"])
     return {
         "user_id": user_id,
         "username": row["username"],
         "display_name": row["display_name"],
         "roles": (row["roles"] or "").split(",") if row["roles"] else [],
+        "permission_grants": [dict(grant) for grant in grants],
+        "device": device,
     }
 
 
@@ -102,7 +130,10 @@ def login() -> Any:
     except InvalidCredentialsError:
         return error("AUTH_INVALID_CREDENTIALS", "Invalid username or password.", status=401)
 
-    response = ok({"session": _session_identity(session.user_id)}, status=201)
+    response = ok(
+        {"session": _session_identity(session.user_id, session.session_id_hash)},
+        status=201,
+    )
     _set_session_cookies(response[0], token=session.token)
     return response
 
@@ -146,8 +177,8 @@ def step_up() -> Any:
 
     response = ok(
         {
-            "session": _session_identity(session.user_id),
-            "step_up_expires_at": session.step_up_confirmed_at + 600,
+            "session": _session_identity(session.user_id, session.session_id_hash),
+            "step_up_expires_at": _iso_timestamp(session.step_up_confirmed_at + 600),
         }
     )
     _set_session_cookies(response[0], token=session.token)
@@ -163,8 +194,8 @@ def current_session() -> Any:
         expires_at = None
     return ok(
         {
-            **_session_identity(session.user_id),
-            "expires_at": session.expires_at,
-            "step_up_expires_at": expires_at,
+            **_session_identity(session.user_id, session.session_id_hash),
+            "expires_at": _iso_timestamp(session.expires_at),
+            "step_up_expires_at": _iso_timestamp(expires_at),
         }
     )

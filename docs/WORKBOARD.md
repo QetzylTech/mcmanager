@@ -29,6 +29,11 @@ tracks implementation and verification, not just code-writing.
    documents take precedence over WBS sketches and audit notes.
 7. Record commands, pass/fail counts, and platform in `Evidence`. Do not
    overwrite evidence with a newer partial run.
+8. Feature tests belong to the owning implementation card's acceptance
+  workflow; their results determine whether that card is in Review or Done.
+  Do not create a separate task just to complete tests for a feature. Standalone
+  test/coverage cards are only for cross-cutting quality infrastructure and
+  release floors, and do not replace feature-level acceptance.
 
 ### Status meanings
 
@@ -73,20 +78,28 @@ and cross-platform, deployment, and performance release acceptance.
   **448 passed, 3 skipped, 1 deselected**. The skips require Windows symlink
   privileges unavailable on the recorded host; the deselected smoke is the
   long performance test.
-- `node --test tests\browser\test_gate5_browser.test.cjs`: **2 passed**,
-  including 10-tab stream sharing/failover, event forwarding, auth recovery,
-  and manager shutdown.
+- `node --test tests\browser\test_gate5_browser.test.cjs`: **6 passed**,
+  including actual `operator_ui.js` navigation across all 17 modules, setup/
+  login, Manager Backup submission, tokenized shell styling, and 10-tab stream
+  sharing/failover. One additional check targets the unused legacy `shell.js`
+  prototype and is not counted as production UI coverage.
 - Dedicated security acceptance modules: **53 passed** locally; hosted
   GitHub Actions execution remains pending.
-- Focused Gate 5 API verification: **47 passed** across
-  `test_gate5_acceptance.py`, `test_document10_catalog_apis.py`, and
-  `test_world_management_api.py`; Gate 5 browser regression: **2 passed**.
+- Focused Gate 5/API/log verification: **57 passed** across
+  `test_document10_catalog_apis.py`, `test_gate5_acceptance.py`,
+  `test_world_management_api.py`, and `test_realtime_slow_client.py`;
+  Gate 5 browser regression: **6 passed**.
   These verify existing API/browser behavior and do not close the manager
   lifecycle, shell workflow, cleanup-policy, hosted-security, or proxy gaps.
 - Metrics/control-plane/presentation/Gate 5 integration: **42 passed,
   1 deselected**; the deselected test is the long performance smoke.
 - Scoped Ruff, compilation, and focused mypy checks passed for the recorded
   feature slices; this is not a repository-wide static-gate pass.
+- Five-agent MVP implementation follow-up (2026-11-08): manager backup ZIP
+  artifact test **1 passed**; bootstrap/catalog tests **14 passed**; backup/
+  restore coordination tests **31 passed**; proxy HTTPS cookie test **1 passed**.
+  A broad non-performance suite was attempted but exceeded the terminal runner's
+  30-second limit; no full-suite result is claimed.
 - Repository-wide static baselines are historical and inconsistent: one
   recorded snapshot reports Ruff 46, Black 76 files, isort 9 files, and mypy
   217 errors; an earlier board entry reports Ruff 52, Black 74 files, and
@@ -106,28 +119,45 @@ and cross-platform, deployment, and performance release acceptance.
   and filesystem suites passed (68), with 3 Windows symlink-privilege skips,
   on Windows / Python 3.13.14.
 
-### Remaining product work
+### MVP Code Backlog (Tests Excluded)
 
-- Decide and implement safe stale-world/log cleanup policy and workflows
-  (KB-G5-CLEANUP-POLICY, KB-G5-3).
-- Complete real workflows for the 17 shell modules (KB-G5-6).
-- Implement manager restart/update/rollback and manager backup/restore
-  operations (KB-G5-8).
-- Run C1–C14 on a supported POSIX host and the real Vanilla/Paper/Fabric/Forge
-  integration spike (KB-G1-6, KB-G1-MINECRAFT).
+This is the currently known source/configuration work needed for the MVP. It
+does not count missing tests, hosted runs, live-server exercises, benchmarks,
+or documentation-only reconciliation as code gaps. The list is based on the
+current implementation and known requirements; Document 8/9/10 code parity
+reviews may expose additional concrete deltas.
+
+| Work item | Code still needed | Existing tracking |
+|---|---|---|
+| Stale-world and log cleanup | After the cleanup policy is approved, implement candidate discovery, preview, retention/eligibility guards, and wet deletion for `stale_worlds` and `logs`; physical deletion must remain exclusive to `CleanupService`. The current service and API support backups only. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
+| Complete operator workflows | Finish the remaining incomplete workflows in `operator_ui.js`: authenticated documentation, manager log access, sync-target CRUD, guarded `server.properties` editing, per-world cleanup policy, and manager restore/restart/update/rollback UI once their owning backend contracts exist. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
+| Manager lifecycle | Manager Backup is implemented as a durable operation and ZIP+SHA `manager_config` artifact. Implement manager restore, restart, update, and rollback only after defining the recovery, host-supervisor, trusted-update, and data-compatibility contracts; those routes remain `NOT_IMPLEMENTED`. | KB-G5-8 |
+| API contract implementation | Implement audited Document 10 gaps: guarded server-properties service/routes; per-client permission-grant enforcement in middleware; diagnostics telemetry for scheduler ticks, SQLite busy state, process polling, and checkpoints; and a release version source. Settings-visibility response policy needs a product decision first. Manager and cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; owning feature cards |
+| Production proxy trust | Nginx configuration and `trusted_proxy_hops` support now exist. Keep hop count opt-in and matched to the actual trusted proxy chain; no additional proxy code is currently identified. | KB-G5-10 |
+| Production code health | Resolve source-level Ruff, Black, isort, mypy, and import-boundary failures in the configured project scope without broad unrelated formatting churn. | KB-G0-5 |
+| Document 8/9 behavior deltas | Implement only concrete service/concurrency behavior found missing during the contract inventory; current cards primarily track contract mapping and tests, not a fully enumerated code delta. | KB-G8-CONTRACT, KB-G9-CONTRACT |
+
+**Conditional code fix:** KB-G1-FORGE-SHUTDOWN records a Forge process that did
+not exit after RCON `stop`. Implement a manager/adapter fix only if diagnosis
+attributes the behavior to this project; do not add a workaround for server or
+mod behavior without an explicit product decision.
+
+### Non-Code MVP Acceptance (Not Counted Above)
+
+- Run C1–C14 on a supported POSIX host and complete the real
+  Vanilla/Paper/Fabric/Forge integration spike (KB-G1-6, KB-G1-MINECRAFT).
 - Run the dedicated security job on its hosted Ubuntu/Python matrix and verify
-  the supported streaming proxy (KB-G5-11, KB-G5-10).
-- Restore repository-wide static gates (KB-G0-5) and complete calibrated
-  performance acceptance when a documented reference host is available
+  Nginx/ProxyFix and SSE reconnect behavior through a live deployment
+  (KB-G5-11, KB-G5-10).
+- Complete calibrated performance acceptance on a documented reference host
   (KB-PERF-01).
-- Complete full Document 10 API contract parity (KB-G5-API-CONTRACT).
-- Complete Document 8/9 contract acceptance and Document 11 testing/quality
-  coverage work (KB-G8-CONTRACT, KB-G9-CONTRACT, KB-D11-TEST-PYRAMID,
-  KB-D11-COVERAGE, KB-D11-ISO-25010).
-- Reconcile status labels, API/auth claims, and test evidence provenance in
-  this workboard (KB-DOC-EVIDENCE-QUALITY).
-- Reconcile the WBS's obsolete file paths and fake-server flag names while
-  retaining its work-package/dependency structure (KB-DOC-WBS).
+- Feature-specific tests and contract checks are completed and recorded on
+  their owning implementation cards; cross-cutting test-pyramid, coverage, and
+  ISO/IEC 25010 release floors remain tracked as quality gates
+  (KB-D11-TEST-PYRAMID, KB-D11-COVERAGE, KB-D11-ISO-25010).
+- Reconcile status labels, API/auth claims, and test evidence provenance
+  (KB-DOC-EVIDENCE-QUALITY); reconcile obsolete WBS paths and fake-server flag
+  names (KB-DOC-WBS).
 
 ### Run locally
 
@@ -167,6 +197,25 @@ is integrated and reviewed.
 | Gate 4 filesystem policy | KB-G4-VERIFY | Path containment, free-space math, tree size and mtime |
 
 ## Done
+
+### KB-G2-ENTITY-MODEL — Reconcile Document 6 concepts with domain classes
+
+- **WBS/Docs:** WP 2.2; Document 6 §§1–7
+- **Priority:** P1 · **Owner:** coordinator session · **Updated:** 2026-11-08
+- **Depends on:** KB-G2-DOMAIN (Done)
+- **Acceptance:** inventory Document 6's entity/aggregate concepts against
+  domain classes, value objects, and persistence models; identify which
+  concepts intentionally remain persistence-backed and which require domain
+  types. Record an explicit implementation decision and tests before claiming
+  complete domain-entity coverage.
+- **Evidence:** Document 6 §7 now records the hybrid representation decision:
+  `WorldInstance` is the pure immutable lifecycle aggregate, while the remaining
+  concepts are persistence-backed at their transaction/service boundary and
+  share the documented closed value objects. `tests/unit/domain`,
+  `tests/integration/test_gate2_realignment.py`,
+  `tests/integration/test_schema_migrations.py`, `tests/integration/test_auth.py`,
+  and `tests/integration/test_secrets.py` passed (**106 passed**) on Windows /
+  Python 3.14.9 using `.venv-phase4` on 2026-11-08.
 
 ### KB-G5-9 — Add cancellable-operation API behavior
 
@@ -268,13 +317,14 @@ is integrated and reviewed.
 
 - **WBS/Docs:** Document 10 Worlds list; Document 5 World management; child
   slice of KB-G5-5 and KB-G5-6 (both parent cards remain open).
-- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-08
 - **Acceptance:** authenticated `GET /api/worlds` supports documented world
   filters, deleted-row opt-in, and pagination; the World Management shell
   page renders and queries that listing without full-page navigation.
-- **Evidence:** focused world-list integration tests passed (2); browser
-  regression suite passed (2). The ten-tab stream-sharing regression remained
-  green.
+- **Evidence:** focused world-list integration tests passed (2); Gate 5 browser
+  suite passed (4), including first-run setup/login and in-page Backup/Start/Stop
+  actions with session-bound CSRF/idempotency headers, tokenized 40px controls,
+  and ten-tab stream-sharing/failover.
 
 ### KB-G5-1 — Complete authenticated, CSRF-safe API foundations
 
@@ -630,6 +680,10 @@ is integrated and reviewed.
   3 skipped) on Windows / Python 3.13.14 on 2026-11-08. Scoped Ruff and diff
   checks passed. The sync retry test now uses the injected sleeper instead of
   monkeypatching a removed module-level `time.sleep` hook.
+- **Concurrent cap admission:** `python -m pytest --no-cov -q
+  tests/integration/test_sync_gate4.py` passed (8 tests) on Windows / Python
+  3.13.14 on 2026-11-08, including overlapping sync jobs at the daily-cap
+  boundary. Scoped Ruff and editor diagnostics passed.
 - **Remaining:** run the symlink checks on a supported host and record live
   RCON/NAS integration evidence; the Windows skips and focused fake/local
   tests do not satisfy these acceptance items.
@@ -658,6 +712,24 @@ is integrated and reviewed.
 - **Remaining:** The Ubuntu and Python 3.11 matrix legs need a hosted run;
   local verification used Windows / Python 3.13.
 
+### KB-G1-LOG-REPLAY — Make live-log delivery recoverable
+
+- **WBS/Docs:** WP 1.4 and WP 5.2; Documents 10 and 13
+- **Priority:** P1 · **Owner:** Copilot agents · **Updated:** 2026-11-08
+- **Depends on:** KB-G1-2, KB-G5-7
+- **Status:** Review
+- **Acceptance:** keep process-pipe ingestion non-blocking and make subscriber
+  overflow recoverable from durable logs using an explicit cursor-gap/replay
+  contract; clients must not silently miss lines when a bounded subscriber
+  queue fills.
+- **Evidence:** `/stream/worlds/{world_id}/logs` supports durable cursor replay
+  and emits `log.replay`/`log.gap`; the stream client retains cursors and
+  requests replay. `tests/unit/test_realtime_slow_client.py` was included in
+  the focused API/log run (57 passed across four modules), including backlog
+  replay beyond subscriber queue capacity and unavailable-cursor resnapshot.
+- **Remaining:** review browser/client recovery under a live proxy; the full
+  repository suite did not return a result within the available runner limit.
+
 ## To Do
 
 ### KB-G5-CLEANUP-POLICY — Decide safe stale-world and log cleanup policy
@@ -673,20 +745,18 @@ is integrated and reviewed.
   return `CLEANUP_SCOPE_UNSUPPORTED`; the governing documents do not define
   safe candidate eligibility or retention parameters.
 
-### KB-G2-ENTITY-MODEL — Reconcile Document 6 concepts with domain classes
+### KB-G5-CLEANUP-SCOPES — Implement stale-world and log cleanup
 
-- **WBS/Docs:** WP 2.2; Document 6 §§1–6
+- **WBS/Docs:** WP 4.3 and WP 5.1; Documents 5, 8, and 10
 - **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** KB-G2-DOMAIN (Done)
-- **Acceptance:** inventory Document 6's entity/aggregate concepts against
-  domain classes, value objects, and persistence models; identify which
-  concepts intentionally remain persistence-backed and which require domain
-  types. Record an explicit implementation decision and tests before claiming
-  complete domain-entity coverage.
-- **Current evidence:** `app/domain/entities.py` defines `WorldInstance`;
-  Document 6 describes additional concepts represented across schema and
-  value objects. Full conceptual coverage has not been established by the
-  focused lifecycle test run.
+- **Depends on:** KB-G5-CLEANUP-POLICY
+- **Acceptance:** implement policy-backed candidate discovery, preview, and
+  execution for `stale_worlds` and `logs`; enforce exclusions, retention floors,
+  path containment, and audit requirements; keep all physical deletion inside
+  `CleanupService`. Feature-level tests and evidence belong to this card's
+  acceptance workflow.
+- **Current evidence:** `CleanupService` physically removes backup artifacts
+  only; the cleanup API rejects `stale_worlds` and `logs` as unsupported.
 
 ### KB-D12-2 — Track remaining service-layer architecture divergences
 
@@ -709,10 +779,10 @@ is integrated and reviewed.
 - **Priority:** P1 · **Owner:** Unassigned
 - **Depends on:** KB-G2-MIGRATION, KB-G3-1, KB-G3-2, KB-G3-3, KB-G4-VERIFY
 - **Acceptance:** inventory Document 8 service requirements against the
-  existing focused acceptance cards; identify uncovered behavior, add
-  contract-level tests for each uncovered requirement, and record a final
-  acceptance map without treating implementation presence as contract
-  completion.
+  existing implementation cards; create or update an owning implementation
+  card for each concrete missing behavior, and record a final acceptance map.
+  Feature-level tests and evidence stay on those owning cards, not on this
+  contract-inventory card.
 - **Current evidence:** operation, scheduler, audit, backup, restore, cleanup,
   and sync slices have focused tests; contract-wide service acceptance remains
   open.
@@ -723,9 +793,10 @@ is integrated and reviewed.
 - **Priority:** P1 · **Owner:** Unassigned
 - **Depends on:** KB-G2-3, KB-G3-2
 - **Acceptance:** map every Document 9 concurrency, conflict, locking, and
-  optimistic-version requirement to implementation and tests; add tests for
-  uncovered race/interleaving cases and record explicit exceptions before
-  claiming full contract acceptance.
+  optimistic-version requirement to its owning implementation card; create or
+  update a code card for each concrete missing behavior and record explicit
+  exceptions. Race/interleaving tests are acceptance evidence on the owning
+  implementation cards, not separate feature tasks.
 - **Current evidence:** the conflict matrix and ConfigEdit version behavior
   have focused coverage; full Document 9 acceptance remains open.
 
@@ -734,9 +805,10 @@ is integrated and reviewed.
 - **WBS/Docs:** Document 11 §§1–3
 - **Priority:** P1 · **Owner:** Unassigned
 - **Acceptance:** inventory required unit, integration, and end-to-end flows;
-  add the missing service-level unit tests and representative full user-flow
-  E2E tests; record measured test distribution against Document 11's
-  approximate 70/25/5 pyramid or document an approved variance.
+  measure the repository-wide test distribution against Document 11's
+  approximate 70/25/5 pyramid and identify cross-cutting test-infrastructure
+  changes needed to sustain it. Individual feature tests remain on their
+  implementation cards; this card is not a queue for completing those tests.
 - **Current evidence:** focused domain and integration suites exist, but
   service-level unit coverage and full browser E2E flows are incomplete.
 
@@ -745,9 +817,9 @@ is integrated and reviewed.
 - **WBS/Docs:** Document 11 coverage requirements
 - **Priority:** P1 · **Owner:** Unassigned
 - **Acceptance:** raise every measured module to at least 80% coverage and
-  overall coverage to at least 85%; preserve meaningful assertions, add
-  coverage for the backup catalog API, and record the exact coverage command
-  and result.
+  overall coverage to at least 85%; preserve meaningful assertions and record
+  the repository-level coverage floor. Feature-specific coverage is owned by
+  each implementation card and is not deferred to this cross-cutting gate.
 - **Current evidence:** backup catalog API coverage was recorded at
   44.46% and the documented module/overall floors as unmet.
 
@@ -800,6 +872,20 @@ is integrated and reviewed.
 - **Acceptance:** modules are functional workflows, not scaffold fragments;
   manager/world context switching works; navigation stays in-place and obeys
   Document 4 tokens and 40px control geometry.
+- **Progress:** Partial. `operator_ui.js` now supplies the persistent entry
+  point, first-run/login flow, manager/world context switching, and workflows
+  for world actions, backups/restores, users/roles/devices, settings, schedules,
+  templates, runtimes, files/logs, sync activity, audit, notifications, and
+  backup cleanup. Manager Backup is enabled.
+- **Remaining code:** authenticated documentation, manager log access,
+  sync-target CRUD, guarded server-properties editing, per-world cleanup policy,
+  and manager restore/restart/update/rollback UI after those backend contracts
+  are implemented.
+- **Evidence:** `node --test tests/browser/test_gate5_browser.test.cjs` passed
+  (6 tests), including actual `operator_ui.js` navigation across all 17
+  modules, setup/login, Manager Backup submission, style tokens, and 10-tab
+  stream sharing. Two retained `shell.js` prototype checks are labeled legacy
+  and are not counted as production UI coverage.
 
 ### KB-G1-FORGE-SHUTDOWN — Diagnose Forge process exit after RCON stop
 
@@ -828,6 +914,22 @@ is integrated and reviewed.
   software update/rollback, and manager backup/restore with authorized,
   durable Operation workflows, recovery behavior, audit records, and
   integration coverage. Coordinate route/catalog ownership with KB-G5-3.
+- **Progress:** Partial. `POST /api/manager/backup` creates a durable Backup
+  operation, writes a consistent SQLite snapshot through the SQLite backup
+  API, packages it in the standard ZIP+SHA artifact format, and registers a
+  `manager_config` artifact with `world_id = NULL`. The Manager Maintenance UI
+  now exposes this action. Terminal operation audit is provided by
+  OperationService.
+- **Verification:** manager-backup artifact test (1 passed); combined bootstrap
+  and catalog tests (14 passed); backup/restore coordination tests (31 passed).
+- **Blocked product decisions:** Manager restore needs a defined restore scope,
+  encryption-key handling, schema compatibility, and active-session/process
+  recovery. Manager restart needs a host supervisor/relaunch contract and
+  in-flight operation handling. Update needs trusted sources, package
+  verification, staged replacement, migration, and health-check rules.
+  Rollback needs target selection, data compatibility, and partial-failure
+  recovery. Restore, restart, update, and rollback remain 501; restart
+  additionally requires step-up authorization.
 
 ## Blocked
 
@@ -904,10 +1006,15 @@ is integrated and reviewed.
   `/stream/metrics` snapshot, cache refresh, 50-subscriber fan-out without
   per-subscriber collection, slow-subscriber removal, and the 15-second
   heartbeat. Scoped Ruff passed for the implementation and tests.
-- **Remaining:** The repository has no supported deployment proxy
-  configuration; `X-Accel-Buffering: no` is not evidence the proxy honors it.
-  Document 11's 50-client/1Hz numbers are not a benchmark result; calibrated
-  stream performance and CPU-flatness remain blocked on reference hardware.
+- **Deployment code:** `deploy/nginx/mcmanager.conf` and
+  `docs/deployment.md` now provide a TLS-terminating, unbuffered SSE proxy
+  example. `create_app(trusted_proxy_hops=1)` opts into exactly one trusted
+  proxy hop for forwarded client address and HTTPS detection; the default is
+  zero. The focused forwarded-HTTPS cookie test passed.
+- **Remaining:** Nginx is unavailable on the current host, so config syntax
+  and live proxy/reconnect behavior remain unverified. Document 11's
+  50-client/1Hz numbers are not a benchmark result; calibrated stream
+  performance and CPU-flatness remain blocked on reference hardware.
 
 ### KB-G1-6 — Run C1–C14 on a POSIX host
 
@@ -947,7 +1054,12 @@ is integrated and reviewed.
 - **Acceptance:** compare every documented API route against registration,
   authorization (including session, CSRF, role, and step-up requirements on
   every mutating route), request/response schema, status, envelope, and error
-  mapping; record explicit `NOT_IMPLEMENTED` exceptions and add contract-level
-  tests for uncovered behavior. Include manager lifecycle routes and all
-  cleanup scopes. This is a final parity review, not a substitute for
-  implementing the route-catalog cards.
+  mapping; create or update an owning implementation card for each concrete
+  missing behavior and record explicit `NOT_IMPLEMENTED` exceptions. Feature
+  checks remain acceptance evidence on their implementation cards. Include
+  manager lifecycle routes and all cleanup scopes; this is a parity inventory,
+  not a substitute for implementing the owning feature cards.
+- **Current audit:** `docs/document10_mvp_gap_audit.md` records missing guarded
+  server-properties routes/service, per-client permission-grant enforcement,
+  diagnostics telemetry fields, and a release version source. Settings
+  visibility requires product policy before implementation.

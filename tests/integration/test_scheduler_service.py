@@ -7,6 +7,7 @@ import json
 import pytest
 
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
+from app.services.notifications import CATEGORY_SCHEDULER, NotificationService
 from app.services.operations import OperationInput, OperationService
 from app.services.scheduler import SchedulerService
 
@@ -88,7 +89,8 @@ def test_scheduled_backup_can_run_alongside_runtime_operation(store, clock) -> N
 def test_conflicting_due_run_is_durable_and_not_replayed(store, clock) -> None:
     world_id = seed_world(store)
     operations = OperationService(store, clock)
-    scheduler = SchedulerService(store, clock, operations)
+    notifications = NotificationService(store, clock)
+    scheduler = SchedulerService(store, clock, operations, notifications)
     _insert_schedule(store, clock, world_id)
     active = operations.create(
         OperationInput(
@@ -113,6 +115,17 @@ def test_conflicting_due_run_is_durable_and_not_replayed(store, clock) -> None:
         ('scheduler_contract',),
     ).fetchall()
     assert [row['resolution'] for row in missed] == ['pending']
+    notification_rows = store.reader().execute(
+        'SELECT category, severity, message, requires_action, related_world_id '
+        'FROM notifications WHERE category = ?',
+        (CATEGORY_SCHEDULER,),
+    ).fetchall()
+    assert len(notification_rows) == 1
+    assert notification_rows[0]['category'] == CATEGORY_SCHEDULER
+    assert notification_rows[0]['severity'] == 'normal'
+    assert notification_rows[0]['message'] == f'Scheduled run missed: {world_id} backup schedule'
+    assert notification_rows[0]['requires_action'] == 1
+    assert notification_rows[0]['related_world_id'] == world_id
 
 
 @pytest.mark.parametrize(

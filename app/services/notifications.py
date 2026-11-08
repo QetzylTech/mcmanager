@@ -195,6 +195,25 @@ class NotificationService:
                 writer.rollback()
             raise
 
+    def publish_missed_run(
+        self,
+        schedule_name: str,
+        *,
+        world_id: str | None,
+        connection: sqlite3.Connection | None = None,
+    ) -> str:
+        """Publish the durable normal-severity notification for a missed run."""
+        return self.publish(
+            NotificationInput(
+                category=CATEGORY_SCHEDULER,
+                severity=NotificationSeverity.NORMAL,
+                message=f'Scheduled run missed: {schedule_name}',
+                requires_action=True,
+                related_world_id=world_id,
+            ),
+            connection=connection,
+        )
+
     @staticmethod
     def _validate(notification: NotificationInput) -> None:
         if notification.category not in SUPPORTED_CATEGORIES:

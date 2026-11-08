@@ -1,0 +1,7 @@
+# Nginx Deployment
+
+The supported reverse-proxy example is [`deploy/nginx/mcmanager.conf`](../deploy/nginx/mcmanager.conf). It terminates HTTPS at Nginx, redirects HTTP to HTTPS, and forwards requests to MCManager on `127.0.0.1:5000`. Replace the example hostname and certificate paths before enabling it. Keep the application listener bound to loopback; do not expose the upstream port directly.
+
+The `/stream/` location disables proxy buffering and caching. Its 75-second read timeout exceeds the documented 15-second SSE heartbeat interval; send timeouts are also explicit. The proxy forwards the host, client address, and scheme headers. Construct the production WSGI application with `trusted_proxy_hops=1` to trust exactly this Nginx hop for client address and HTTPS detection. Leave it at the default (`0`) for direct access or when forwarded headers are not produced by a trusted proxy. Do not expose the upstream listener to clients that can supply their own forwarded headers.
+
+Install the file in an Nginx `http`-context include such as `conf.d`, then run `nginx -t` and reload Nginx. This configuration has not been exercised against a running Nginx instance or MCManager deployment; buffering, reconnect, and streaming behavior remain unverified until tested through the deployed proxy.

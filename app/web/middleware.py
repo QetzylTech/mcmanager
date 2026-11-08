@@ -35,6 +35,7 @@ def _is_public_request() -> bool:
         or path.startswith("/static/")
         or path == "/api/health"
         or path == "/api/auth/login"
+        or (path == "/api/setup" and method == "GET")
         or method == "OPTIONS"
     )
 
@@ -80,7 +81,12 @@ def _requires_step_up() -> bool:
             and segments[3] == "files"
         )
         or path == "/api/manager/restore"
-        or path in {"/api/manager/update", "/api/manager/rollback"}
+        or path
+        in {
+            "/api/manager/restart",
+            "/api/manager/update",
+            "/api/manager/rollback",
+        }
         or (
             method == "PATCH"
             and path.startswith("/api/users/")

@@ -27,3 +27,7 @@ class PersistencePort(Protocol):
     def writer(self) -> sqlite3.Connection:
         """Return the serialized read-write connection."""
         ...
+
+    def backup_to(self, target: str) -> None:
+        """Write a transactionally consistent database snapshot to target."""
+        ...

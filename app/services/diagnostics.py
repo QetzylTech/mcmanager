@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from app.ports.persistence import PersistencePort
 from app.ports.process_control import ProcessControlPort
 from app.services.operations import OperationService
+from app.services.reconciliation import ReconciliationService
 from app.services.scheduler import SchedulerService
 
 
@@ -19,6 +20,7 @@ class DiagnosticsDependencies(Protocol):
     operations: OperationService
     store: PersistencePort
     process_adapter: ProcessControlPort
+    reconciliation: ReconciliationService
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,10 @@ class DiagnosticsService:
     container: DiagnosticsDependencies
 
     def health(self) -> dict[str, str]:
+        try:
+            self.container.store.writer().execute('SELECT 1').fetchone()
+        except Exception:  # noqa: BLE001
+            return {'status': 'degraded', 'db': 'down', 'version': 'dev'}
         return {'status': 'ok', 'db': 'ok', 'version': 'dev'}
 
     def diagnostics(self) -> dict[str, Any]:
@@ -33,6 +39,9 @@ class DiagnosticsService:
             'scheduler': self._scheduler(),
             'sqlite_writer': self._sqlite_writer(),
             'process_adapter': self._process_adapter(),
+            'foreign_key_check': self._foreign_key_check(),
+            'reconciliation': self._reconciliation(),
+            'operation_backlog': self._operation_backlog(),
         }
 
     def _scheduler(self) -> dict[str, Any]:
@@ -51,3 +60,22 @@ class DiagnosticsService:
     def _process_adapter(self) -> dict[str, Any]:
         adapter = self.container.process_adapter
         return {'status': 'ok', 'adapter': adapter.__class__.__name__}
+
+    def _foreign_key_check(self) -> dict[str, Any]:
+        violations = self.container.store.reader().execute('PRAGMA foreign_key_check').fetchall()
+        return {'status': 'ok' if not violations else 'failed', 'violations': len(violations)}
+
+    def _reconciliation(self) -> dict[str, Any]:
+        outcome = self.container.reconciliation.health
+        return {
+            'status': 'ok' if outcome.status == 'healthy' else 'down',
+            'phase': outcome.status,
+            'reattached_worlds': len(outcome.reattached_world_ids),
+            **({'error': outcome.error} if outcome.error is not None else {}),
+        }
+
+    def _operation_backlog(self) -> dict[str, int]:
+        queued = self.container.store.reader().execute(
+            "SELECT count(*) FROM operations WHERE status = 'Queued'"
+        ).fetchone()[0]
+        return {'queued': int(queued), 'in_flight': len(self.container.operations.list_incomplete())}

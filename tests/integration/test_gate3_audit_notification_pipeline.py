@@ -112,6 +112,10 @@ def test_audit_captures_actor_and_target_snapshots(container: Container) -> None
         'UPDATE users SET username = ? WHERE user_id = ?',
         ('renamed_snapshot_user', user_id),
     )
+    container.store.writer().execute(
+        'UPDATE users SET deleted_at = ? WHERE user_id = ?',
+        (int(container.clock.now()), user_id),
+    )
     container.store.writer().commit()
     persisted = container.store.reader().execute(
         'SELECT actor_username_snapshot, payload FROM audit_records WHERE audit_id = ?',

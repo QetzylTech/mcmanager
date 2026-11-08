@@ -18,6 +18,8 @@
     'restore.progress',
     'sync.status',
     'log.line',
+    'log.gap',
+    'log.replay',
     'metrics',
     'alert',
     'queue.position',
@@ -38,6 +40,9 @@
       this.electionTimer = null;
       this.closed = false;
       this.authExpired = false;
+      this.logCursors = new Map();
+      this.logWorlds = new Set();
+      this.logEventSources = new Map();
 
       try {
         this.channel = typeof BroadcastChannel === 'function'
@@ -101,6 +106,7 @@
         ) {
           this.authExpired = true;
           this.resign();
+          this.closeWorldLogEventSources();
         }
       }
     }
@@ -167,7 +173,7 @@
       }
     }
 
-    handleStreamEvent(topic, event) {
+    handleStreamEvent(topic, event, broadcast = true) {
       let data;
       try {
         data = JSON.parse(event.data);
@@ -179,8 +185,9 @@
       if (topic === 'stream.error' && data && data.code === 'AUTH_SESSION_EXPIRED') {
         this.authExpired = true;
         this.resign();
+        this.closeWorldLogEventSources();
       }
-      if (this.channel) {
+      if (broadcast && this.channel) {
         this.channel.postMessage({ type: 'STREAM_EVENT', tabId: this.tabId, payload });
       }
       if (topic === 'manager.shutdown') this.shutdown();
@@ -188,8 +195,49 @@
 
     dispatchLocal(payload) {
       if (!payload || !window.dispatchEvent || typeof CustomEvent !== 'function') return;
+      if (payload.topic === 'log.line' && payload.data?.world_id && payload.id) {
+        this.logCursors.set(payload.data.world_id, payload.id);
+      }
       window.dispatchEvent(new CustomEvent(`sse:${payload.topic}`, { detail: payload.data }));
       window.dispatchEvent(new CustomEvent('mcmanager:stream', { detail: payload }));
+    }
+
+    getLogCursor(worldId) {
+      return this.logCursors.get(String(worldId)) || null;
+    }
+
+    openWorldLogStream(worldId) {
+      const key = String(worldId);
+      if (this.closed || typeof EventSource !== 'function') return null;
+      this.logWorlds.add(key);
+      if (this.logEventSources.has(key)) return this.logEventSources.get(key);
+      const cursor = this.getLogCursor(key);
+      const after = cursor ? `?after=${encodeURIComponent(cursor)}` : '';
+      const source = new EventSource(
+        `/stream/worlds/${encodeURIComponent(key)}/logs${after}`,
+      );
+      for (const eventName of ['log.line', 'log.gap', 'log.replay']) {
+        source.addEventListener(
+          eventName,
+          (event) => this.handleStreamEvent(eventName, event, false),
+        );
+      }
+      this.logEventSources.set(key, source);
+      return source;
+    }
+
+    closeWorldLogStream(worldId) {
+      const key = String(worldId);
+      const source = this.logEventSources.get(key);
+      if (!source) return;
+      source.close();
+      this.logEventSources.delete(key);
+      this.logWorlds.delete(key);
+    }
+
+    closeWorldLogEventSources() {
+      for (const source of this.logEventSources.values()) source.close();
+      this.logEventSources.clear();
     }
 
     resign() {
@@ -210,6 +258,7 @@
         this.channel.postMessage({ type: 'AUTH_RESUMED', tabId: this.tabId });
       }
       this.becomeLeader();
+      for (const worldId of this.logWorlds) this.openWorldLogStream(worldId);
     }
 
     shutdown() {
@@ -219,6 +268,8 @@
       }
       this.resign();
       this.closed = true;
+      this.closeWorldLogEventSources();
+      this.logWorlds.clear();
       if (this.channel) this.channel.close();
       if (this.monitorTimer !== null) clearInterval(this.monitorTimer);
       if (this.electionTimer !== null) clearTimeout(this.electionTimer);

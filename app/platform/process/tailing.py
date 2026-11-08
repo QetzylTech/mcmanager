@@ -99,6 +99,42 @@ class DurableSessionLog:
                 handle.flush()
 
 
+def read_durable_log(
+    path: str | Path, offset: int = 0, *, limit: int | None = None
+) -> tuple[list[tuple[int, int, str, str]], int]:
+    """Read complete ``(start, end, channel, line)`` records from a byte offset."""
+    if offset < 0:
+        raise ValueError('log offset must be non-negative')
+    if limit is not None and limit < 1:
+        raise ValueError('log record limit must be positive')
+    records: list[tuple[int, int, str, str]] = []
+    next_offset = offset
+    try:
+        with open(path, 'rb') as handle:
+            if offset > handle.seek(0, os.SEEK_END):
+                raise ValueError('log offset is past end of file')
+            handle.seek(offset)
+            while True:
+                if limit is not None and len(records) >= limit:
+                    break
+                start = handle.tell()
+                raw = handle.readline()
+                if not raw or not raw.endswith(b'\n'):
+                    break
+                end = handle.tell()
+                text = raw[:-1].decode('utf-8', errors='replace').removesuffix('\r')
+                prefix, separator, line = text.partition('] ')
+                if separator and prefix.startswith('['):
+                    channel = prefix[1:]
+                else:
+                    channel, line = 'unknown', text
+                records.append((start, end, channel, line))
+                next_offset = end
+    except FileNotFoundError:
+        return records, offset
+    return records, next_offset
+
+
 def session_log_for(log_dir: str | None, session_id: str) -> DurableSessionLog | None:
     if not log_dir or not session_id:
         return None

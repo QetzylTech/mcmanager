@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCManager</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='shell.css') }}">
-  <script defer src="{{ url_for('static', filename='shell.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='operator_ui.js') }}"></script>
   <script defer src="{{ url_for('static', filename='stream_client.js') }}"></script>
 </head>
 <body>
@@ -24,7 +24,15 @@
           <h1>{{ pages|selectattr('slug', 'equalto', active)|map(attribute='title')|first }}</h1>
           <p class="muted">Persistent manager shell</p>
         </div>
-        <button class="ui-button ui-button-blue" type="button" data-refresh>Refresh</button>
+        <div class="shell-toolbar">
+          <label class="context-control">Context
+            <select class="ui-text-input" data-context-select aria-label="Manager or world context">
+              <option value="manager">Manager</option>
+            </select>
+          </label>
+          <button class="ui-button" type="button" data-logout>Sign out</button>
+          <button class="ui-button ui-button-blue" type="button" data-refresh>Refresh</button>
+        </div>
       </header>
       <div class="pane-content-area">
         <section class="module-grid" data-page-root>

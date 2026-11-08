@@ -167,6 +167,49 @@ def test_daily_transfer_cap_stops_sync_without_touching_local_artifact(
     assert Path(artifact.storage_path).is_file()
 
 
+def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(
+    store, clock, tmp_path
+):
+    artifact = _create_artifact(store, clock, tmp_path)
+    transfer_started = threading.Event()
+    release_transfer = threading.Event()
+    transport_calls: list[Path] = []
+
+    class BlockingTransport:
+        def upload_file(self, _target_id, source_path, _cancel_event=None) -> None:
+            transport_calls.append(Path(source_path))
+            transfer_started.set()
+            if not release_transfer.wait(timeout=5):
+                raise AssertionError('test did not release the active transfer')
+
+    service = SyncService(
+        store, BlockingTransport(), clock, sleeper=_fake_wait(clock, [])
+    )
+    service.DAILY_TRANSFER_CAP_BYTES = artifact.size_bytes
+    errors: list[BaseException] = []
+
+    def dispatch_first() -> None:
+        try:
+            service.dispatch_sync(artifact.artifact_id, 'first-target')
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=dispatch_first)
+    worker.start()
+    assert transfer_started.wait(timeout=5)
+    try:
+        with pytest.raises(SyncError, match='SYNC_CAP_EXCEEDED'):
+            service.dispatch_sync(artifact.artifact_id, 'second-target')
+    finally:
+        release_transfer.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert transport_calls == [Path(artifact.storage_path)]
+    assert service.get_bytes_transferred_today() == artifact.size_bytes
+
+
 def test_transport_failure_does_not_invalidate_local_backup(
     store, clock, tmp_path
 ):

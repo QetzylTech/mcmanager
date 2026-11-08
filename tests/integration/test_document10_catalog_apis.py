@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
+import sqlite3
+import time
+import zipfile
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -206,6 +211,64 @@ def test_admin_catalog_endpoints_enforce_superadmin_and_csrf(catalog_app):
     assert client.get("/api/java-runtimes").status_code == 200
 
 
+def test_manager_backup_is_durable_and_uses_a_consistent_database_snapshot(
+    catalog_app, tmp_path
+):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+    backup_root = Path(container.store.path).with_suffix(".backups")
+
+    try:
+        response = client.post("/api/manager/backup", headers=headers)
+        assert response.status_code == 202
+        operation_id = response.json["meta"]["op_id"]
+        assert response.json["data"]["operation"]["status"] == "Queued"
+
+        deadline = time.monotonic() + 5
+        operation = None
+        while time.monotonic() < deadline:
+            container.catalog_operations.dispatch_queued_operations()
+            operation = container.operations.get(operation_id)
+            if operation["status"] in {"Completed", "Failed", "Cancelled", "TimedOut"}:
+                break
+            time.sleep(0.01)
+
+        assert operation is not None
+        assert operation["status"] == "Completed", operation["message"]
+        result = json.loads(operation["data_json"])
+        artifact = container.store.reader().execute(
+            "SELECT * FROM backup_artifacts WHERE artifact_id = ?",
+            (result["artifact_id"],),
+        ).fetchone()
+        assert artifact["world_id"] is None
+        assert artifact["category"] == "manager_config"
+        assert artifact["operation_id"] == operation_id
+        assert Path(artifact["storage_path"]).is_file()
+        assert hashlib.sha256(Path(artifact["storage_path"]).read_bytes()).hexdigest() == artifact[
+            "checksum"
+        ]
+
+        with zipfile.ZipFile(artifact["storage_path"]) as archive:
+            assert archive.namelist() == ["manager.sqlite3"]
+            snapshot_path = tmp_path / "manager.sqlite3"
+            snapshot_path.write_bytes(archive.read("manager.sqlite3"))
+        snapshot = sqlite3.connect(snapshot_path)
+        try:
+            assert snapshot.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert snapshot.execute("SELECT count(*) FROM users").fetchone()[0] == 1
+        finally:
+            snapshot.close()
+
+        audit = container.store.reader().execute(
+            "SELECT count(*) FROM audit_records WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+        assert audit == 1
+        assert client.post("/api/manager/restart", headers=headers).status_code == 403
+    finally:
+        shutil.rmtree(backup_root, ignore_errors=True)
+
+
 def test_last_superadmin_cannot_be_disabled_or_deleted(catalog_app):
     client, headers = _admin_client(catalog_app)
     container = catalog_app.extensions["mcmanager_container"]
@@ -323,3 +386,25 @@ def test_anonymous_catalog_and_audit_reads_are_rejected(catalog_app):
         response = catalog_app.test_client().get(path)
         assert response.status_code == 401
         assert response.json["error"]["code"] == "AUTH_SESSION_INVALID"
+
+
+def test_session_includes_grants_device_and_iso_expiry(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    session = client.get("/api/session")
+    payload = session.json["data"]
+    assert session.status_code == 200
+    assert payload["device"]["device_id"] == "catalog-admin-device"
+    assert payload["expires_at"].endswith("Z")
+    assert payload["step_up_expires_at"] is None
+
+    permission = client.post(
+        "/api/permissions",
+        json={"user_id": payload["user_id"], "action_category": "world.view"},
+        headers=headers,
+    )
+    assert permission.status_code == 201
+    refreshed = client.get("/api/session").json["data"]
+    assert any(
+        grant["permission_id"] == permission.json["data"]["permission_id"]
+        for grant in refreshed["permission_grants"]
+    )

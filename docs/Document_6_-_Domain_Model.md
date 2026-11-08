@@ -198,3 +198,46 @@ Versioning note: Doc 7 inline column comments reference this section by name —
 - No tier 3. No entity has a user-facing "delete" that physically removes a row directly.
 - Column convention: one shared `deleted_at` timestamp for every Tier 2 soft-removal (conceptually "delete" or "revoke"), plus optional `deleted_by` actor. No `revoked_at` split.
 - Hard-delete rule: only `CleanupService` (via a Cleanup Operation) ever issues a physical `DELETE FROM`. Cleanup sweeps expired artifacts and stale world data, and generalizes to aged-out already-soft-deleted Tier 2 config rows past their retention window once nothing depends on them. WorldInstance/Device/JavaRuntime/Template/User are Tier 2 in principle but rarely swept in practice (Tier 1 rows almost always still reference them) — "eligible for Cleanup" does not mean "will be swept."
+
+## 7 Implementation representation decision
+
+The application deliberately uses a hybrid representation of this model. This
+section records the implementation boundary; it does not relax any lifecycle,
+ownership, deletion, or persistence requirement above.
+
+`WorldInstance` is the current pure, immutable domain entity. Its state,
+backup-resume state, and tombstone invariants are enforced in
+`app/domain/entities.py`, `app/domain/invariants.py`, and
+`app/domain/lifecycle.py`. World lifecycle decisions return immutable domain
+events. The closed sets in §5 are represented by `app/domain/value_objects.py`.
+
+The remaining concepts are intentionally persistence-backed at this stage.
+They have relationships, uniqueness, optimistic-version, partial-index, or
+audit-history rules that must be atomically enforced with their durable row(s).
+Their behavior belongs in the relevant service and SQLite repository/transaction
+boundary, rather than in speculative duplicate dataclasses:
+
+| Document 6 concept | Current representation and enforcement boundary |
+|---|---|
+| Manager and global/world settings | `manager`, `global_settings`, and `world_settings` rows; `ConfigurationService` resolves the three tiers and performs version-checked edits. |
+| User, Role, RoleAssignment, Permission, Device, ClientSession, and SecretRef | `users`, role/permission, device, client-session, and `secrets` rows; authentication, step-up, authorization, and encrypted-secret behavior are service/repository concerns. |
+| RuntimeSession and JavaRuntime | `runtime_sessions` and `java_runtimes` rows; the open-session partial unique index and runtime reconciliation enforce the durable/runtime split. |
+| Template | `templates` rows; provenance and versioning are persisted so template edits cannot mutate existing worlds. |
+| Operation and AuditRecord | `operations` and `audit_records` rows; operation/audit services enforce terminal transitions and append-only attribution. |
+| BackupArtifact and restore history | `backup_artifacts` and `restore_history` rows; backup/restore services enforce capture, retention, and compensation behavior. |
+| Schedule, CleanupPolicy, and MissedRunRecord | their schema rows; scheduler and cleanup services enforce optimistic edits, missed-run permanence, and retention floors. |
+| Notification and NotificationRead | `notifications` and `notification_reads` rows; notification service preserves per-user read state. |
+| SyncTarget, SyncRecord, and SyncAttempt | their schema rows; configuration and sync services resolve targets and persist immutable attempt history. |
+
+Scalar concepts such as `Username`, `WorldId`, `SecretRef`, and
+`CleanupPolicySpaceRule` remain validated strings/columns rather than wrapper
+classes. Introducing wrappers without a distinct behavior or ownership boundary
+would duplicate validation and risk divergence from the schema. New pure domain
+types are required only when a concept gains in-memory state transitions or
+invariants that can be decided independently of a transaction; otherwise its
+durable constraints remain the source of truth.
+
+This decision is covered by the domain contract and lifecycle tests
+(`tests/unit/domain/test_domain_contracts.py` and
+`tests/unit/domain/test_world_lifecycle.py`) and the Gate 2 integration tests
+for schema, authentication/secrets, and configuration inheritance.

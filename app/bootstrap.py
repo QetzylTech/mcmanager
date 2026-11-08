@@ -39,6 +39,7 @@ from app.services.backup import BackupService
 from app.services.catalog_operations import CatalogOperationDispatcher
 from app.services.cleanup import CleanupService
 from app.services.configuration import ConfigurationService
+from app.services.manager_lifecycle import ManagerLifecycleService
 from app.services.metrics import MetricsService
 from app.services.notifications import NotificationService
 from app.services.operations import OperationService
@@ -82,6 +83,7 @@ class Container:
     configuration: ConfigurationService
     worlds: WorldsService
     save_coordinator: RconSaveCoordinator
+    manager_lifecycle: ManagerLifecycleService
 
 
 def _migrations_dir() -> Path:
@@ -134,18 +136,22 @@ def build_container(
     operations = OperationService(
         store, clock, audit, realtime, notifications=notifications
     )
-    scheduler = SchedulerService(store, clock, operations)
+    scheduler = SchedulerService(store, clock, operations, notifications)
     logs = LogFanout(realtime)
     save_coordinator = RconSaveCoordinator(store, secrets, rcon_factory=RconClient)
+    backup_engine = NativeBackupEngine()
     backups = BackupService(
         store,
         clock,
         save_coordinator,
-        NativeBackupEngine(),
+        backup_engine,
         LocalFilesystem(),
     )
     cleanup = CleanupService(store, clock)
     configuration = ConfigurationService(store, clock, operations)
+    manager_lifecycle = ManagerLifecycleService(
+        store, clock, operations, configuration, backup_engine
+    )
     process_adapter = _create_process_adapter()
     minecraft_adapter = MinecraftServerAdapter()
     worlds = WorldsService(
@@ -163,7 +169,15 @@ def build_container(
     restore = RestoreService(store, clock, operations, backups, runtime)
     sync = SyncService(store, NasSyncTransport(store), clock, operations)
     catalog_operations = CatalogOperationDispatcher(
-        store, clock, operations, configuration, backups, restore, cleanup, sync
+        store,
+        clock,
+        operations,
+        configuration,
+        backups,
+        restore,
+        cleanup,
+        sync,
+        manager_lifecycle,
     )
     reconciliation = ReconciliationService(runtime)
 
@@ -191,4 +205,5 @@ def build_container(
         configuration=configuration,
         worlds=worlds,
         save_coordinator=save_coordinator,
+        manager_lifecycle=manager_lifecycle,
     )
