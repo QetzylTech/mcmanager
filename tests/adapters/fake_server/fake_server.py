@@ -49,7 +49,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--tick-ms', type=int, default=0, help='write tick lines every N ms')
     parser.add_argument('--ready-ms', type=int, default=0, help='delay before "Done" ready line')
     parser.add_argument('--never-ready', action='store_true', help='suppress the ready line')
-    parser.add_argument('--crash-after-ms', type=int, default=0, help='exit(42) after N ms')
+    parser.add_argument('--crash-after-ms', type=int, help='exit(42) after N ms')
+    parser.add_argument(
+        '--crash-after',
+        type=_seconds_to_milliseconds,
+        help='Document 13 alias: exit(42) after a duration such as 2s',
+    )
     parser.add_argument('--spawn-grandchild', action='store_true', help='spawn a sleep child')
     parser.add_argument(
         '--eula',
@@ -59,9 +64,37 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument('--ignore-graceful', action='store_true', help='ignore TERM/stdin stop')
     parser.add_argument('--ignore-rcon-stop', action='store_true', help='ignore RCON stop')
-    parser.add_argument('--save-slow-ms', type=int, default=0, help='save-all response delay')
+    parser.add_argument('--save-slow-ms', type=int, help='save-all response delay')
+    parser.add_argument(
+        '--save-slow',
+        action='store_true',
+        help='Document 14 mode: delay save-all responses by one second',
+    )
     parser.add_argument('--ignore-save-on', action='store_true', help='save-on has no effect')
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.crash_after_ms is not None and args.crash_after is not None:
+        parser.error('use only one of --crash-after-ms or --crash-after')
+    args.crash_after_ms = (
+        args.crash_after_ms if args.crash_after_ms is not None else args.crash_after or 0
+    )
+    if args.save_slow_ms is not None and args.save_slow:
+        parser.error('use only one of --save-slow-ms or --save-slow')
+    args.save_slow_ms = (
+        args.save_slow_ms if args.save_slow_ms is not None else 1000 if args.save_slow else 0
+    )
+    return args
+
+
+def _seconds_to_milliseconds(value: str) -> int:
+    if value.endswith('s'):
+        value = value[:-1]
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError('duration must be a number of seconds') from exc
+    if seconds < 0:
+        raise argparse.ArgumentTypeError('duration cannot be negative')
+    return round(seconds * 1000)
 
 
 class _StopController:

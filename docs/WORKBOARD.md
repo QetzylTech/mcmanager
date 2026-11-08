@@ -1,15 +1,15 @@
 # MCManager Workboard
 
-This is the shared, repository-tracked Kanban board for WBS and realignment
-work. Read it before taking a task; update the card here so a new agent can
-resume without relying on chat history. The board tracks implementation and
-verification, not just code-writing.
+This is the shared, repository-tracked Kanban board for implementation,
+verification, and release status. Read it before taking a task; update the
+card here so a new agent can resume without relying on chat history. The board
+tracks implementation and verification, not just code-writing.
 
 ## Board rules
 
 1. Keep one bounded deliverable per card. `KB-` identifiers are board-local
-   stable references; WBS/realignment IDs in each card are source references.
-   Do not renumber or reuse board IDs.
+   stable references; WBS and numbered-document references in each card are
+   source references. Do not renumber or reuse board IDs.
 2. Before starting, move the card to **In Progress**, set `Owner` to your
    agent/session identifier, and update `Updated`. Re-read this file first and
    edit only your card to avoid overwriting another agent's update.
@@ -21,9 +21,12 @@ verification, not just code-writing.
    checks complete without running them.
 5. Only start a card when its dependencies are Done. Follow the WBS dependency
    graph; do not parallelize changes to the same world-lock or lifecycle story.
-6. When a contract changes, update the governing numbered document first,
-   then its pseudocode/audit notes and this board. Numbered product documents
-   take precedence over WBS sketches and older audit notes.
+6. Write audit findings in `docs/audit.md` first. Transfer every actionable
+   finding into a bounded card in this board and verify the transfer checklist
+   there; this board is the source of truth for task status and evidence.
+   When a contract changes, update the governing numbered document first,
+   then its pseudocode and the audit record as needed. Numbered product
+   documents take precedence over WBS sketches and audit notes.
 7. Record commands, pass/fail counts, and platform in `Evidence`. Do not
    overwrite evidence with a newer partial run.
 
@@ -43,35 +46,100 @@ Priority: **P0** release blocker / foundational, **P1** required gate work,
 
 ## Gate roll-up
 
-| Area | Current board view | Release state |
+| Area | Implemented and verified scope | Remaining acceptance / release state |
 |---|---|---|
-| Repository layout | Root `app/` and `migrations/`; managed world data under `app/data/worlds/` | Layout work recorded Done; remaining Doc 12 root-entry differences have a tracked card |
-| Gate 1 / WP 1.1–1.6 | Process ports, Windows/fake conformance, readiness, EULA flow, and durable logging are implemented | Partial: POSIX and real-server spike evidence remain |
-| Gate 2 / WP 2.1–2.4 | Migration/persistence, domain validation, effective settings, and ConfigEdit operation integration are implemented and tested | Core slices recorded Done; overall gate remains partial pending broader release acceptance |
-| Gate 3 / WP 3.1–3.4 | Durable operations, conflict policy, terminal audit, reconciliation, scheduler, and notifications have focused coverage | Core slices recorded Done; full release acceptance remains |
-| Gate 4 / WP 4.1–4.4 | Backup, restore, cleanup, and sync services have focused verification | Review: Windows symlink checks, POSIX, and live RCON/NAS acceptance remain |
-| Gate 5 / WP 5.1–5.3 | Auth foundations, selected world/admin APIs, SSE sharing, and world-list workflow are implemented | Partial: backup/restore/cleanup/sync catalog and full shell workflows remain; manager lifecycle endpoints are not implemented |
+| Repository layout | Root `app/` and `migrations/`; managed world data under `app/data/worlds/` | Layout work is Done; remaining Document 12 structure differences are tracked separately |
+| Gate 1 / WP 1.1–1.6 | Process ports, Windows/fake conformance, readiness, EULA flow, and durable logging | Partial: the conformance workflow now targets Windows and Ubuntu, but hosted results and real-server spike evidence remain |
+| Gate 2 / WP 2.1–2.4 | WBS Gate 2 criterion verified: clean foreign-key check and migration rollback; domain, settings, and ConfigEdit slices also pass focused tests | Gate criterion passed on Windows; Document 6 model inventory and broader release acceptance remain |
+| Gate 3 / WP 3.1–3.4 | WBS Gate 3 criterion verified: runtime re-attachment and derived-lock conflict behavior pass alongside operation, audit, and scheduler suites | Gate criterion passed on Windows; full release acceptance remains |
+| Gate 4 / WP 4.1–4.4 | WBS Gate 4 pre-restore backup and compensating rollback criterion verified with focused backup/restore/cleanup/sync/filesystem suites | Gate criterion passed on Windows; three symlink checks, POSIX, and live RCON/NAS acceptance remain |
+| Gate 5 / WP 5.1–5.3 | Auth, selected world/admin APIs, backup/restore/backup-cleanup/sync catalog, cancellation, SSE sharing, and world-list workflow | Partial: stale-world/log cleanup policy, full shell workflows, manager lifecycle endpoints, hosted security job, and supported-proxy validation remain |
 
-## Latest verification snapshot
+## Implementation status
 
-Updated 2026-11-07 on Windows / Python 3.13.14:
+**Last recorded verification:** 2026-11-08, Windows / Python 3.13.14. This
+summary is a dated evidence snapshot, not a claim that every gate or the
+product is release-ready.
+
+MCManager has a tested application foundation and substantial control-plane
+functionality. It is an **early functional prototype, not yet an
+operator-ready MVP**. The principal product gaps are stale-world/log cleanup
+policy and workflows, complete shell workflows, manager lifecycle operations,
+and cross-platform, deployment, and performance release acceptance.
+
+### Latest recorded verification
 
 - `python -m pytest --no-cov -q -k "not performance_acceptance_smoke"`:
-  **448 passed, 3 skipped, 1 deselected**. Skips are symlink checks that
-  require a Windows privilege unavailable on this host; the deselected smoke
-  is the long performance acceptance test.
+  **448 passed, 3 skipped, 1 deselected**. The skips require Windows symlink
+  privileges unavailable on the recorded host; the deselected smoke is the
+  long performance test.
 - `node --test tests\browser\test_gate5_browser.test.cjs`: **2 passed**,
-  including all documented manager event topics and auth expiry/recovery.
-- Repository-wide static checks remain unverified/known red from the prior
-  baseline: Ruff reported 52 errors; Black would reformat 74 files; isort
-  reported 14 files; mypy failed; import-linter reported `app layers BROKEN`.
-  Scoped Ruff checks for the updated lifecycle, auth, Gate 4, process-contract,
-  health, world API, catalog/admin API, ConfigEdit, and SSE slices passed.
-- POSIX conformance and calibrated performance acceptance have not been run.
+  including 10-tab stream sharing/failover, event forwarding, auth recovery,
+  and manager shutdown.
+- Dedicated security acceptance modules: **53 passed** locally; hosted
+  GitHub Actions execution remains pending.
+- Focused Gate 5 API verification: **47 passed** across
+  `test_gate5_acceptance.py`, `test_document10_catalog_apis.py`, and
+  `test_world_management_api.py`; Gate 5 browser regression: **2 passed**.
+  These verify existing API/browser behavior and do not close the manager
+  lifecycle, shell workflow, cleanup-policy, hosted-security, or proxy gaps.
+- Metrics/control-plane/presentation/Gate 5 integration: **42 passed,
+  1 deselected**; the deselected test is the long performance smoke.
+- Scoped Ruff, compilation, and focused mypy checks passed for the recorded
+  feature slices; this is not a repository-wide static-gate pass.
+- Repository-wide static baselines are historical and inconsistent: one
+  recorded snapshot reports Ruff 46, Black 76 files, isort 9 files, and mypy
+  217 errors; an earlier board entry reports Ruff 52, Black 74 files, and
+  isort 14 files. The latest recorded status snapshot says `lint-imports` was
+  unavailable, while an earlier entry reports broken import boundaries. These
+  commands were not rerun during this documentation consolidation; none should be
+  presented as a fresh result.
+- POSIX conformance, live Minecraft/RCON/NAS integration, and calibrated
+  performance acceptance have not been verified. The Windows symlink skips
+  are an environment limitation, not passing acceptance.
+- Focused Gate 2 verification on 2026-11-08: domain, Gate 2 realignment, and
+  migration suites passed (91) on Windows / Python 3.13.14.
+- Focused Gate 3 verification on 2026-11-08: operation, conflict, operation
+  engine, audit/notification, runtime/scheduler, and reconciliation suites
+  passed (94) on Windows / Python 3.13.14.
+- Focused Gate 4 verification on 2026-11-08: backup, restore, cleanup, sync,
+  and filesystem suites passed (68), with 3 Windows symlink-privilege skips,
+  on Windows / Python 3.13.14.
 
-The performance smoke was excluded because it performs the long calibrated
-benchmark; release performance acceptance remains blocked pending a reference
-host and justified limits.
+### Remaining product work
+
+- Decide and implement safe stale-world/log cleanup policy and workflows
+  (KB-G5-CLEANUP-POLICY, KB-G5-3).
+- Complete real workflows for the 17 shell modules (KB-G5-6).
+- Implement manager restart/update/rollback and manager backup/restore
+  operations (KB-G5-8).
+- Run C1–C14 on a supported POSIX host and the real Vanilla/Paper/Fabric/Forge
+  integration spike (KB-G1-6, KB-G1-MINECRAFT).
+- Run the dedicated security job on its hosted Ubuntu/Python matrix and verify
+  the supported streaming proxy (KB-G5-11, KB-G5-10).
+- Restore repository-wide static gates (KB-G0-5) and complete calibrated
+  performance acceptance when a documented reference host is available
+  (KB-PERF-01).
+- Complete full Document 10 API contract parity (KB-G5-API-CONTRACT).
+- Complete Document 8/9 contract acceptance and Document 11 testing/quality
+  coverage work (KB-G8-CONTRACT, KB-G9-CONTRACT, KB-D11-TEST-PYRAMID,
+  KB-D11-COVERAGE, KB-D11-ISO-25010).
+- Reconcile status labels, API/auth claims, and test evidence provenance in
+  this workboard (KB-DOC-EVIDENCE-QUALITY).
+- Reconcile the WBS's obsolete file paths and fake-server flag names while
+  retaining its work-package/dependency structure (KB-DOC-WBS).
+
+### Run locally
+
+Run the app from the repository root (manager state and Minecraft
+installations are kept under ignored `app/data/` directories):
+
+```powershell
+python -m flask --app "app:create_app(database_path='app/data/manager.db', keyfile_path='app/data/secrets.key', migrations_dir='migrations')" run --host 127.0.0.1 --port 5000
+```
+
+Application startup is not evidence that operator workflows or release gates
+are complete.
 
 ## Tracked implementation workstreams
 
@@ -81,7 +149,7 @@ is integrated and reviewed.
 
 | Workstream | Parent card(s) | Scope |
 |---|---|---|
-| Gate 1 process adapters | KB-G1-4, KB-G1-6 | Windows/fake process-handle contract completed; POSIX evidence remains blocked |
+| Gate 1 process adapters | KB-G1-4, KB-G1-6 | Windows/fake process-handle contract completed; Windows/Ubuntu hosted conformance results remain pending |
 | Gate 1 Minecraft readiness | KB-G1-1, KB-G1-3 | Port wiring, readiness hierarchy, EULA product flow |
 | Gate 1 durable logging | KB-G1-2 | Verbose filtering, durable logs, tailing behavior |
 | Gate 2 domain model | KB-G2-DOMAIN | Domain purity, transitions, invariants, unit tests |
@@ -100,10 +168,28 @@ is integrated and reviewed.
 
 ## Done
 
+### KB-G5-9 — Add cancellable-operation API behavior
+
+- **WBS/Docs:** WP 5.1; Documents 9 and 10 Operations
+- **Priority:** P1 · **Owner:** Copilot agent Sync-Cancel · **Updated:** 2026-11-07
+- **Depends on:** KB-G5-1, KB-G5-2 (Done)
+- **Acceptance:** implement `POST /api/operations/{op_id}/cancel` for only
+  cancellable operation types in `Queued` or `Validating` (Sync may also be
+  cancelled while `Running` per Document 8), enforce documented authorization
+  and idempotency, return the canonical conflict/error envelopes otherwise,
+  and verify terminal audit behavior.
+- **Evidence:** `python -m pytest --no-cov -q
+  tests/integration/test_world_management_api.py -k cancel` passed (10 passed,
+  2 deselected); the combined Sync/cancellation/metrics/slow-client unit set
+  passed (23). Scoped Ruff passed. Coverage includes cancellable queued types,
+  Running Sync cooperative cancellation, partial NAS upload removal, one
+  terminal audit, terminal failed SyncRecord/failed_transient attempt, and no
+  retry after cancellation.
+
 ### KB-LAYOUT-01 — Put application and migrations at repository root
 
-- **WBS/Docs:** Document 12 §2; realignment packaging decision superseded by
-  the user's explicit layout direction.
+- **WBS/Docs:** Document 12 §2; the prior packaging decision was superseded by
+  the explicit root-layout direction.
 - **Priority:** P1 · **Owner:** repository session · **Updated:** 2026-11-06
 - **Acceptance:** `app/` and `migrations/` exist at root; `core/` is absent;
   layout contract test passes.
@@ -132,12 +218,17 @@ is integrated and reviewed.
   After fix, `python -m pytest --no-cov -q tests\integration\test_schema_migrations.py tests\integration\test_bootstrap.py`
   passed (17 tests) on Windows; `python -m ruff check app\infrastructure\sqlite\migrations.py tests\integration\test_schema_migrations.py`
   and `git -c core.whitespace=cr-at-eol --no-pager diff --check` passed.
+- **Latest verification:** `python -m pytest --no-cov -q
+  tests\unit\domain tests\integration\test_gate2_realignment.py
+  tests\integration\test_schema_migrations.py` passed (91) on Windows /
+  Python 3.13.14 on 2026-11-08, including clean `foreign_key_check` and
+  failed-migration rollback assertions.
 - **Adjacent Gate 2 note:** `tests\integration\test_gate2_realignment.py`
   was 8 passed / 4 failed in configuration/API expectations outside WP 2.1.
 
 ### KB-G0-2 — Centralize and map API error codes
 
-- **WBS/Docs:** WP 5.1; Document 10; realignment G0-3
+- **WBS/Docs:** WP 5.1; Document 10
 - **Priority:** P1 · **Owner:** Copilot agent G0-2 · **Updated:** 2026-11-07
 - **Acceptance:** documented errors (including CSRF, step-up, world conflict,
   version conflict, storage guard, and cancellation) map to their required
@@ -145,19 +236,23 @@ is integrated and reviewed.
 - **Evidence:** centralized catalog and compatibility codes implemented in
   `app/web/errors.py`; `python -m pytest --no-cov -q
   tests/unit/test_web_errors.py` passed (15 tests), with Ruff passing for the
-  changed implementation and tests. Cancellation maps to `OP_NOT_CANCELLABLE`;
-  the missing cancellation route/service is tracked by KB-G5-9.
+  changed implementation and tests. Cancellation maps to
+  `OP_NOT_CANCELLABLE`; the route and service are implemented and tracked by
+  KB-G5-9.
 
 ### KB-G0-6 — Reconcile stale audit and pseudocode with governing docs
 
-- **WBS/Docs:** realignment G0-6; all `docs/gate*_pseudocode.txt`
+- **WBS/Docs:** Documents 4–14; all `docs/gate*_pseudocode.txt`
 - **Priority:** P2 · **Owner:** Copilot agent G0-6 · **Updated:** 2026-11-07
 - **Acceptance:** root layout and numbered-document precedence are reflected
-  in the realignment notes; gate pseudocode no longer contradicts governing
+  in current project status; gate pseudocode no longer contradicts governing
   numbered documents.
-- **Evidence:** all five gate pseudocode files and `docs/realignment.txt`
-  now distinguish normative contracts, current implementation, and
-  superseded historical material. CRLF-aware whitespace check passed.
+- **Evidence:** the five pseudocode files were checked against the numbered
+  documents and now distinguish governing contracts/current addenda from
+  historical examples. This records the reconciliation performed on
+  2026-11-07; it does not assert that every historical code sample matches
+  current source. The obsolete planning/status documents have since been
+  consolidated into this workboard.
 
 ### KB-D12-1 — Match remaining Document 12 top-level entries
 
@@ -183,7 +278,7 @@ is integrated and reviewed.
 
 ### KB-G5-1 — Complete authenticated, CSRF-safe API foundations
 
-- **WBS:** WP 5.1; realignment G5-1/G5-6/G5-7
+- **WBS:** WP 5.1
 - **Priority:** P0 · **Owner:** Copilot agent G5-1 · **Updated:** 2026-11-07
 - **Depends on:** KB-G0-2 (Done)
 - **Acceptance:** every implemented mutating route enforces session, CSRF,
@@ -197,7 +292,7 @@ is integrated and reviewed.
 
 ### KB-G0-3 — Make startup and worker lifecycle failures visible
 
-- **WBS/Docs:** WP 3.2–3.3; Document 12 §5; realignment G0-2/G3-4/G3-5
+- **WBS/Docs:** WP 3.2–3.3; Document 12 §5
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** —
 - **Acceptance:** reconciliation errors surface in health; workers have explicit
@@ -220,7 +315,7 @@ is integrated and reviewed.
 
 ### KB-G1-4 — Align process handle contract across adapters
 
-- **WBS:** WP 1.1–1.3; realignment G1-4
+- **WBS:** WP 1.1–1.3
 - **Priority:** P2 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** —
 - **Acceptance:** process identity/group fields align across adapters; PID
@@ -232,7 +327,7 @@ is integrated and reviewed.
 
 ### KB-G0-1 — Enforce dependency boundaries through ports and repositories
 
-- **WBS/Docs:** Document 12 §4–5; realignment G0-1
+- **WBS/Docs:** Document 12 §4–5
 - **Priority:** P0 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** —
 - **Acceptance:** services avoid concrete platform/process adapters; persistence
@@ -248,7 +343,7 @@ is integrated and reviewed.
 
 ### KB-G1-1 — Inject process and Minecraft capabilities through ports
 
-- **WBS:** WP 1.1, WP 1.5; realignment G1-1
+- **WBS:** WP 1.1, WP 1.5
 - **Priority:** P0 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G0-1 (Done)
 - **Acceptance:** `WorldsService` and save coordination depend on ports, not
@@ -261,7 +356,7 @@ is integrated and reviewed.
 
 ### KB-G5-5 — Implement world CRUD, EULA, files, and logs APIs
 
-- **WBS:** WP 5.1; realignment G5-7/G5-10
+- **WBS:** WP 5.1
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G1-3, KB-G5-1, KB-G5-2 (Done)
 - **Acceptance:** Document 10 world create/update/delete, runtime config,
@@ -276,7 +371,7 @@ is integrated and reviewed.
 
 ### KB-G5-4 — Implement settings, schedules, runtime, and administration APIs
 
-- **WBS:** WP 5.1; realignment G5-9/G5-10
+- **WBS:** WP 5.1
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G5-1, KB-G5-2, KB-G2-3, KB-G3-5 (Done)
 - **Acceptance:** Document 10 settings, schedules/missed-runs, templates,
@@ -288,27 +383,22 @@ is integrated and reviewed.
   compile, and diff checks passed. Manager backup/restore/restart/update/
   rollback endpoints are a separate KB-G5-8 deliverable.
 
-### KB-DOC-STATUS — Reconcile current status and audit evidence
+### KB-DOC-STATUS — Reconcile current status and verification evidence
 
-- **WBS/Docs:** `IMPLEMENTATION_STATUS.md`, `realignment.txt`, and gate
-  reconciliation headers
+- **WBS/Docs:** this workboard and gate reconciliation headers
 - **Priority:** P2 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G2-DOMAIN, KB-G2-MIGRATION, KB-G4-VERIFY (Done)
 - **Acceptance:** recorded test commands/counts match a dated fresh run; gate
   claims agree with verified acceptance; obsolete packaging notes and
   contradictions are explicitly superseded rather than silently retained.
-- **Evidence:** implementation status, realignment, and gate 1/4/5
-  reconciliation headers now reflect the current API, security, and metrics
-  implementation and retain explicit unresolved dependencies. Fresh focused
-  runs passed: security acceptance (53), metrics/control-plane/presentation/
-  Gate 5 (42, 1 long performance test deselected), and EULA replay (2).
-  Scoped Ruff and the repository diff check passed. Repository-wide static
-  gates, calibrated performance, POSIX, hosted CI, and proxy behavior remain
-  explicitly open rather than being presented as passing.
+- **Evidence:** implementation status and remaining gaps are recorded in this
+  board. Historical test/static results are date-qualified and not presented
+  as fresh runs. POSIX, hosted CI, proxy behavior, and calibrated performance
+  remain open.
 
 ### KB-G1-3 — Enforce Minecraft readiness and EULA product flow
 
-- **WBS:** WP 1.5; realignment G1-3
+- **WBS:** WP 1.5
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G1-1 (Done)
 - **Acceptance:** each server type reaches `running` only at its highest
@@ -339,7 +429,7 @@ is integrated and reviewed.
 
 ### KB-G3-1 — Keep operation progress in memory between milestones
 
-- **WBS:** WP 3.1; realignment G3-1
+- **WBS:** WP 3.1
 - **Priority:** P0 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G0-1 (Done)
 - **Acceptance:** progress ticks are published to realtime subscribers without
@@ -353,7 +443,7 @@ is integrated and reviewed.
 
 ### KB-G3-2 — Implement the Document 9 conflict matrix
 
-- **WBS:** WP 3.1; realignment G3-2
+- **WBS:** WP 3.1
 - **Priority:** P0 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G3-1 (Done)
 - **Acceptance:** parametrized tests cover each requested-operation /
@@ -366,7 +456,7 @@ is integrated and reviewed.
 
 ### KB-G3-3 — Audit each terminal operation exactly once
 
-- **WBS:** WP 3.4; realignment G3-3
+- **WBS:** WP 3.4
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G3-1 (Done)
 - **Acceptance:** terminal success/failure/cancellation writes exactly the
@@ -378,7 +468,7 @@ is integrated and reviewed.
 
 ### KB-G3-4 — Verify crash-safe runtime reconciliation and supervisor behavior
 
-- **WBS:** WP 3.2; realignment G3-4
+- **WBS:** WP 3.2
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G1-1, KB-G0-3
 - **Acceptance:** after manager restart a live server is re-attached rather
@@ -396,10 +486,15 @@ is integrated and reviewed.
   native/fake process reattachment. The broad suite passed (420 passed,
   3 skipped, 1 deselected); skipped symlink checks require unavailable Windows
   privilege, and the long performance smoke remains excluded.
+- **Latest verification:** the combined Gate 3 operation, conflict,
+  operation-engine, audit/notification, runtime/scheduler, and reconciliation
+  suites passed (94) on Windows / Python 3.13.14 on 2026-11-08. Two stale
+  worker-roster assertions were updated to include the catalog, sync, and
+  metrics workers already started by the app factory.
 
 ### KB-G3-5 — Run the scheduler automatically and verify missed-run behavior
 
-- **WBS:** WP 3.3; realignment G3-5
+- **WBS:** WP 3.3
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G0-3, KB-G3-2
 - **Acceptance:** app lifecycle starts/stops the 30-second scheduler; due work
@@ -414,7 +509,7 @@ is integrated and reviewed.
 
 ### KB-G5-2 — Make operation routes durably asynchronous
 
-- **WBS:** WP 5.1; realignment G5-2/G5-3
+- **WBS:** WP 5.1
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G3-1, KB-G3-2
 - **Acceptance:** mutating routes return promptly with the documented 202
@@ -429,7 +524,7 @@ is integrated and reviewed.
 
 ### KB-G5-7 — Verify authenticated SSE lifecycle and complete stream topics
 
-- **WBS:** WP 5.2; realignment G5-5/G5-13
+- **WBS:** WP 5.2
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G5-1, KB-G3-1
 - **Acceptance:** reconnect replay, snapshot, auth expiry, all documented
@@ -449,9 +544,11 @@ is integrated and reviewed.
 
 - **WBS:** WP 2.2 · **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** —
-- **Acceptance:** domain entities, events, invariants, deletion tiers, and
-  lifecycle guards are pure of framework/persistence imports; unit tests cover
-  every documented world-state transition and invariant.
+- **Acceptance:** the implemented `WorldInstance` entity, events, invariants,
+  deletion tiers, and lifecycle guards are pure of framework/persistence
+  imports; unit tests cover every documented world-state transition and
+  invariant. This card does not claim that every conceptual entity in
+  Document 6 is represented by a domain entity class.
 - **Evidence:** lifecycle transition intent/timestamp validation and invalid
   input preservation tests are complete.
   `python -m pytest --no-cov -q --basetemp=dev_artifacts/scratch/verify-g2-domain-final
@@ -460,7 +557,7 @@ is integrated and reviewed.
 
 ### KB-G2-2 — Implement effective configuration resolution
 
-- **WBS:** WP 2.4; realignment G2-2
+- **WBS:** WP 2.4
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G2-DOMAIN (Done)
 - **Acceptance:** `ConfigurationService` resolves global settings, world
@@ -473,7 +570,7 @@ is integrated and reviewed.
 
 ### KB-G2-3 — Route ConfigEdit through durable operations and map conflicts
 
-- **WBS:** WP 2.4; realignment G2-3
+- **WBS:** WP 2.4
 - **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** KB-G0-2, KB-G2-2, KB-G3-1, KB-G3-3 (Done)
 - **Acceptance:** stale versions return the documented
@@ -486,6 +583,27 @@ is integrated and reviewed.
   configuration service, route, and response helpers.
 
 ## Review
+
+### KB-G5-3 — Implement backup, restore, cleanup, and sync API catalog
+
+- **WBS:** WP 5.1
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
+- **Depends on:** KB-G5-1, KB-G5-2, KB-G4-VERIFY
+- **Status:** Review
+- **Acceptance:** Document 10 routes exist with authorization, request/
+  response schemas, error mapping, and tests for backup, restore/rollback,
+  cleanup preview/execute, and sync.
+- **Evidence:** `tests/integration/test_backup_catalog_api.py` covers durable
+  backup deletion, idempotent replay, retention rejection, deletion/audit, and
+  Superadmin + step-up force guards alongside the other catalog workflows.
+  The focused deletion test passed; all 4 module tests passed before the module
+  command exited on the global 80% coverage gate (44.46%). Scoped Ruff passed
+  on changed Python files. Backup-scope cleanup preview/execute is covered.
+- **Remaining:** Document 10 also defines `stale_worlds` and `logs` cleanup
+  scopes, but the route currently returns `CLEANUP_SCOPE_UNSUPPORTED` for both.
+  KB-G5-CLEANUP-POLICY must resolve their eligibility and retention contract
+  before those destructive workflows can be implemented/tested. Do not mark
+  this card Done until the policy is documented and the scopes are covered.
 
 ### KB-G4-VERIFY — Close Gate 4 against its exact acceptance checks
 
@@ -508,6 +626,13 @@ is integrated and reviewed.
   3 skipped) on Windows. Scoped Ruff and diff checks passed. Three symlink
   checks remain unverified because Windows denied symlink creation
   (`WinError 1314`); POSIX and live RCON/NAS integration were not run.
+- **Latest verification:** the same focused Gate 4 suite passed (68 passed,
+  3 skipped) on Windows / Python 3.13.14 on 2026-11-08. Scoped Ruff and diff
+  checks passed. The sync retry test now uses the injected sleeper instead of
+  monkeypatching a removed module-level `time.sleep` hook.
+- **Remaining:** run the symlink checks on a supported host and record live
+  RCON/NAS integration evidence; the Windows skips and focused fake/local
+  tests do not satisfy these acceptance items.
 
 ### KB-G5-11 — Add the dedicated security acceptance suite
 
@@ -535,6 +660,203 @@ is integrated and reviewed.
 
 ## To Do
 
+### KB-G5-CLEANUP-POLICY — Decide safe stale-world and log cleanup policy
+
+- **WBS/Docs:** Document 10 cleanup scopes; Documents 5 and 8
+- **Priority:** P1 · **Owner:** Unassigned
+- **Acceptance:** obtain an explicit product-owner decision for stale-world
+  eligibility and log retention/eligibility; document safeguards, exclusions,
+  preview information, and execution requirements in the governing documents.
+  Do not implement destructive cleanup until the policy is approved and
+  documented.
+- **Current evidence:** `stale_worlds` and `logs` cleanup scopes currently
+  return `CLEANUP_SCOPE_UNSUPPORTED`; the governing documents do not define
+  safe candidate eligibility or retention parameters.
+
+### KB-G2-ENTITY-MODEL — Reconcile Document 6 concepts with domain classes
+
+- **WBS/Docs:** WP 2.2; Document 6 §§1–6
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** KB-G2-DOMAIN (Done)
+- **Acceptance:** inventory Document 6's entity/aggregate concepts against
+  domain classes, value objects, and persistence models; identify which
+  concepts intentionally remain persistence-backed and which require domain
+  types. Record an explicit implementation decision and tests before claiming
+  complete domain-entity coverage.
+- **Current evidence:** `app/domain/entities.py` defines `WorldInstance`;
+  Document 6 describes additional concepts represented across schema and
+  value objects. Full conceptual coverage has not been established by the
+  focused lifecycle test run.
+
+### KB-D12-2 — Track remaining service-layer architecture divergences
+
+- **WBS/Docs:** Document 12 §§2, 4–5; Documents 8 and 12 define service
+  boundaries and the target application layout.
+- **Priority:** P2 · **Owner:** Unassigned
+- **Acceptance:** review service-level SQL access and the partial command/query
+  layer against the governing documents; record an explicit implementation
+  decision or bounded migration work before treating the architecture
+  divergence as resolved.
+- **Current evidence:** services use the persistence abstraction but issue
+  SQL through its connections; `app/commands/` currently contains only the
+  world command module. `RuntimeService` is a facade while `WorldsService`
+  retains lifecycle logic. No refactor or contract change is authorized by
+  this documentation card alone.
+
+### KB-G8-CONTRACT — Complete Document 8 service contract acceptance
+
+- **WBS/Docs:** Documents 8 and 11; related implementation cards in Gates 2–4
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** KB-G2-MIGRATION, KB-G3-1, KB-G3-2, KB-G3-3, KB-G4-VERIFY
+- **Acceptance:** inventory Document 8 service requirements against the
+  existing focused acceptance cards; identify uncovered behavior, add
+  contract-level tests for each uncovered requirement, and record a final
+  acceptance map without treating implementation presence as contract
+  completion.
+- **Current evidence:** operation, scheduler, audit, backup, restore, cleanup,
+  and sync slices have focused tests; contract-wide service acceptance remains
+  open.
+
+### KB-G9-CONTRACT — Complete Document 9 concurrency contract acceptance
+
+- **WBS/Docs:** Document 9; related implementation cards KB-G2-3 and KB-G3-2
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** KB-G2-3, KB-G3-2
+- **Acceptance:** map every Document 9 concurrency, conflict, locking, and
+  optimistic-version requirement to implementation and tests; add tests for
+  uncovered race/interleaving cases and record explicit exceptions before
+  claiming full contract acceptance.
+- **Current evidence:** the conflict matrix and ConfigEdit version behavior
+  have focused coverage; full Document 9 acceptance remains open.
+
+### KB-D11-TEST-PYRAMID — Close the Document 11 test-pyramid gaps
+
+- **WBS/Docs:** Document 11 §§1–3
+- **Priority:** P1 · **Owner:** Unassigned
+- **Acceptance:** inventory required unit, integration, and end-to-end flows;
+  add the missing service-level unit tests and representative full user-flow
+  E2E tests; record measured test distribution against Document 11's
+  approximate 70/25/5 pyramid or document an approved variance.
+- **Current evidence:** focused domain and integration suites exist, but
+  service-level unit coverage and full browser E2E flows are incomplete.
+
+### KB-D11-COVERAGE — Meet documented test coverage floors
+
+- **WBS/Docs:** Document 11 coverage requirements
+- **Priority:** P1 · **Owner:** Unassigned
+- **Acceptance:** raise every measured module to at least 80% coverage and
+  overall coverage to at least 85%; preserve meaningful assertions, add
+  coverage for the backup catalog API, and record the exact coverage command
+  and result.
+- **Current evidence:** backup catalog API coverage was recorded at
+  44.46% and the documented module/overall floors as unmet.
+
+### KB-D11-ISO-25010 — Complete the quality-characteristic evidence map
+
+- **WBS/Docs:** Document 11 ISO/IEC 25010 mapping
+- **Priority:** P2 · **Owner:** Unassigned
+- **Acceptance:** map each applicable quality characteristic in the testing
+  strategy to a measurable acceptance check and recorded evidence; add
+  compatibility, performance, and flexibility checks that are currently
+  unverified, coordinating performance thresholds with KB-PERF-01.
+- **Current evidence:** functional suitability, reliability, and security
+  coverage remain partial; compatibility, performance, and flexibility have
+  not been verified.
+
+### KB-DOC-EVIDENCE-QUALITY — Reconcile status and evidence claims
+
+- **WBS/Docs:** This workboard; Documents 10, 11, and 13
+- **Priority:** P2 · **Owner:** Unassigned
+- **Acceptance:** make this workboard the sole current implementation-status
+  source; define how slice-level and gate-level statuses differ; reconcile
+  duplicate gate/work-package summaries; narrow route and authorization
+  claims to verified scope pending KB-G5-API-CONTRACT; and record exact
+  commands, dates, platforms, and test scope where historical counts differ
+  (including the 36-test and 97-test Gate 1 results). Do not combine
+  overlapping test counts or present historical results as fresh.
+- **Current evidence:** gate and work-package summaries are repeated in this
+  board; route/auth claims require careful scoping against known exceptions;
+  and the 36-test and 97-test Gate 1 records need exact test-selection
+  provenance.
+
+### KB-DOC-WBS — Reconcile WBS paths and conformance details
+
+- **WBS/Docs:** `wbs.txt`; Documents 12 and 13
+- **Priority:** P2 · **Owner:** Unassigned
+- **Acceptance:** retain the WBS work-package/dependency structure while
+  reconciling obsolete `src/mcmanager/` file-scope paths and fake-server flag
+  names with the current root `app/` layout and conformance harness. Numbered
+  documents remain authoritative.
+- **Current evidence:** Gate 1 file-scope paths now match root `app/`; the
+  fake-server harness accepts both the documented `--crash-after` and
+  `--save-slow` modes and the millisecond variants used by focused tests.
+  Other WBS work-package paths still require reconciliation.
+
+### KB-G5-6 — Complete real workflows for the 17 shell modules
+
+- **WBS:** WP 5.3
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** KB-G5-3, KB-G5-4, KB-G5-5
+- **Acceptance:** modules are functional workflows, not scaffold fragments;
+  manager/world context switching works; navigation stays in-place and obeys
+  Document 4 tokens and 40px control geometry.
+
+### KB-G1-FORGE-SHUTDOWN — Diagnose Forge process exit after RCON stop
+
+- **WBS/Docs:** WP 1.5–1.6; Documents 13 §3 and 14 §§8, 10
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** —
+- **Acceptance:** reproduce the real Forge shutdown sequence in an isolated
+  world copy; determine whether the delayed exit is server/mod behavior,
+  Java/runtime behavior, or process-adapter behavior. If attributable to the
+  manager or adapter, implement and test the fix. Record the server log's
+  final save/RCON state and actual process exit classification without
+  weakening the documented shutdown ladder.
+- **Current evidence:** on Forge 1.20.1-47.4.10 / Java 21.0.13, RCON `stop`
+  caused all chunks to be saved and the RCON listener to stop, but the
+  supervised Java process did not exit within 180 seconds and was force
+  terminated. The existing server log also contains mod error/warning
+  messages; their relation to shutdown is unverified.
+
+### KB-G5-8 — Implement manager lifecycle operations
+
+- **WBS/Docs:** WP 5.1; Documents 5 Manager Maintenance, 6 Manager lifecycle,
+  8, and 10
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** KB-G5-2, KB-G5-3, KB-G5-4
+- **Acceptance:** replace `NOT_IMPLEMENTED` for manager/server restart,
+  software update/rollback, and manager backup/restore with authorized,
+  durable Operation workflows, recovery behavior, audit records, and
+  integration coverage. Coordinate route/catalog ownership with KB-G5-3.
+
+## Blocked
+
+### KB-G1-MINECRAFT — Run the real Minecraft adapter integration spike
+
+- **WBS/Docs:** WP 1.5; Documents 13 §5 and 14 §13
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** KB-G1-1, KB-G1-3 (Done)
+- **Status:** Blocked
+- **Blocked by:** This machine currently has a Forge 1.20.1 installation in
+  ignored `app/data/worlds/` data; that installation may be absent in another
+  checkout/CI worker. Vanilla, Paper, and Fabric installations or approved
+  test fixtures are also needed for the full spike. Follow Document 11 §1.4
+  before using any local server, and investigate KB-G1-FORGE-SHUTDOWN before
+  claiming Forge shutdown acceptance.
+- **Acceptance:** headless Vanilla, Paper, Fabric, and Forge runs verify
+  pre-spawn Java/EULA gating, declared readiness signals, RCON/save behavior
+  where supported, shutdown, and startup-failure classification. Record
+  server/JDK versions and results; do not treat fake-server tests as live
+  adapter evidence.
+- **Partial evidence:** an isolated copy of the Forge 1.20.1-47.4.10 world
+  was run on Windows / Java 21.0.13 using `WindowsProcessAdapter`, loopback
+  ports, and the manager's RCON/readiness code. Java compatibility, protocol
+  ping, authenticated RCON `list`, and `save-off`/`save-all`/`save-on` passed.
+  The server logged that all chunks were saved and the RCON listener stopped,
+  but the Java process remained alive beyond 180 seconds after RCON `stop` and
+  required forced termination. This is not a clean shutdown pass. Vanilla,
+  Paper, and Fabric were not tested.
+
 ### KB-G0-5 — Restore green repository static gates
 
 - **WBS/Docs:** Document 12 §8
@@ -558,80 +880,6 @@ is integrated and reviewed.
   all gates green. Root security and adapter-conformance workflows now exist,
   but there is no general static-gate workflow; the earlier workflow under
   `legacy implementation/` still references the legacy layout.
-
-### KB-G5-3 — Implement backup, restore, cleanup, and sync API catalog
-
-- **WBS:** WP 5.1; realignment G5-8/G5-11
-- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
-- **Depends on:** KB-G5-1, KB-G5-2, KB-G4-VERIFY
-- **Status:** Review
-- **Acceptance:** Document 10 routes exist with authorization, request/
-  response schemas, error mapping, and tests for backup, restore/rollback,
-  cleanup preview/execute, and sync.
-- **Evidence:** `tests/integration/test_backup_catalog_api.py` covers durable
-  backup deletion, idempotent replay, retention rejection, deletion/audit, and
-  Superadmin + step-up force guards alongside the other catalog workflows.
-  The focused deletion test passed; all 4 module tests passed before the module
-  command exited on the global 80% coverage gate (44.46%). Scoped Ruff passed
-  on changed Python files. Backup-scope cleanup preview/execute is covered.
-- **Remaining:** Document 10 also defines `stale_worlds` and `logs` cleanup
-  scopes, but the route currently returns `CLEANUP_SCOPE_UNSUPPORTED` for both.
-  Documents 5/8 do not define candidate eligibility or retention parameters
-  for those scopes, so destructive cleanup requires a governing policy
-  decision; do not mark this card Done until that contract is resolved and
-  those workflows are implemented/tested.
-
-### KB-G5-6 — Complete real workflows for the 17 shell modules
-
-- **WBS:** WP 5.3; realignment G5-12
-- **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** KB-G5-3, KB-G5-4, KB-G5-5
-- **Acceptance:** modules are functional workflows, not scaffold fragments;
-  manager/world context switching works; navigation stays in-place and obeys
-  Document 4 tokens and 40px control geometry.
-
-### KB-G1-MINECRAFT — Run the real Minecraft adapter integration spike
-
-- **WBS/Docs:** WP 1.5; Documents 13 §5 and 14 §13
-- **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** KB-G1-1, KB-G1-3 (Done)
-- **Acceptance:** headless Vanilla, Paper, Fabric, and Forge runs verify
-  pre-spawn Java/EULA gating, declared readiness signals, RCON/save behavior
-  where supported, shutdown, and startup-failure classification. Record
-  server/JDK versions and results; do not treat fake-server tests as live
-  adapter evidence.
-
-### KB-G5-8 — Implement manager lifecycle operations
-
-- **WBS/Docs:** WP 5.1; Documents 5 Manager Maintenance, 6 Manager lifecycle,
-  8, and 10
-- **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** KB-G5-2, KB-G5-3, KB-G5-4
-- **Acceptance:** replace `NOT_IMPLEMENTED` for manager/server restart,
-  software update/rollback, and manager backup/restore with authorized,
-  durable Operation workflows, recovery behavior, audit records, and
-  integration coverage. Coordinate route/catalog ownership with KB-G5-3.
-
-### KB-G5-9 — Add cancellable-operation API behavior
-
-- **WBS/Docs:** WP 5.1; Documents 9 and 10 Operations
-- **Priority:** P1 · **Owner:** Copilot agent Sync-Cancel · **Updated:** 2026-11-07
-- **Depends on:** KB-G5-1, KB-G5-2 (Done)
-- **Status:** Done
-- **Acceptance:** implement `POST /api/operations/{op_id}/cancel` for only
-  cancellable operation types in `Queued` or `Validating` (Sync may also be
-  cancelled while `Running` per Document 8), enforce documented authorization
-  and idempotency, return the canonical conflict/error envelopes otherwise,
-  and verify terminal audit behavior.
-- **Evidence:** `python -m pytest --no-cov -q
-  tests/integration/test_world_management_api.py -k cancel` passed (10 passed,
-  2 deselected); the combined Sync/cancellation/metrics/slow-client unit set
-  passed (23). Scoped Ruff passed. Coverage includes cancellable queued types,
-  Running Sync cooperative cancellation, partial NAS upload removal, one
-  terminal audit, terminal failed SyncRecord/failed_transient attempt, and no
-  retry after cancellation.
-
-## Blocked
 
 ### KB-G5-10 — Verify metrics cadence and streaming deployment behavior
 
@@ -663,20 +911,24 @@ is integrated and reviewed.
 
 ### KB-G1-6 — Run C1–C14 on a POSIX host
 
-- **WBS:** WP 1.6; realignment G1-6
-- **Priority:** P1 · **Owner:** Copilot agent POSIX-CI · **Updated:** 2026-11-07
+- **WBS:** WP 1.6
+- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-08
 - **Status:** Blocked
-- **Blocked by:** Hosted POSIX workflow result is still pending; the workflow
-  is configured but has not run on GitHub Actions.
+- **Blocked by:** Hosted Ubuntu/Windows workflow results are still pending;
+  the workflow has been configured as a two-OS matrix but has not run on
+  GitHub Actions.
 - **Acceptance:** run `tests/adapters/test_conformance.py` on a supported POSIX
   OS and attach the complete result; fix any platform-specific failures.
-- **Evidence:** `.github/workflows/adapter-conformance.yml` runs the suite on
-  `ubuntu-latest`; the local Windows invocation exceeded the runner limit, so
-  no platform conformance pass is claimed.
+- **Evidence:** `.github/workflows/adapter-conformance.yml` now runs the same
+  suite on `ubuntu-latest` and `windows-latest`. Previous local Windows
+  evidence is supplemented by
+  `python -m pytest --no-cov -q tests\adapters\test_conformance.py` on Windows
+  (30 passed, 2026-11-08). No POSIX conformance pass is claimed until the
+  hosted Ubuntu leg completes.
 
 ### KB-PERF-01 — Calibrate and pass performance release acceptance
 
-- **WBS:** Gate 5; Document 11 §4.2; realignment G5-13
+- **WBS:** Gate 5; Document 11 §4.2
 - **Priority:** P1 · **Owner:** Unassigned
 - **Blocked by:** A documented reference host and reproducible measurements
   must be supplied; thresholds must not be fabricated.
@@ -693,7 +945,9 @@ is integrated and reviewed.
 - **Priority:** P1 · **Owner:** Unassigned
 - **Depends on:** KB-G5-3, KB-G5-4, KB-G5-5
 - **Acceptance:** compare every documented API route against registration,
-  authorization, request/response schema, status, envelope, and error mapping;
-  record explicit `NOT_IMPLEMENTED` exceptions and add contract-level tests
-  for uncovered behavior. This is a final parity review, not a substitute for
+  authorization (including session, CSRF, role, and step-up requirements on
+  every mutating route), request/response schema, status, envelope, and error
+  mapping; record explicit `NOT_IMPLEMENTED` exceptions and add contract-level
+  tests for uncovered behavior. Include manager lifecycle routes and all
+  cleanup scopes. This is a final parity review, not a substitute for
   implementing the route-catalog cards.

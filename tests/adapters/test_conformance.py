@@ -21,6 +21,7 @@ from app.platform.process.posix import PosixProcessAdapter
 from app.platform.process.windows import WindowsProcessAdapter
 from app.ports.process_control import ProbeFingerprint
 from tests.adapters.fake_server.fake_adapter import FakeProcessAdapter
+from tests.adapters.fake_server.fake_server import _parse_args
 
 SCRIPT_PATH = Path(__file__).resolve().parent / 'fake_server' / 'fake_server.py'
 
@@ -182,7 +183,7 @@ def test_c4_crash_detection(kind, tmp_path):
     adapter = _make_adapter(kind)
     world_id = f'c4-{kind}'
     result = adapter.spawn(
-        build_request(world_id, str(tmp_path), 0, '--crash-after-ms=200')
+        build_request(world_id, str(tmp_path), 0, '--crash-after=0.2s')
     )
     assert result.handle is not None
     handle = result.handle
@@ -190,6 +191,41 @@ def test_c4_crash_detection(kind, tmp_path):
         assert poll_until_exited(adapter, handle, timeout_s=5.0) is ExitClass.CRASHED
         status = adapter.poll(handle)
         assert status.exit_code not in (0, 1)
+    finally:
+        cleanup(adapter, handle)
+
+
+def test_fake_server_accepts_documented_and_millisecond_flags():
+    documented = _parse_args(['--crash-after=2s', '--save-slow'])
+    assert documented.crash_after_ms == 2000
+    assert documented.save_slow_ms == 1000
+
+    implementation_flags = _parse_args(
+        ['--crash-after-ms=250', '--save-slow-ms=400']
+    )
+    assert implementation_flags.crash_after_ms == 250
+    assert implementation_flags.save_slow_ms == 400
+
+
+def test_fake_server_rejects_conflicting_duration_flags():
+    with pytest.raises(SystemExit):
+        _parse_args(['--crash-after=2s', '--crash-after-ms=2000'])
+    with pytest.raises(SystemExit):
+        _parse_args(['--save-slow', '--save-slow-ms=1000'])
+
+
+def test_fake_adapter_documented_save_slow_mode(tmp_path):
+    adapter = FakeProcessAdapter()
+    result = adapter.spawn(
+        build_request('save-slow', str(tmp_path), 0, '--save-slow')
+    )
+    assert result.handle is not None
+    handle = result.handle
+    started = time.monotonic()
+    try:
+        sent = adapter.write_stdin(handle, 'save-all')
+        assert sent.delivered
+        assert time.monotonic() - started >= 1.0
     finally:
         cleanup(adapter, handle)
 

@@ -42,9 +42,12 @@ def test_create_app_starts_supervisor_scheduler_and_operation_workers(monkeypatc
 
     workers = app.extensions['mcmanager_workers']
     assert {thread.name for thread in workers} == {
-        "mcmanager-runtime-supervisor",
-        "mcmanager-scheduler",
-        "mcmanager-operation-dispatcher",
+        'mcmanager-runtime-supervisor',
+        'mcmanager-scheduler',
+        'mcmanager-operation-dispatcher',
+        'mcmanager-catalog-operation-dispatcher',
+        'mcmanager-sync-operation-dispatcher',
+        'mcmanager-metrics-publisher',
     }
     assert all(thread.daemon and thread.ident is not None for thread in workers)
     app.extensions['mcmanager_shutdown']()

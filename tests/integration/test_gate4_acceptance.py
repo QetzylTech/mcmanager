@@ -655,7 +655,7 @@ def test_sync_service_exposes_three_stage_retry_and_daily_transfer_cap():
 
 
 def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_local_backup(
-    store, clock, tmp_path, monkeypatch
+    store, clock, tmp_path
 ):
     module_spec = importlib.util.find_spec('app.services.sync')
     assert module_spec is not None, 'Gate 4 requires app.services.sync'
@@ -676,8 +676,12 @@ def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_loca
             raise OSError('offsite unavailable')
 
     sleeps: list[float] = []
-    monkeypatch.setattr(module.time, 'sleep', sleeps.append)
-    sync = service_type(store, FailingTransport())
+    sync = service_type(
+        store,
+        FailingTransport(),
+        clock=clock,
+        sleeper=sleeps.append,
+    )
     backup = _backup_service(store, clock)
     result = backup.create_world_backup(
         world_id=world_id,

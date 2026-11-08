@@ -74,45 +74,46 @@ Objective: Deliver an OS-agnostic process supervision layer and Minecraft server
 type capability matrix without relying on systemd, Docker, or platform daemons.
 
 WP 1.1: Process Control Port & Value Objects
-  - File Scope: src/mcmanager/ports/process_control.py
+  - File Scope: app/ports/process_control.py
   - Deliverables: ProcessControlPort protocol definition, immutable SpawnRequest, 
     ProbeResult, ProcessHandle, and ProcessStatus value objects.
   - Acceptance Criteria: mypy --strict passes with zero Any types; platform 
     adapters implement protocol cleanly without importing OS modules into port.
 
 WP 1.2: POSIX Process Supervision Adapter
-  - File Scope: src/mcmanager/platform/process/posix.py
+  - File Scope: app/platform/process/posix.py
   - Deliverables: posix_spawn / subprocess.Popen(start_new_session=True) using 
     POSIX process groups for clean tree termination; /proc start-time validation.
   - Acceptance Criteria: Game processes survive manager restarts; process group 
     receives SIGTERM followed by SIGKILL escalation after 10s deadline.
 
 WP 1.3: Windows Process Supervision Adapter
-  - File Scope: src/mcmanager/platform/process/windows.py
+  - File Scope: app/platform/process/windows.py
   - Deliverables: Win32 Job Object wrapper created WITHOUT 
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; CTRL_BREAK_EVENT signal escalation.
   - Acceptance Criteria: Game process remains running if manager is abruptly 
     killed; job handle re-attaches cleanly upon manager reboot.
 
 WP 1.4: Output Pipe Tailing & Log Filtering Engine
-  - File Scope: src/mcmanager/platform/process/tailing.py
+  - File Scope: app/platform/process/tailing.py
   - Deliverables: Non-blocking async stdout/stderr tailer with thread-safe 5,000-line 
     memory ring buffer; VERBOSE_LOGGING environment variable filter.
   - Acceptance Criteria: Zero line dropped under high console throughput; 
     VERBOSE_LOGGING=false suppresses debug channels and raw stdout logs on disk.
 
 WP 1.5: Minecraft Server Adapters & Readiness Hierarchy
-  - File Scope: src/mcmanager/infrastructure/minecraft/ (capabilities.py, 
-    readiness.py, properties.py, eula.py)
+  - File Scope: app/infrastructure/minecraft/ (capabilities.py,
+    readiness.py, properties_schema.py, eula.py)
   - Deliverables: Capability matrix for Vanilla, Paper, Fabric, Forge; 5-level 
     Server Readiness Hierarchy evaluator; server.properties parser; eula.txt writer.
   - Acceptance Criteria: starting -> running transition fires ONLY when server 
     variant's highest applicable readiness level is confirmed.
 
 WP 1.6: Adapter Conformance Test Suite & Fake Server Harness
-  - File Scope: tests/adapters/fake_server/, tests/conformance/
-  - Deliverables: Standalone fake_server binary supporting --crash-after, 
-    --save-slow, and --eula flags; C1–C14 automated conformance test suite.
+  - File Scope: tests/adapters/fake_server/, tests/adapters/test_conformance.py
+  - Deliverables: Standalone fake_server program supporting the documented
+    --crash-after, --save-slow, and --eula modes (with millisecond variants
+    available for focused tests); C1–C14 automated conformance test suite.
   - Acceptance Criteria: 100% pass rate on C1–C14 suite across POSIX and Windows.
 
 ================================================================================

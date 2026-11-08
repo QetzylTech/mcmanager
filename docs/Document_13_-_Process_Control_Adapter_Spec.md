@@ -163,4 +163,13 @@ Two spike questions to answer before full implementation; outputs = conformance 
 
 Extended by Gate 1 real-Minecraft spike (ARCHITECTURE §15 item 1): EULA gating, Java compatibility, RCON, and save coordination exercised against live Vanilla/Paper/Forge/Fabric behavior per Doc 14 §13.
 
+Live server installations may be available as ignored machine-local data
+under `app/data/worlds/`, but their presence and server-type coverage are not
+guaranteed in every checkout or CI worker. Check before planning a spike. If
+using one, follow Document 11 §1.4: test a disposable copy with loopback-only
+ports, preserve the original world and EULA state, and report only the
+server types and behaviors actually exercised. Missing live installations do
+not block synthetic conformance tests; synthetic results do not count as live
+Minecraft evidence.
+
 Prototype acceptance gate: conformance C1–C14 green on the target OS + the fake adapter, plus C11 (re-attach) verified end-to-end with a real manager boot.

@@ -130,6 +130,9 @@ def test_successful_startup_starts_all_background_workers(monkeypatch) -> None:
         'mcmanager-runtime-supervisor',
         'mcmanager-scheduler',
         'mcmanager-operation-dispatcher',
+        'mcmanager-catalog-operation-dispatcher',
+        'mcmanager-sync-operation-dispatcher',
+        'mcmanager-metrics-publisher',
     }
     assert app.extensions['mcmanager_container'] is container
     assert app.extensions['mcmanager_reconciliation_health'].status == 'healthy'

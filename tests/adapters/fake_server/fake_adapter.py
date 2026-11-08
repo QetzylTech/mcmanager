@@ -71,6 +71,17 @@ def _optional_int_after_flag(argv: list[str], flag: str) -> int | None:
     return None
 
 
+def _parse_duration_ms_after_flag(argv: list[str], flag: str) -> int:
+    """Parse documented seconds-based duration flags such as ``--crash-after=2s``."""
+    for arg in argv:
+        if arg.startswith(flag + '='):
+            value = arg[len(flag) + 1 :]
+            if value.endswith('s'):
+                value = value[:-1]
+            return round(float(value) * 1000)
+    return 0
+
+
 @dataclass(frozen=True)
 class FakeHandle:
     """Opaque in-process handle for the fake adapter."""
@@ -105,13 +116,15 @@ class _VirtualProcess:
         )
         self.crash_after_ms = _parse_int_after_flag(
             request.launch_command, '--crash-after-ms'
-        )
+        ) or _parse_duration_ms_after_flag(request.launch_command, '--crash-after')
         self.tick_ms = _parse_int_after_flag(request.launch_command, '--tick-ms')
         self.ready_ms = _parse_int_after_flag(request.launch_command, '--ready-ms')
         self.never_ready = any(arg == '--never-ready' for arg in request.launch_command)
         self.save_slow_ms = _parse_int_after_flag(
             request.launch_command, '--save-slow-ms'
         )
+        if '--save-slow' in request.launch_command and not self.save_slow_ms:
+            self.save_slow_ms = 1000
         self.tcp_port = _optional_int_after_flag(request.launch_command, '--port')
         self.rcon_port = _optional_int_after_flag(request.launch_command, '--rcon-port')
         self.rcon_password = 'test-pass'

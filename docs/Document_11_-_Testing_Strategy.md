@@ -52,6 +52,34 @@ Scope:
 
 E2E intentionally thin/slow; one or two canonical flow suites per release, not a regression workhorse. Most coverage lives in §1.1/§1.2.
 
+### 1.4 Optional live Minecraft server fixtures
+
+Machine-local server installations and worlds may be available under
+`app/data/worlds/`; this directory is ignored runtime data and is not included
+in every checkout or CI worker. Tests and agents must check whether a suitable
+installation is present rather than assuming either presence or absence.
+
+When one is available, use it for an optional live integration spike in
+addition to (not instead of) deterministic fake-server and adapter tests:
+
+- Record the server type, exact server/mod-loader and Minecraft versions,
+  Java version, OS, and the checks actually completed. Test only the server
+  types installed and report missing types as untested.
+- Never launch against or alter the original installation/world. Make a
+  disposable copy under an approved repository-local scratch location, use
+  dedicated loopback-only ports and an isolated RCON credential, and keep
+  test logs/artifacts out of the original world.
+- Preserve the original EULA file and world data. A copied test fixture must
+  already have an authorized EULA acceptance; do not infer consent or change
+  EULA state as part of setup.
+- Exercise only the relevant real-server contracts (for example Java/EULA
+  preflight, readiness, RCON, save coordination, and shutdown). A partial
+  live run is evidence only for the checks completed and does not satisfy
+  cross-OS, all-server-type, or full Gate 1 acceptance by itself.
+- Record startup, shutdown, and cleanup outcomes, including timeouts and
+  forced termination. Do not retain or publish RCON passwords, player data,
+  or unrelated contents of local worlds in test reports.
+
 ## 2 ISO/IEC 25010 mapping
 
 Every characteristic maps to a concrete, gated verification. Mandatory: a change touching a listed behavior must carry the corresponding test.
