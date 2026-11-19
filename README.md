@@ -1,8 +1,6 @@
 # mcmanager
 
-Minecraft server management software for local networks, built with Python
-and Flask. The manager supports multiple independent server worlds and
-versions.
+Minecraft server management software for local networks, built with Python and Flask. The manager supports multiple independent server worlds and versions.
 
 ## Project layout
 
