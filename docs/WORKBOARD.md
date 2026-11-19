@@ -67,6 +67,7 @@ audit is retained as a report; this board controls task status and evidence.
 | AUD-2026-11-19-08 — Static gates and stale baselines | KB-G0-5, KB-DOC-EVIDENCE-QUALITY |
 | AUD-2026-11-19-09 — Performance evidence | KB-PERF-01, KB-G5-10, KB-D11-ISO-25010 |
 | AUD-2026-11-19-10 — Workboard/WBS traceability | KB-DOC-EVIDENCE-QUALITY, KB-DOC-WBS, KB-G5-API-CONTRACT, KB-G8-CONTRACT, KB-G9-CONTRACT |
+| AUD-2026-11-19-11 — Legacy documentation inventory | KB-DOC-LEGACY-ARCHIVE |
 | Detailed implementation/test inventory | Existing cleanup, lifecycle, architecture, API, test, platform, security, and performance cards above |
 
 ## Gate roll-up
@@ -82,9 +83,9 @@ audit is retained as a report; this board controls task status and evidence.
 
 ## Implementation status
 
-**Last recorded test-suite verification:** 2026-11-08, Windows / Python
-3.13.14. This summary is a dated evidence snapshot, not a claim that every
-gate or the product is release-ready.
+**Latest recorded full-suite verification:** 2026-11-19, Windows / Python
+3.13.14. The app is not release-ready; this failed run is a current baseline,
+not acceptance evidence.
 
 The production-bound application is `app/`; it has a tested foundation and
 substantial control-plane functionality, but has not passed release acceptance
@@ -96,10 +97,24 @@ acceptance.
 
 ### Latest recorded verification
 
+- `.\.venv\Scripts\python.exe -m pytest -q --tb=no`: **493 passed,
+  8 failed, 4 skipped, 76.24% coverage, 251 warnings** (401.61s).
+  Failures: shell token/style, persistent-shell module list, three health/
+  diagnostics checks, service dependency boundary, and two realtime log-stream
+  checks. The output also contained background operation workers attempting
+  dispatch after the SQLite store had closed; triage this with the test
+  warnings. No full-suite pass is claimed.
+- Repository-wide static checks on Windows / Python 3.13.14: Ruff **39**
+  errors (28 fixable with `--fix`; 9 additional unsafe fixes are available);
+  Black **84** files would be reformatted; isort **7** files were flagged.
+  One additional test file was skipped because the Windows console encoding
+  could not parse it;
+  mypy **238** errors in 23 of 92 application files. `lint-imports` could not
+  run because `lint_imports` is not installed in the project virtualenv.
 - `python -m pytest --no-cov -q -k "not performance_acceptance_smoke"`:
   **448 passed, 3 skipped, 1 deselected**. The skips require Windows symlink
   privileges unavailable on the recorded host; the deselected smoke is the
-  long performance test.
+  long performance test. This is the 2026-11-08 historical result.
 - `node --test tests\browser\test_gate5_browser.test.cjs`: **6 passed**,
   including actual `operator_ui.js` navigation across all 17 modules, setup/
   login, Manager Backup submission, tokenized shell styling, and 10-tab stream
@@ -122,13 +137,8 @@ acceptance.
   restore coordination tests **31 passed**; proxy HTTPS cookie test **1 passed**.
   A broad non-performance suite was attempted but exceeded the terminal runner's
   30-second limit; no full-suite result is claimed.
-- Repository-wide static baselines are historical and inconsistent: one
-  recorded snapshot reports Ruff 46, Black 76 files, isort 9 files, and mypy
-  217 errors; an earlier board entry reports Ruff 52, Black 74 files, and
-  isort 14 files. The latest recorded status snapshot says `lint-imports` was
-  unavailable, while an earlier entry reports broken import boundaries. These
-  commands were not rerun during this documentation consolidation; none should be
-  presented as a fresh result.
+- Earlier repository-wide static baselines (Ruff 46/52, Black 76/74 files,
+  isort 9/14 files, mypy 217 errors) are superseded by the fresh results above.
 - POSIX conformance, live Minecraft/RCON/NAS integration, and calibrated
   performance acceptance have not been verified. The Windows symlink skips
   are an environment limitation, not passing acceptance.
@@ -291,9 +301,9 @@ is integrated and reviewed.
 - **Evidence:** targeted startup, migration, package-layout, and world-lifecycle
   tests passed (35) on Windows / Python 3.13.14. Scoped Ruff and Black checks
   passed. A copied `app/` folder without repository-level files started and
-  served HTTP 200. Full suite: 493 passed, 8 failed, 4 skipped, 1 warning;
-  failures remain in existing presentation/health expectations, dependency
-  boundaries, and realtime slow-client tests.
+  served HTTP 200. An earlier full-suite run recorded 493 passed, 8 failed,
+  4 skipped, and 1 warning; the latest 2026-11-19 run records the same test
+  counts with 251 warnings and confirms those failures are still present.
 
 ### KB-DATA-01 — Keep managed worlds inside application data
 
@@ -806,7 +816,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   the focused API/log run (57 passed across four modules), including backlog
   replay beyond subscriber queue capacity and unavailable-cursor resnapshot.
 - **Remaining:** review browser/client recovery under a live proxy; the full
-  repository suite did not return a result within the available runner limit.
+  repository suite now completes in 401.61 seconds but has eight failures,
+  including both realtime slow-client tests (AUD-2026-11-19-07).
 
 ## To Do
 
@@ -820,12 +831,15 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   Specifically resolve shell token/style and persistent-shell expectations,
   the three health/diagnostics failures, the service-boundary failure (owned
   by `KB-G0-BOUNDARY-REGRESSION`), and the two realtime slow-client failures.
-  Triage and record the 252 warnings from the audit run; update the dated
+  Triage and record the 251 warnings from the audit run; update the dated
   verification snapshot only with fresh results. Coverage-floor work remains
   on `KB-D11-COVERAGE`.
-- **Current evidence:** the 2026-11-19 Windows / Python 3.13.14 coverage run
-  reported 493 passed, 8 failed, 4 skipped, 76.26% coverage, and 252 warnings.
-  This card does not claim that result is current after subsequent changes.
+- **Current evidence:** the 2026-11-19 Windows / Python 3.13.14 full coverage
+  run reported 493 passed, 8 failed, 4 skipped, 76.24% coverage, and 251
+  warnings. A rerun of the eight failing cases confirmed the same failure
+  names; the full run took 401.61 seconds. Shutdown also logged queued-operation
+  workers attempting database access after the SQLite store had closed; this
+  remains part of warning triage, not a separately counted test failure.
 
 ### KB-G5-CLEANUP-POLICY — Decide safe stale-world and log cleanup policy
 
@@ -960,7 +974,7 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   the repository-level coverage floor. Feature-specific coverage is owned by
   each implementation card and is not deferred to this cross-cutting gate.
 - **Current evidence:** backup catalog API coverage was recorded at
-  44.46% in a focused run. The 2026-11-19 full coverage run reported 76.26%
+  44.46% in a focused run. The 2026-11-19 full coverage run reported 76.24%
   overall, with 18 of 92 application modules below 80%; the configured
   overall floor is still 80%, not the documented 85%, and no per-module floor
   is enforced.
@@ -1231,6 +1245,23 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   `benchmarks/thresholds.json` values, and pass its acceptance test.
 
 ## Backlog
+
+### KB-DOC-LEGACY-ARCHIVE — Clarify historical documentation status
+
+- **WBS/Docs:** Repository structure; AUD-2026-11-19-11
+- **Priority:** P3 · **Owner:** Unassigned
+- **Depends on:** —
+- **Acceptance:** inventory the historical materials in `old doc/`,
+  `Prototypes/`, and root-level planning/documentation files; identify the
+  canonical current plans and any actual runtime consumers; label the
+  remaining material as authoritative, historical, or redundant. Preserve
+  current numbered plan documents in `docs/`; do not move or delete files
+  without an explicit decision supported by the inventory.
+- **Current evidence:** `old doc/` contains 16 files, including older
+  Document 5–9 copies and legacy architecture/implementation notes.
+  `Prototypes/` is a separate legacy reference archive. This audit did not
+  establish that every archived file is a byte-for-byte duplicate or safe to
+  delete.
 
 ### KB-G5-API-CONTRACT — Audit full Document 10 contract parity
 
