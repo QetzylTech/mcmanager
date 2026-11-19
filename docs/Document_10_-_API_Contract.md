@@ -48,6 +48,25 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | POST | `/api/auth/step-up` | any | `{password}` → 10-min window; S routes check it |
 | GET | `/api/session` | any | user, role, permission grants, device, step-up expiry, settings visibility |
 
+### Delegated permissions
+Permission-protected routes require an exact `action_category` grant for their
+world scope unless the user has baseline Admin/Superadmin access. Effective
+grants are the union of live direct-user grants and grants on live assigned
+roles. A `world_id = NULL` grant applies globally; a world-scoped grant applies
+only to that exact world. Aggregate reads without a specific world require a
+global grant. Superadmin-only routes remain role-only and cannot be delegated.
+
+| Action categories | Protected route family |
+|---|---|
+| `world.view`, `world.create`, `world.edit`, `world.delete`, `world.start`, `world.stop`, `world.kill` | World catalog, lifecycle, and metadata |
+| `world.runtime.view/edit`, `world.settings.view/edit`, `world.eula.accept`, `world.properties.view/edit` | Runtime config, settings, EULA, server properties |
+| `world.files.view/edit`, `world.logs.view`, `world.operation.cancel` | World files, logs, operations |
+| `world.backup.view/create`, `world.restore.view/restore`, `world.cleanup` | World backups, restore history/actions, cleanup preview |
+| `backup.view/delete`, `backup.sync.view` | Backup catalog, deletion, and sync history |
+| `cleanup.view/manage`, `sync.view/retry/manage` | Manager-wide cleanup and sync catalogs/actions |
+| `schedule.view/edit`, `template.view/edit`, `runtime.view/edit` | Schedules, templates, and Java runtimes |
+| `settings.view/edit`, `manager.backup/restore/restart`, `system.view` | Manager settings/actions, diagnostics, and metrics |
+
 ### Worlds
 | Method | Path | Access | Notes |
 |---|---|---|---|
@@ -90,6 +109,8 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 ### Cleanup
 | Method | Path | Access | Notes |
 |---|---|---|---|
+| GET | `/api/cleanup/policy` | A | Manager-wide backup cleanup policy; when unset, returns safe defaults with `version=0` |
+| PATCH | `/api/cleanup/policy` | A S | Versioned ConfigEdit; `{version, age_rule_days?, space_rule_pct?, count_rules?, schedule_id?}`; version `0` creates the global default policy |
 | POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_worlds\|logs, world_id?, policy_version?}` → affected-candidate summary in `data` once Validating |
 | POST | `/api/cleanup/execute` | A S | O Cleanup `wet=true`; requires dry-run preview (`scope`, `dry_run_operation_id`); blast-radius cap enforced |
 | GET | `/api/cleanup/runs` | A | cleanup history with summaries in `data_json` |
@@ -102,6 +123,9 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 | GET | `/api/backups/{artifact_id}/sync` | any | sync job + immutable attempt timeline |
 | POST | `/api/sync/retry` | A | O re-trigger sync `{artifact_id}` (only auto-retrying op; this is manual) |
 | GET | `/api/sync/targets` | A | targets with effective resolution (global default vs world override) |
+| POST | `/api/sync/targets` | A | O ConfigEdit; `{scope, world_id?, target_type, config, credential, name?, enabled?}`; credentials are encrypted and never returned |
+| PATCH | `/api/sync/targets/{target_id}` | A | O ConfigEdit; requires `version`; editable fields include `scope`, `world_id`, `target_type`, `config`, `name`, `credential` (rotate), and `enabled`; 409 stale |
+| DELETE | `/api/sync/targets/{target_id}` | A | O ConfigEdit soft-delete; disables target and preserves sync history |
 
 ### Schedules & missed runs
 | Method | Path | Access | Notes |
@@ -188,6 +212,17 @@ Legend: `S` = step-up; `O` = creates Operation (async 202); `A` = Admin+; `SA` =
 **Log channels (`{channel}`)** — canonical closed set; others → `VALIDATION_ERROR`: `minecraft` (live console/stdout-stderr) · `crash_reports` · `backup_restore` (dedicated live stream `/stream/restore_logs`) · `panel_activity` · `panel_errors` · `debug` / `sync` / `manager_action`
 
 `VERBOSE_LOGGING` is a non-secret runtime `.env` flag. At `false` (deployed default), `debug` is suppressed, raw Minecraft stdout/stderr is filtered to severe warnings, errors, crashes, and readiness markers, and step-level backup/restore or sync traces are omitted; essential channels and terminal outcomes remain available. At `true`, all eight canonical channels receive full retention and live-stream output.
+
+### Documentation & manager system logs
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/documentation` | A | list repository-local Markdown documents under `docs/` |
+| GET | `/api/documentation/{path}` | A | source contract: `text/markdown`; `rendered_html` is null until a trusted renderer exists |
+| GET | `/api/manager/logs` | A | list existing canonical manager log channels under `app/data/logs` |
+| GET | `/api/manager/logs/{channel}` | A | list files in that channel |
+| GET | `/api/manager/logs/{channel}/{file}` | A | download a channel file; path containment and symlinks are guarded |
+
+Documentation and manager-log reads are authenticated and administrator-only. Documentation is returned as Markdown source; clients must not interpret source HTML as trusted markup. Manager log access is limited to the repository-local `app/data/logs` tree.
 
 ### System
 | Method | Path | Access | Notes |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -56,9 +57,40 @@ class SchedulerService:
         self._clock = clock
         self._operations = operations
         self._notifications = notifications
+        self._tick_lock = threading.Lock()
+        self._last_tick_at: int | None = None
+        self._next_tick_at = int(self._clock.now()) + self.tick_interval_seconds
+        self._last_tick_status = 'not_started'
+        self._last_tick_error: str | None = None
+
+    @property
+    def tick_health(self) -> dict[str, Any]:
+        with self._tick_lock:
+            return {
+                'last_tick_at': self._last_tick_at,
+                'next_tick_at': self._next_tick_at,
+                'status': self._last_tick_status,
+                'error': self._last_tick_error,
+            }
 
     def tick(self) -> SchedulerTickResult:
-        now = int(self._clock.now())
+        started_at = int(self._clock.now())
+        try:
+            result = self._run_tick(started_at)
+        except Exception as exc:
+            self._record_tick(started_at, 'failed', str(exc))
+            raise
+        self._record_tick(started_at, 'ok', None)
+        return result
+
+    def _record_tick(self, at: int, status: str, error: str | None) -> None:
+        with self._tick_lock:
+            self._last_tick_at = at
+            self._next_tick_at = at + self.tick_interval_seconds
+            self._last_tick_status = status
+            self._last_tick_error = error
+
+    def _run_tick(self, now: int) -> SchedulerTickResult:
         due = 0
         dispatched = 0
         missed = 0

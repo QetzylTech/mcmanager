@@ -9,12 +9,13 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, current_app, request, stream_with_context
+from flask import Blueprint, Response, current_app, g, request, stream_with_context
 
 from app.domain.tuning import LOG_LINE_BUFFER_LINES
 from app.platform.process.tailing import read_durable_log
 from app.services.auth import SessionError
 from app.services.realtime import RealtimeHub
+from app.web.middleware import _ADMIN_ROLES, _has_permission, _permission_requirement
 
 streams_bp = Blueprint("streams", __name__, url_prefix="/stream")
 
@@ -264,7 +265,29 @@ def _world_snapshot(container: Any, world_id: str) -> dict[str, Any]:
 def _auth_check_for_request(container: Any) -> Callable[[], bool]:
     token = request.cookies.get("mcmanager_session", "")
     ip = request.remote_addr or ""
-    return _session_check(container, token, ip)
+    user_id = g.current_session.user_id
+    requirement = _permission_requirement(container)
+    authenticated = _session_check(container, token, ip)
+
+    def check() -> bool:
+        if not authenticated():
+            return False
+        if requirement is None:
+            return True
+        admin = container.store.reader().execute(
+            "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
+            "WHERE ra.user_id = ? AND ra.deleted_at IS NULL AND r.deleted_at IS NULL "
+            "AND r.name IN (?, ?) LIMIT 1",
+            (user_id, *_ADMIN_ROLES),
+        ).fetchone()
+        return admin is not None or _has_permission(
+            container,
+            user_id=user_id,
+            action_category=requirement[0],
+            world_id=requirement[1],
+        )
+
+    return check
 
 
 @streams_bp.get("/events")

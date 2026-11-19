@@ -4,16 +4,23 @@
   if (!root || !main) return;
 
   const contextSelect = document.querySelector('[data-context-select]');
+  const contextCrumb = document.querySelector('[data-context-crumb]');
+  const themeToggle = document.querySelector('[data-theme-toggle]');
+  const navToggle = document.querySelector('[data-nav-toggle]');
+  const nav = document.querySelector('.site-nav');
   let worlds = [];
   let worldId = '';
   let statusMessage = '';
   let cleanupOperationId = '';
   let cleanupWorldId = '';
   let cleanupOperationStatus = '';
+  let editingSyncTargetId = '';
   let auditFilters = {};
   let logTimer = null;
   let logOffset = 0;
   let logChannel = 'minecraft';
+  let managerLogChannel = '';
+  let documentationPath = '';
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -46,6 +53,32 @@
 
   function unavailable(text, heading = 'Unavailable') {
     return `<div class="unavailable-state"><strong>${escapeHtml(heading)}</strong><p class="muted">${escapeHtml(text)}</p></div>`;
+  }
+
+  function markdownToHtml(markdown) {
+    const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n');
+    let html = '';
+    let inList = false;
+    const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+    const inline = (text) => escapeHtml(text)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
+        const href = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(url) ? '#' : url;
+        return `<a href="${escapeHtml(href)}">${label}</a>`;
+      });
+    for (const line of lines) {
+      if (/^### /.test(line)) { closeList(); html += `<h3>${inline(line.slice(4))}</h3>`; }
+      else if (/^## /.test(line)) { closeList(); html += `<h2>${inline(line.slice(3))}</h2>`; }
+      else if (/^# /.test(line)) { closeList(); html += `<h1>${inline(line.slice(2))}</h1>`; }
+      else if (/^[-*] /.test(line)) {
+        if (!inList) { html += '<ul>'; inList = true; }
+        html += `<li>${inline(line.slice(2))}</li>`;
+      } else if (!line.trim()) closeList();
+      else { closeList(); html += `<p>${inline(line)}</p>`; }
+    }
+    closeList();
+    return html;
   }
 
   function query(values) {
@@ -105,7 +138,18 @@
     contextSelect.innerHTML = '<option value="manager">Manager</option>' + worlds.map((world) =>
       `<option value="${escapeHtml(world.world_id)}">World: ${escapeHtml(world.display_name)}</option>`).join('');
     const active = main.dataset.activePage;
-    contextSelect.value = (active.startsWith('world-') || active === 'files') && worldId ? worldId : 'manager';
+    const worldPage = active.startsWith('world-') || active === 'files';
+    contextSelect.value = worldPage && worldId ? worldId : 'manager';
+    if (contextCrumb) {
+      const selectedWorld = worlds.find((world) => world.world_id === worldId);
+      contextCrumb.textContent = worldPage && selectedWorld
+        ? `World context · ${selectedWorld.display_name}`
+        : 'Manager context';
+    }
+    document.querySelectorAll('.nav-group').forEach((group) => {
+      const groupHasActiveLink = group.querySelector(`a[data-page="${CSS.escape(active)}"]`);
+      group.open = Boolean(groupHasActiveLink);
+    });
   }
 
   function renderAuth(mode, text = '') {
@@ -251,17 +295,34 @@
   }
 
   async function renderMaintenance() {
-    const [runs, missed] = await Promise.all([request('/api/cleanup/runs?limit=50&offset=0'), request('/api/missed-runs?limit=50&offset=0')]);
+    const [runs, missed, policyResult, schedulesResult] = await Promise.all([
+      request('/api/cleanup/runs?limit=50&offset=0'),
+      request('/api/missed-runs?limit=50&offset=0'),
+      request('/api/cleanup/policy'),
+      request('/api/schedules?limit=100&offset=0'),
+    ]);
+    const policy = policyResult.data.cleanup_policy;
+    const cleanupSchedules = (schedulesResult.data.schedules || [])
+      .filter((schedule) => schedule.scope === 'global' && schedule.schedule_type === 'cleanup');
     if (cleanupOperationId) {
       try {
         const operation = await request(`/api/operations/${encodeURIComponent(cleanupOperationId)}`);
         cleanupOperationStatus = operation.data.operation.status;
       } catch (_error) { cleanupOperationStatus = ''; }
     }
-    root.innerHTML = message() + card('Retention preview', `<form class="workflow-form" data-form="cleanup-preview">` +
+    root.innerHTML = message() +
+      card('Manager-wide backup retention policy', `<form class="workflow-form" data-form="global-cleanup-policy">` +
+        `${field('Minimum backup age (days)', 'age_rule_days', policy.age_rule_days, 'number', true)}` +
+        `${field('Space threshold (%)', 'space_rule_pct', policy.space_rule_pct ?? '', 'number')}` +
+        `<label>Per-category minimum retained counts (JSON)<textarea class="ui-text-input" name="count_rules" rows="3" required>${escapeHtml(JSON.stringify(policy.count_rules || {}, null, 2))}</textarea></label>` +
+        `${selectField('Cleanup schedule', 'schedule_id', [['', 'No schedule'], ...cleanupSchedules.map((schedule) => [schedule.schedule_id, `${schedule.time_of_day} · ${schedule.schedule_id}`])], policy.schedule_id || '')}` +
+        `<input type="hidden" name="version" value="${escapeHtml(policyResult.data.version)}">` +
+        `<p class="muted">The three-day age and three-backup count floors cannot be lowered. World-specific policies may override these defaults.</p>` +
+        `<button class="ui-button ui-button-blue" type="submit">Save global policy</button></form>`) +
+      card('Retention preview', `<form class="workflow-form" data-form="cleanup-preview">` +
       `${selectField('Scope', 'scope', [['backups', 'Backups']])}` +
       `${selectField('World', 'world_id', worldChoices())}<button class="ui-button ui-button-blue" type="submit">Run dry preview</button></form>` +
-      `${unavailable('Policy editing and stale-world/log cleanup are not supported. The cleanup service currently supports backups only.')}` +
+      `${unavailable('Stale-world and log cleanup are not supported. The cleanup service currently supports backups only.')}` +
       (cleanupOperationId ? `<p>Preview ${escapeHtml(cleanupOperationId)} · ${escapeHtml(cleanupOperationStatus || 'status unavailable')}</p>` +
         `<form class="workflow-form" data-form="cleanup-execute"><input type="hidden" name="dry_run_operation_id" value="${escapeHtml(cleanupOperationId)}">` +
         `<input type="hidden" name="world_id" value="${escapeHtml(cleanupWorldId)}">` +
@@ -276,13 +337,49 @@
   }
 
   async function renderSystemLogs() {
-    const [health, diagnostics, notices] = await Promise.all([request('/api/health'), request('/api/diagnostics'), request('/api/notifications?limit=50&offset=0')]);
+    const [health, diagnostics, notices, channelsResult] = await Promise.all([
+      request('/api/health'), request('/api/diagnostics'),
+      request('/api/notifications?limit=50&offset=0'), request('/api/manager/logs'),
+    ]);
+    const channels = channelsResult.data.channels || [];
+    if (!channels.includes(managerLogChannel)) managerLogChannel = channels[0] || '';
+    const filesResult = managerLogChannel
+      ? await request(`/api/manager/logs/${encodeURIComponent(managerLogChannel)}`)
+      : { data: { files: [] } };
+    const files = filesResult.data.files || [];
     root.innerHTML = message() + card('Manager health', `<pre class="data-output">${escapeHtml(JSON.stringify(health.data, null, 2))}</pre>`) +
       card('Diagnostics', `<pre class="data-output">${escapeHtml(JSON.stringify(diagnostics.data, null, 2))}</pre>`) +
+      card('Manager log files', channels.length
+        ? `<div class="world-list-toolbar">${selectField('Channel', 'manager-log-channel', channels.map((item) => [item, item]), managerLogChannel)}</div>` +
+          (files.map((file) => `<div class="table-row"><span>${escapeHtml(file.name)}<small>${escapeHtml(file.size)} bytes</small></span>` +
+            `<a class="ui-button" href="/api/manager/logs/${encodeURIComponent(managerLogChannel)}/${encodeURIComponent(file.name)}">Download</a></div>`
+          ).join('') || '<p class="muted">No log files in this channel.</p>')
+        : '<p class="muted">No manager log channels are available.</p>') +
       card('Notifications', (notices.data.notifications || []).map((item) => `<div class="table-row"><span>${escapeHtml(item.severity)} · ${escapeHtml(item.message)}</span>` +
         `${button(item.read_at ? 'Dismiss' : 'Mark read', item.read_at ? 'notification-dismiss' : 'notification-read', item.notification_id)}</div>`
-      ).join('') || '<p class="muted">No notifications.</p>') +
-      unavailable('Manager log files are not exposed by the current API. World log channels are available under World Logs.');
+      ).join('') || '<p class="muted">No notifications.</p>');
+  }
+
+  async function renderDocumentation() {
+    const result = await request('/api/documentation');
+    const documents = result.data.documents || [];
+    if (!documents.length) {
+      root.innerHTML = message() + card('Documentation', '<p class="muted">No Markdown documents are available.</p>');
+      return;
+    }
+    if (!documents.some((document) => document.path === documentationPath)) {
+      documentationPath = documents[0].path;
+    }
+    const documentPath = documentationPath.split('/').map(encodeURIComponent).join('/');
+    const resultDocument = await request(`/api/documentation/${documentPath}`);
+    const document = resultDocument.data.document;
+    root.innerHTML = message() +
+      card('Documentation', documents.map((item) =>
+        `<div class="table-row"><span>${escapeHtml(item.title)}<small>${escapeHtml(item.path)}</small></span>` +
+        `${button('Open', 'documentation-open', item.path, '', item.path === documentationPath)}</div>`
+      ).join('')) +
+      card(document.title || document.path,
+        `<article class="documentation-output">${markdownToHtml(document.content)}</article>`);
   }
 
   async function renderAudit() {
@@ -298,12 +395,36 @@
 
   async function renderSync() {
     const [targets, records] = await Promise.all([request('/api/sync/targets'), request('/api/sync/records?limit=50&offset=0')]);
-    root.innerHTML = message() + card('Sync targets', (targets.data.sync_targets || []).map((item) => `<div class="table-row">` +
-      `<span><strong>${escapeHtml(item.name || item.sync_target_id)}</strong><small>${escapeHtml(item.scope)} · ${item.enabled ? 'enabled' : 'disabled'}</small></span>` +
-      `<span>${item.effective ? 'Effective' : ''}</span></div>`).join('') || '<p class="muted">No sync targets configured.</p>') +
+    const targetRows = (targets.data.sync_targets || []).map((item) => {
+      const editForm = editingSyncTargetId === item.sync_target_id
+        ? `<form class="workflow-form" data-form="sync-target-edit"><input type="hidden" name="sync_target_id" value="${escapeHtml(item.sync_target_id)}">` +
+          `<input type="hidden" name="version" value="${escapeHtml(item.version)}">${field('Name', 'name', item.name === item.sync_target_id ? '' : item.name)}` +
+          `${selectField('Scope', 'scope', [['global', 'Manager-wide'], ['world', 'World']], item.scope)}` +
+          `${selectField('World', 'world_id', worldChoices(), item.world_id || '')}` +
+          `${selectField('Target type', 'target_type', [['nas', 'NAS'], ['google_drive', 'Google Drive'], ['other', 'Other']], item.target_type)}` +
+          `<label>Config JSON<textarea class="ui-text-input" name="config" rows="4" required>${escapeHtml(JSON.stringify(item.config || {}, null, 2))}</textarea></label>` +
+          `${field('New credential (leave blank to keep current)', 'credential', '', 'password')}` +
+          `<button class="ui-button ui-button-blue" type="submit">Save target</button>${button('Cancel', 'sync-target-cancel')}</form>`
+        : '';
+      return `<div class="table-row"><span><strong>${escapeHtml(item.name || item.sync_target_id)}</strong>` +
+        `<small>${escapeHtml(item.scope)} · ${escapeHtml(item.target_type)} · ${item.enabled ? 'enabled' : 'disabled'} · v${escapeHtml(item.version)}</small></span>` +
+        `<span>${item.effective ? 'Effective' : ''}</span><div class="action-row">` +
+        `${button(item.enabled ? 'Disable' : 'Enable', 'sync-target-toggle', item.sync_target_id)}` +
+        `${button('Edit', 'sync-target-edit', item.sync_target_id)}${button('Delete', 'sync-target-delete', item.sync_target_id, 'ui-button-red')}</div></div>${editForm}`;
+    }).join('');
+    root.innerHTML = message() +
+      card('Sync targets', `<form class="workflow-form" data-form="sync-target-create">` +
+        `${field('Name', 'name', '', 'text', true)}` +
+        `${selectField('Scope', 'scope', [['global', 'Manager-wide'], ['world', 'World']])}` +
+        `${selectField('World', 'world_id', worldChoices())}` +
+        `${selectField('Target type', 'target_type', [['nas', 'NAS'], ['google_drive', 'Google Drive'], ['other', 'Other']], 'nas')}` +
+        `<label>Config JSON<textarea class="ui-text-input" name="config" rows="4" required>{"path":""}</textarea></label>` +
+        `${field('Credential', 'credential', '', 'password', true)}` +
+        `<button class="ui-button ui-button-blue" type="submit">Create target</button></form>` +
+        (targetRows || '<p class="muted">No sync targets configured.</p>')) +
       card('Sync activity', (records.data.sync_records || []).map((item) => `<div class="table-row"><span>${escapeHtml(item.status)} · ${escapeHtml(item.artifact_id)}</span>` +
         `${button('Retry', 'sync-retry', item.artifact_id, 'ui-button-blue', item.status === 'pending')}</div>`).join('') || '<p class="muted">No sync records.</p>') +
-      unavailable('Sync target creation, editing, and deletion are not exposed by the current API.');
+      '';
   }
 
   async function renderManagerMaintenance() {
@@ -428,6 +549,11 @@
     const id = await selectedWorld();
     if (!id) return;
     const settings = await request(`/api/worlds/${encodeURIComponent(id)}/settings`);
+    const policy = await request(`/api/worlds/${encodeURIComponent(id)}/cleanup-policy`);
+    const policyData = policy.data.cleanup_policy || {};
+    const countRules = policyData.count_rules && typeof policyData.count_rules === 'object'
+      ? JSON.stringify(policyData.count_rules)
+      : '{}';
     if (cleanupOperationId && cleanupWorldId === id) {
       try {
         const operation = await request(`/api/operations/${encodeURIComponent(cleanupOperationId)}`);
@@ -436,20 +562,55 @@
     }
     root.innerHTML = message() + card('Backup retention', `<p>Effective world settings version ${escapeHtml(settings.data.version)}.</p>` +
       `<pre class="data-output">${escapeHtml(JSON.stringify(settings.data.settings, null, 2))}</pre>` +
+      card('Per-world cleanup policy', `<form class="workflow-form" data-form="world-cleanup-policy">` +
+        `<input type="hidden" name="version" value="${escapeHtml(policy.data.version)}">` +
+        `${field('Age rule (days, minimum 3)', 'age_rule_days', String(policyData.age_rule_days ?? 3), 'number', true)}` +
+        `${field('Space rule (%)', 'space_rule_pct', policyData.space_rule_pct == null ? '' : String(policyData.space_rule_pct), 'number')}` +
+        `${field('Count rules (JSON, minimum 3)', 'count_rules', countRules)}` +
+        `${field('Schedule ID (optional)', 'schedule_id', policyData.schedule_id || '')}` +
+        `<p class="muted">${policy.data.inherited ? 'Inherited from the global fallback; saving creates a world override.' : `World override version ${escapeHtml(policy.data.version)}.`}</p>` +
+        `<button class="ui-button ui-button-blue" type="submit">Save cleanup policy</button></form>`) +
       `<p>Preview operation: ${escapeHtml(cleanupOperationId && cleanupWorldId === id ? cleanupOperationId : 'Not run')} · ${escapeHtml(cleanupOperationStatus)}</p>` +
       `${button('Refresh preview', 'cleanup-world-preview', id, 'ui-button-blue')}` +
       (cleanupOperationId && cleanupWorldId === id ? `<form class="workflow-form" data-form="world-cleanup-execute"><input type="hidden" name="dry_run_operation_id" value="${escapeHtml(cleanupOperationId)}">` +
         `<label class="check-control"><input type="checkbox" name="elevated_confirmation"> Confirm backup cleanup</label>` +
         `<button class="ui-button ui-button-red" type="submit"${cleanupOperationStatus !== 'completed' ? ' disabled' : ''}>Execute preview</button></form>` : '') +
-      unavailable('Per-world retention policy editing and non-backup cleanup scopes are unsupported by the current API/policy.'));
+      unavailable('Only backup cleanup is implemented. Stale-world and log cleanup scopes remain unsupported.'));
   }
 
   async function renderWorldSetup() {
     const id = await selectedWorld();
     if (!id) return;
-    const [config, eula, runtimes] = await Promise.all([request(`/api/worlds/${encodeURIComponent(id)}/runtime-config`), request(`/api/worlds/${encodeURIComponent(id)}/eula`), request('/api/java-runtimes?limit=100&offset=0')]);
+    const [config, eula, runtimes, properties] = await Promise.all([
+      request(`/api/worlds/${encodeURIComponent(id)}/runtime-config`),
+      request(`/api/worlds/${encodeURIComponent(id)}/eula`),
+      request('/api/java-runtimes?limit=100&offset=0'),
+      request(`/api/worlds/${encodeURIComponent(id)}/server-properties`),
+    ]);
     const value = config.data.runtime_config;
     const choices = (runtimes.data.java_runtimes || []).filter((item) => ['registered', 'verified'].includes(item.status)).map((item) => [item.runtime_id, `${item.label} · ${item.status}`]);
+    const managedKeys = new Set(['server-port', 'enable-rcon', 'rcon.port', 'rcon.password', 'server-ip', 'enable-query', 'query.port', 'level-name', 'level-seed', 'online-mode', 'motd']);
+    const booleanKeys = new Set(['white-list', 'enforce-whitelist']);
+    const integerKeys = new Set(['max-players', 'view-distance', 'spawn-protection']);
+    const enumChoices = {
+      difficulty: [['peaceful', 'Peaceful'], ['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']],
+      gamemode: [['survival', 'Survival'], ['creative', 'Creative'], ['adventure', 'Adventure'], ['spectator', 'Spectator']],
+    };
+    const propertyFields = (properties.data.allowed_keys || [])
+      .filter((key) => !managedKeys.has(key))
+      .map((key) => {
+        const current = properties.data.properties?.[key] ?? '';
+        let control;
+        if (booleanKeys.has(key)) control = selectField(key, `property:${key}`, [['true', 'true'], ['false', 'false']], String(current));
+        else if (integerKeys.has(key)) control = field(key, `property:${key}`, current, 'number');
+        else if (enumChoices[key]) control = selectField(key, `property:${key}`, enumChoices[key], String(current));
+        else control = field(key, `property:${key}`, current);
+        return control;
+      }).join('');
+    const validation = properties.data.validation || {};
+    const validationNotice = validation.valid === false
+      ? unavailable((validation.errors || []).join('; '), 'Current properties validation')
+      : '';
     root.innerHTML = message() + card('Runtime configuration', `<form class="workflow-form" data-form="runtime-config">` +
       `${selectField('Java runtime', 'java_runtime_id', choices, value.java_runtime_id)}${field('Port', 'port', value.port, 'number')}` +
       `${selectField('Addressing', 'addressing_strategy', [['port', 'Port'], ['subdomain', 'Subdomain'], ['path', 'Path']], value.addressing_strategy)}` +
@@ -457,7 +618,10 @@
       `<input type="hidden" name="version" value="${escapeHtml(config.data.version)}"><button class="ui-button ui-button-blue" type="submit">Save runtime configuration</button></form>` +
       `<p>EULA state: ${escapeHtml(eula.data.eula)} · world ${escapeHtml(eula.data.world_state)}</p>` +
       `${eula.data.eula === 'required' ? button('Accept EULA', 'eula-accept', id, 'ui-button-blue') : ''}`) +
-      unavailable('A server.properties editor is not exposed by the API; runtime configuration and EULA state are available.');
+      card('Server properties', `<form class="workflow-form" data-form="server-properties">` +
+        `${propertyFields}<input type="hidden" name="version" value="${escapeHtml(properties.data.version)}">` +
+        `<button class="ui-button ui-button-blue" type="submit">Save server properties</button></form>` +
+        `${validationNotice}${(validation.deprecated_hints || []).length ? unavailable((validation.deprecated_hints || []).join('; '), 'Deprecated properties') : ''}`);
   }
 
   async function renderModule(slug) {
@@ -465,7 +629,7 @@
     const renderers = {
       home: renderHome, worlds: renderWorlds, settings: renderSettings, users: renderUsers,
       maintenance: renderMaintenance,
-      documentation: async () => { root.innerHTML = message() + card('Documentation', unavailable('No authenticated documentation API or shell-owned documentation bundle is available.')); },
+      documentation: renderDocumentation,
       'system-logs': renderSystemLogs, audit: renderAudit, sync: renderSync,
       'manager-maintenance': renderManagerMaintenance, templates: renderTemplates,
       'world-main': renderWorldMain, 'world-backups': renderBackups, 'world-logs': renderLogs,
@@ -505,6 +669,7 @@
   async function runAction(action, id) {
     const encoded = encodeURIComponent(id || '');
     switch (action) {
+      case 'documentation-open': documentationPath = id; return loadPage('documentation');
       case 'manager-backup': await mutate('/api/manager/backup', 'POST', {}); break;
       case 'world-start': return worldAction('start', id);
       case 'world-stop': return worldAction('stop', id);
@@ -560,6 +725,19 @@
         statusMessage = JSON.stringify(result.data.audit, null, 2); return loadPage(main.dataset.activePage);
       }
       case 'sync-retry': await mutate('/api/sync/retry', 'POST', { artifact_id: id }); break;
+      case 'sync-target-edit': editingSyncTargetId = id; return loadPage(main.dataset.activePage);
+      case 'sync-target-cancel': editingSyncTargetId = ''; return loadPage(main.dataset.activePage);
+      case 'sync-target-toggle': {
+        const result = await request('/api/sync/targets');
+        const item = (result.data.sync_targets || []).find((target) => target.sync_target_id === id);
+        if (item) await mutate(`/api/sync/targets/${encoded}`, 'PATCH', {
+          version: item.version, enabled: !item.enabled,
+        });
+        break;
+      }
+      case 'sync-target-delete':
+        if (window.confirm && !window.confirm('Delete this sync target? Existing sync history will be retained.')) return;
+        await mutate(`/api/sync/targets/${encoded}`, 'DELETE'); break;
       case 'template-deprecate': await mutate(`/api/templates/${encoded}`, 'DELETE'); break;
       case 'template-edit': {
         const result = await request('/api/templates?limit=100&offset=0');
@@ -640,6 +818,26 @@
       case 'user-create': await mutate('/api/users', 'POST', { username: data.username, display_name: data.display_name || null, password: data.password, role_id: data.role_id }); break;
       case 'role-create': await mutate('/api/roles', 'POST', { name: data.name, description: data.description || null }); break;
       case 'permission-create': await mutate('/api/permissions', 'POST', { role_id: data.role_id, action_category: data.action_category, world_id: data.world_id || null }); break;
+      case 'sync-target-create': {
+        const config = JSON.parse(data.config);
+        await mutate('/api/sync/targets', 'POST', {
+          name: data.name, scope: data.scope, world_id: data.scope === 'world' ? data.world_id : null,
+          target_type: data.target_type, config, credential: data.credential, enabled: true,
+        });
+        break;
+      }
+      case 'sync-target-edit': {
+        const config = JSON.parse(data.config);
+        const update = {
+          version: Number(data.version), scope: data.scope,
+          world_id: data.scope === 'world' ? data.world_id : null,
+          target_type: data.target_type, config, name: data.name || null,
+        };
+        if (data.credential) update.credential = data.credential;
+        await mutate(`/api/sync/targets/${encodeURIComponent(data.sync_target_id)}`, 'PATCH', update);
+        editingSyncTargetId = '';
+        break;
+      }
       case 'cleanup-preview': {
         if (data.scope !== 'backups') throw new Error('Only backup cleanup is supported by this API.');
         const result = await mutate('/api/cleanup/dry-run', 'POST', { scope: data.scope, world_id: data.world_id || null });
@@ -655,6 +853,17 @@
         cleanupOperationId = '';
         cleanupOperationStatus = '';
         break;
+      case 'world-cleanup-policy': {
+        const countRules = data.count_rules ? JSON.parse(data.count_rules) : {};
+        await mutate(`/api/worlds/${id}/cleanup-policy`, 'PATCH', {
+          version: Number(data.version),
+          age_rule_days: Number(data.age_rule_days),
+          space_rule_pct: data.space_rule_pct === '' ? null : Number(data.space_rule_pct),
+          count_rules: countRules,
+          schedule_id: data.schedule_id || null,
+        });
+        break;
+      }
       case 'audit-filter': auditFilters = { event_type: data.event_type, actor_user_id: data.actor_user_id, world_id: data.world_id }; break;
       case 'template-create': await mutate('/api/templates', 'POST', { name: data.name, category: data.category, default_version: data.default_version, config_defaults: JSON.parse(data.config_defaults) }); break;
       case 'runtime-create': await mutate('/api/java-runtimes', 'POST', { label: data.label, path: data.path }); break;
@@ -667,6 +876,21 @@
         const launchArgs = JSON.parse(data.launch_args);
         if (launchArgs.length) update.launch_args = launchArgs;
         await mutate(`/api/worlds/${id}/runtime-config`, 'PATCH', update);
+        break;
+      }
+      case 'server-properties': {
+        const properties = {};
+        for (const [name, value] of Object.entries(data)) {
+          if (!name.startsWith('property:')) continue;
+          const key = name.slice('property:'.length);
+          if (['max-players', 'view-distance', 'spawn-protection'].includes(key)) properties[key] = Number(value);
+          else if (['white-list', 'enforce-whitelist'].includes(key)) properties[key] = value === 'true';
+          else properties[key] = value;
+        }
+        if (!Object.keys(properties).length) throw new Error('Select at least one editable server property.');
+        await mutate(`/api/worlds/${id}/server-properties`, 'POST', {
+          version: Number(data.version), properties,
+        });
         break;
       }
       case 'world-cleanup-execute':
@@ -710,6 +934,10 @@
 
   root.addEventListener('change', (event) => {
     if (event.target.matches('[name="channel"]')) { logChannel = event.target.value; logOffset = 0; loadPage('world-logs'); }
+    if (event.target.matches('[name="manager-log-channel"]')) {
+      managerLogChannel = event.target.value;
+      loadPage('system-logs');
+    }
   });
 
   if (contextSelect) contextSelect.addEventListener('change', async () => {

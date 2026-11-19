@@ -35,6 +35,7 @@ from app.infrastructure.minecraft.properties_schema import (
     is_valid_value,
     parse_properties,
     validate_properties,
+    validate_properties_file,
 )
 from app.infrastructure.minecraft.rcon import SAFE_COMMANDS, RconClient, RconError
 from app.infrastructure.minecraft.readiness import (
@@ -81,4 +82,5 @@ __all__ = [
     'target_level_for',
     'validate_launch',
     'validate_properties',
+    'validate_properties_file',
 ]

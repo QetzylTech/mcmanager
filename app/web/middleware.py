@@ -58,6 +58,8 @@ def _requires_step_up() -> bool:
         or path.endswith("/kill")
         or path.endswith("/eula/accept")
         or path.endswith("/runtime-config")
+        or path.endswith("/cleanup-policy")
+        or path == "/api/cleanup/policy"
         or path == "/api/cleanup/execute"
         or (
             method == "DELETE"
@@ -117,8 +119,15 @@ def _requires_admin() -> bool:
         "/api/sync/targets",
     }
     return (
-        path == "/api/diagnostics"
+        path == "/api/documentation"
+        or path.startswith("/api/documentation/")
+        or path == "/api/manager/logs"
+        or path.startswith("/api/manager/logs/")
+        or path == "/api/diagnostics"
+        or path == "/api/cleanup/policy"
         or path == "/api/settings"
+        or (path.startswith("/api/worlds/") and path.endswith("/cleanup-policy"))
+        or path.endswith("/server-properties")
         or (
             method == "POST"
             and path.startswith("/api/operations/")
@@ -147,9 +156,11 @@ def _requires_admin() -> bool:
         or (
             method in _STATE_CHANGING_METHODS
             and (
-                path.startswith("/api/schedules")
+                path == "/api/worlds"
+                or path.startswith("/api/schedules")
                 or path.startswith("/api/templates")
                 or path.startswith("/api/java-runtimes")
+                or path.startswith("/api/sync/targets")
                 or path in {
                     "/api/manager/backup",
                     "/api/manager/restore",
@@ -176,6 +187,210 @@ def _requires_superadmin() -> bool:
         and path.startswith("/api/backups/")
         and request.args.get("force", "").lower() in {"true", "1"}
     )
+
+
+def _permission_requirement(container: Any) -> tuple[str, str | None] | None:
+    """Return the exact permission category and scope required by this route."""
+    path = request.path
+    method = request.method
+    args = request.view_args or {}
+    world_id = args.get("world_id")
+
+    def related_world(table: str, column: str, value: str | None) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        row = container.store.reader().execute(
+            f"SELECT world_id FROM {table} WHERE {column} = ?",
+            (value,),
+        ).fetchone()
+        return row["world_id"] if row is not None else None
+
+    if path == "/api/worlds":
+        if method == "GET":
+            return "world.view", None
+        if method == "POST":
+            return "world.create", None
+
+    if path.startswith("/api/worlds/") and world_id is not None:
+        suffix = path[len(f"/api/worlds/{world_id}") :].rstrip("/")
+        if suffix in {"", "/"}:
+            if method == "GET":
+                return "world.view", world_id
+            if method == "PATCH":
+                return "world.edit", world_id
+            if method == "DELETE":
+                return "world.delete", world_id
+            return None
+        if suffix == "/server-properties":
+            if method == "GET":
+                return "world.properties.view", world_id
+            if method == "POST":
+                return "world.properties.edit", world_id
+            return None
+        if suffix == "/start" and method == "POST":
+            return "world.start", world_id
+        if suffix == "/stop" and method == "POST":
+            return "world.stop", world_id
+        if suffix == "/kill" and method == "POST":
+            return "world.kill", world_id
+        if suffix == "/delete-preview" and method == "POST":
+            return "world.delete", world_id
+        if suffix == "/runtime-config":
+            return ("world.runtime.view" if method == "GET" else "world.runtime.edit", world_id)
+        if suffix == "/settings":
+            return ("world.settings.view" if method == "GET" else "world.settings.edit", world_id)
+        if suffix == "/cleanup-policy":
+            return ("world.cleanup" if method == "GET" else "world.cleanup.manage", world_id)
+        if suffix == "/eula":
+            return ("world.view", world_id) if method == "GET" else None
+        if suffix == "/eula/accept" and method == "POST":
+            return "world.eula.accept", world_id
+        if suffix == "/files":
+            return ("world.files.view" if method == "GET" else "world.files.edit", world_id)
+        if suffix.startswith("/files/"):
+            return ("world.files.view" if method == "GET" else "world.files.edit", world_id)
+        if suffix == "/logs" or suffix.startswith("/logs/"):
+            return "world.logs.view", world_id
+        if suffix == "/operations" and method == "GET":
+            return "world.view", world_id
+        if suffix == "/backups":
+            return ("world.backup.view" if method == "GET" else "world.backup.create", world_id)
+        if suffix == "/restores":
+            return ("world.restore.view" if method == "GET" else "world.restore", world_id)
+        if suffix in {"/restores/rollback", "/cleanup-preview"}:
+            return ("world.restore" if suffix.endswith("rollback") else "world.cleanup", world_id)
+
+    if path.startswith("/stream/worlds/") and world_id is not None:
+        suffix = path[len(f"/stream/worlds/{world_id}") :].rstrip("/")
+        if suffix == "/events":
+            return "world.view", world_id
+        if suffix == "/logs":
+            return "world.logs.view", world_id
+    if path == "/stream/events":
+        return "world.view", None
+    if path == "/stream/restore_logs":
+        return "world.restore.view", request.args.get("world_id")
+    if path == "/stream/metrics":
+        return "system.view", None
+
+    if path == "/api/operations" and method == "GET":
+        return "world.view", request.args.get("world_id")
+    if path == "/api/operations" and method in _STATE_CHANGING_METHODS:
+        return None
+    if path.startswith("/api/operations/"):
+        operation_world = related_world("operations", "op_id", args.get("op_id"))
+        if path.endswith("/cancel"):
+            return "world.operation.cancel", operation_world
+        if method == "GET":
+            return "world.view", operation_world
+
+    if path == "/api/backups":
+        if method == "GET":
+            requested_world = request.args.get("world_id")
+            return "backup.view", requested_world if requested_world != "null" else None
+        return None
+    if path.startswith("/api/backups/"):
+        artifact_id = args.get("artifact_id")
+        artifact_world = related_world("backup_artifacts", "artifact_id", artifact_id)
+        if path.endswith("/sync"):
+            return "backup.sync.view", artifact_world
+        if method == "DELETE":
+            return "backup.delete", artifact_world
+        if method == "GET":
+            return "backup.view", artifact_world
+
+    if path.startswith("/api/cleanup/"):
+        if path == "/api/cleanup/policy":
+            return ("cleanup.view" if method == "GET" else "cleanup.manage", None)
+        if path in {"/api/cleanup/dry-run", "/api/cleanup/execute"}:
+            body = request.get_json(silent=True)
+            requested_world = body.get("world_id") if isinstance(body, dict) else None
+            if not isinstance(requested_world, str):
+                requested_world = None
+            if requested_world is None and path.endswith("/execute") and isinstance(body, dict):
+                requested_world = related_world(
+                    "operations", "op_id", body.get("dry_run_operation_id")
+                )
+            return "cleanup.manage", requested_world
+        if path == "/api/cleanup/runs" and method == "GET":
+            return "cleanup.view", None
+    if path in {"/api/sync/records", "/api/sync/targets"} and method == "GET":
+        return "sync.view", request.args.get("world_id")
+    if path == "/api/sync/retry" and method == "POST":
+        body = request.get_json(silent=True)
+        world_id = None
+        if isinstance(body, dict):
+            artifact_id = body.get("artifact_id")
+            world_id = related_world("backup_artifacts", "artifact_id", artifact_id)
+        return "sync.retry", world_id
+    if path == "/api/sync/targets" and method == "POST":
+        body = request.get_json(silent=True)
+        requested_world = body.get("world_id") if isinstance(body, dict) else None
+        if (
+            isinstance(body, dict)
+            and body.get("scope") == "world"
+            and isinstance(requested_world, str)
+        ):
+            return "sync.manage", requested_world
+        return "sync.manage", None
+    if path.startswith("/api/sync/targets/"):
+        target_id = args.get("target_id")
+        if method in {"PATCH", "DELETE"}:
+            body = request.get_json(silent=True)
+            if (
+                method == "PATCH"
+                and isinstance(body, dict)
+                and ("scope" in body or "world_id" in body)
+            ):
+                return "sync.manage", None
+            target_world = related_world("sync_targets", "sync_target_id", target_id)
+            return "sync.manage", target_world
+
+    if path.startswith("/api/schedules"):
+        if path == "/api/schedules" and method == "GET":
+            return "schedule.view", request.args.get("world_id")
+        schedule_id = args.get("schedule_id")
+        schedule_world = related_world("schedules", "schedule_id", schedule_id)
+        return ("schedule.view" if method == "GET" else "schedule.edit", schedule_world)
+    if path.startswith("/api/missed-runs"):
+        if method == "GET":
+            return "schedule.view", None
+        return "schedule.edit", None
+
+    if path == "/api/settings":
+        return ("settings.view" if method == "GET" else "settings.edit", None)
+    if path.startswith("/api/templates"):
+        return ("template.view" if method == "GET" else "template.edit", None)
+    if path.startswith("/api/java-runtimes"):
+        return ("runtime.view" if method == "GET" else "runtime.edit", None)
+    if path.startswith("/api/manager/"):
+        suffix = path.rsplit("/", 1)[-1]
+        if suffix in {"backup", "restore", "restart"}:
+            return f"manager.{suffix}", None
+    if path in {"/api/diagnostics", "/api/system/stats"}:
+        return "system.view", None
+    return None
+
+
+def _has_permission(
+    container: Any,
+    *,
+    user_id: str,
+    action_category: str,
+    world_id: str | None,
+) -> bool:
+    scope_clause = "p.world_id IS NULL" if world_id is None else "(p.world_id IS NULL OR p.world_id = ?)"
+    row = container.store.reader().execute(
+        "SELECT 1 FROM permissions p "
+        "WHERE p.deleted_at IS NULL AND p.action_category = ? AND "
+        + scope_clause
+        + " AND (p.user_id = ? OR EXISTS ("
+        "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
+        "WHERE ra.user_id = ? AND ra.role_id = p.role_id "
+        "AND ra.deleted_at IS NULL AND r.deleted_at IS NULL)) LIMIT 1",
+        [action_category, *([world_id] if world_id is not None else []), user_id, user_id],
+    ).fetchone()
+    return row is not None
 
 
 def register_middleware(app: Flask) -> None:
@@ -264,7 +479,37 @@ def register_middleware(app: Flask) -> None:
             )
             if role is None:
                 return error("AUTH_FORBIDDEN", "A Superadmin role is required.", status=403)
-        elif _requires_admin():
+        else:
+            admin_role = (
+                container.store.reader()
+                .execute(
+                    "SELECT 1 FROM role_assignments ra "
+                    "JOIN roles r ON r.role_id = ra.role_id "
+                    "WHERE ra.user_id = ? AND ra.deleted_at IS NULL "
+                    "AND r.deleted_at IS NULL AND r.name IN (?, ?) LIMIT 1",
+                    (session.user_id, *_ADMIN_ROLES),
+                )
+                .fetchone()
+            )
+            requirement = _permission_requirement(container)
+            route_permission_granted = False
+            if (
+                requirement is not None
+                and admin_role is None
+            ):
+                route_permission_granted = _has_permission(
+                    container,
+                    user_id=session.user_id,
+                    action_category=requirement[0],
+                    world_id=requirement[1],
+                )
+            if requirement is not None and admin_role is None and not route_permission_granted:
+                return error(
+                    "AUTH_FORBIDDEN",
+                    f"The {requirement[0]} permission is required.",
+                    status=403,
+                )
+        if not _requires_superadmin() and _requires_admin() and admin_role is None and not route_permission_granted:
             role = (
                 container.store.reader()
                 .execute(

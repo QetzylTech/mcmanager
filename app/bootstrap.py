@@ -49,6 +49,7 @@ from app.services.restore import RestoreService
 from app.services.runtime import RuntimeService
 from app.services.save_coordination import RconSaveCoordinator
 from app.services.scheduler import SchedulerService
+from app.services.server_properties import ServerPropertiesService
 from app.services.sync import SyncService
 from app.services.worlds import WorldsService
 
@@ -81,6 +82,7 @@ class Container:
     cleanup: CleanupService
     sync: SyncService
     configuration: ConfigurationService
+    server_properties: ServerPropertiesService
     worlds: WorldsService
     save_coordinator: RconSaveCoordinator
     manager_lifecycle: ManagerLifecycleService
@@ -149,6 +151,9 @@ def build_container(
     )
     cleanup = CleanupService(store, clock)
     configuration = ConfigurationService(store, clock, operations)
+    server_properties = ServerPropertiesService(
+        store, clock, configuration, operations
+    )
     manager_lifecycle = ManagerLifecycleService(
         store, clock, operations, configuration, backup_engine
     )
@@ -203,6 +208,7 @@ def build_container(
         cleanup=cleanup,
         sync=sync,
         configuration=configuration,
+        server_properties=server_properties,
         worlds=worlds,
         save_coordinator=save_coordinator,
         manager_lifecycle=manager_lifecycle,

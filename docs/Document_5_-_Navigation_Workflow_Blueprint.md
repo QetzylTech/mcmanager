@@ -36,7 +36,7 @@ World-scoped pages reflect the selected world. Manager-scoped pages must not dep
 
 **Maintenance & Retention** (global defaults; per-world overrides unless local exists) — backup retention; stale-world cleanup (from restores); restore-artifact cleanup; old-log cleanup; manual stale-file cleanup dry/wet; scheduled cleanup; missed-job handling.
 
-**Instructions & Documentation** — dev notes + server manual; admin manual. Rendering contract: content = markdown from docs folder rendered to CSS+HTML via shared style system (Doc 4); auto-generated clickable side ToC per page; in-file ToC suppressed in desktop mode (avoid duplication). Page contract only — no interactive rendering logic.
+**Instructions & Documentation** — dev notes + server manual; admin manual. Content is repository-local Markdown from `docs/`, exposed through an authenticated listing/read API. Until a trusted Markdown renderer exists, the read contract returns Markdown source (not HTML); clients must display it as text and must not execute embedded HTML. A future shared-style renderer (Doc 4) may provide an auto-generated clickable side ToC per page; in-file ToC is suppressed in desktop mode (avoid duplication). Page contract only — no interactive rendering logic.
 
 **System Logs** — manager activity logs; manager errors + system notifications.
 

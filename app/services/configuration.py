@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.tuning import CLEANUP_AGE_FLOOR_DAYS
 from app.domain.value_objects import (
     ActorType,
     ConfigEditEntity,
@@ -151,7 +152,12 @@ class ConfigurationService:
             and current is None
             and update.expected_version == 0
         )
-        if current is None and not creating_world_override:
+        creating_cleanup_policy = (
+            update.entity is ConfigEditEntity.CLEANUP_POLICIES
+            and current is None
+            and update.expected_version == 0
+        )
+        if current is None and not (creating_world_override or creating_cleanup_policy):
             if update.entity is ConfigEditEntity.WORLD_SETTINGS:
                 raise ConfigurationConflictError('CONFIG_VERSION_CONFLICT')
             raise KeyError(update.row_id)
@@ -164,6 +170,16 @@ class ConfigurationService:
             in (ConfigEditEntity.WORLD_SETTINGS, ConfigEditEntity.WORLD_INSTANCES)
             else None
         )
+        if update.entity is ConfigEditEntity.CLEANUP_POLICIES:
+            world_id = (
+                update.fields.get('world_id')
+                if update.fields.get('world_id') is not None
+                else (
+                    current['world_id']
+                    if current is not None and current['world_id'] is not None
+                    else None
+                )
+            )
         operation = self._operations.create(
             OperationInput(
                 op_type=OperationType.CONFIG_EDIT,
@@ -193,7 +209,7 @@ class ConfigurationService:
             row = connection.execute(
                 f'SELECT * FROM {table} WHERE {key_column} = ?', (update.row_id,)
             ).fetchone()
-            if row is None and not creating_world_override:
+            if row is None and not (creating_world_override or creating_cleanup_policy):
                 raise KeyError(update.row_id)
             payload["before"] = (
                 {column: row[column] for column in update.fields}
@@ -207,14 +223,33 @@ class ConfigurationService:
             fields = dict(update.fields)
             if row is None:
                 if update.actor_user_id is None:
-                    raise ValueError('creating world settings requires an actor user')
-                insert_fields = {
-                    'world_id': update.row_id,
-                    **fields,
-                    'version': 1,
-                    'updated_at': now,
-                    'updated_by': update.actor_user_id,
-                }
+                    raise ValueError('creating a per-world override requires an actor user')
+                if update.entity is ConfigEditEntity.CLEANUP_POLICIES:
+                    scope = fields.pop('scope', 'world')
+                    policy_world_id = fields.pop('world_id', None)
+                    insert_fields = {
+                        'policy_id': update.row_id,
+                        'scope': scope,
+                        'world_id': policy_world_id,
+                        'age_rule_days': fields.pop('age_rule_days', CLEANUP_AGE_FLOOR_DAYS),
+                        'space_rule_pct': fields.pop('space_rule_pct', None),
+                        'count_rules': fields.pop('count_rules', None),
+                        'schedule_id': fields.pop('schedule_id', None),
+                        'version': 1,
+                        'last_changed_at': now,
+                        'last_changed_by': update.actor_user_id,
+                        'deleted_at': None,
+                        'deleted_by': None,
+                        'created_at': now,
+                    }
+                else:
+                    insert_fields = {
+                        'world_id': update.row_id,
+                        **fields,
+                        'version': 1,
+                        'updated_at': now,
+                        'updated_by': update.actor_user_id,
+                    }
                 columns = ', '.join(insert_fields)
                 placeholders = ', '.join('?' for _ in insert_fields)
                 connection.execute(

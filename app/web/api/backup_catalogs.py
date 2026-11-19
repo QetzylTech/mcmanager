@@ -13,16 +13,25 @@ from flask import Blueprint, current_app, g, request
 from app.domain.tuning import CLEANUP_AGE_FLOOR_DAYS, CLEANUP_COUNT_FLOOR
 from app.domain.value_objects import (
     ActorType,
+    ConfigEditEntity,
     OperationStatus,
     OperationType,
+    SyncTargetType,
     TriggerType,
 )
+from app.ports.secrets_store import SecretType
 from app.services.cleanup import RetentionError
+from app.services.configuration import ConfigurationConflictError, VersionedUpdate
 from app.services.operations import OperationConflictError, OperationInput
 from app.web.errors import error, ok
 
 backup_catalogs_bp = Blueprint("api_backup_catalogs", __name__, url_prefix="/api")
 _CLEANUP_SCOPES = frozenset({"backups", "stale_worlds", "logs"})
+_SYNC_SECRET_CONFIG_KEYS = frozenset(
+    {"password", "credential", "secret", "token", "access_token", "refresh_token",
+     "client_secret", "private_key", "auth_token", "authorization", "api_key",
+     "access_key"}
+)
 _TERMINAL_STATUSES = frozenset(
     {
         OperationStatus.COMPLETED.value,
@@ -93,6 +102,22 @@ def _world(world_id: str) -> dict[str, Any] | None:
         (world_id,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def _serialize_cleanup_policy(row: Any | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    policy = dict(row)
+    for key in ("created_at", "last_changed_at", "deleted_at"):
+        if key in policy:
+            policy[key] = _iso(policy[key])
+    if policy.get("count_rules"):
+        try:
+            policy["count_rules"] = json.loads(policy["count_rules"])
+        except (TypeError, json.JSONDecodeError):
+            policy["count_rules"] = None
+    policy["deleted"] = policy.get("deleted_at") is not None
+    return policy
 
 
 def _operation_response(operation: dict[str, Any], *, replayed: bool) -> Any:
@@ -570,8 +595,366 @@ def world_cleanup_preview(world_id: str) -> Any:
     return _cleanup_preview(body)
 
 
+@backup_catalogs_bp.get("/cleanup/policy")
+def get_global_cleanup_policy() -> Any:
+    policy = _container().store.reader().execute(
+        "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
+        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+    ).fetchone()
+    if policy is None:
+        return ok(
+            {
+                "cleanup_policy": {
+                    "scope": "global",
+                    "world_id": None,
+                    "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
+                    "space_rule_pct": None,
+                    "count_rules": {},
+                    "schedule_id": None,
+                },
+                "version": 0,
+            }
+        )
+    serialized = _serialize_cleanup_policy(policy)
+    return ok({"cleanup_policy": serialized, "version": serialized["version"]})
+
+
+@backup_catalogs_bp.patch("/cleanup/policy")
+def patch_global_cleanup_policy() -> Any:
+    container = _container()
+    body = _body()
+    allowed = {"version", "age_rule_days", "space_rule_pct", "count_rules", "schedule_id"}
+    if (
+        body is None
+        or type(body.get("version")) is not int
+        or body["version"] < 0
+        or not set(body).difference({"version"})
+        or set(body).difference(allowed)
+    ):
+        return error("VALIDATION_ERROR", "A version and editable cleanup policy fields are required.")
+
+    fields: dict[str, Any] = {}
+    if "age_rule_days" in body:
+        value = body["age_rule_days"]
+        if type(value) is not int or value < CLEANUP_AGE_FLOOR_DAYS:
+            return error("VALIDATION_ERROR", "age_rule_days must be an integer of at least 3.")
+        fields["age_rule_days"] = value
+    if "space_rule_pct" in body:
+        value = body["space_rule_pct"]
+        if value is not None and (type(value) is not int or not 1 <= value <= 90):
+            return error("VALIDATION_ERROR", "space_rule_pct must be null or an integer from 1 to 90.")
+        fields["space_rule_pct"] = value
+    if "count_rules" in body:
+        value = body["count_rules"]
+        if not isinstance(value, dict):
+            return error("VALIDATION_ERROR", "count_rules must be an object.")
+        if not all(
+            isinstance(key, str)
+            and key
+            and type(count) is int
+            and count >= CLEANUP_COUNT_FLOOR
+            for key, count in value.items()
+        ):
+            return error("VALIDATION_ERROR", "count_rules values must be integers of at least 3.")
+        fields["count_rules"] = json.dumps(value, separators=(",", ":"))
+    if "schedule_id" in body:
+        value = body["schedule_id"]
+        if value is not None:
+            if not isinstance(value, str):
+                return error("VALIDATION_ERROR", "schedule_id must be null or a schedule ID.")
+            schedule = container.store.reader().execute(
+                "SELECT 1 FROM schedules WHERE schedule_id = ? AND scope = 'global' "
+                "AND world_id IS NULL AND deleted_at IS NULL",
+                (value,),
+            ).fetchone()
+            if schedule is None:
+                return error("NOT_FOUND", "Manager-wide cleanup schedule not found.", status=404)
+        fields["schedule_id"] = value
+
+    policy = container.store.reader().execute(
+        "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
+        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+    ).fetchone()
+    if policy is None:
+        if body["version"] != 0:
+            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+        policy_id = f"cpol_{uuid.uuid4().hex[:16]}"
+        defaults = {
+            "scope": "global",
+            "world_id": None,
+            "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
+            "space_rule_pct": None,
+            "count_rules": None,
+            "schedule_id": None,
+        }
+        defaults.update(fields)
+        fields = defaults
+    else:
+        policy_id = policy["policy_id"]
+        if policy["version"] != body["version"]:
+            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+
+    try:
+        updated, operation = container.configuration.update_versioned_with_operation(
+            VersionedUpdate(
+                entity=ConfigEditEntity.CLEANUP_POLICIES,
+                row_id=policy_id,
+                expected_version=body["version"],
+                fields=fields,
+                actor_type=ActorType.USER,
+                actor_user_id=g.current_user_id,
+            )
+        )
+    except ConfigurationConflictError:
+        return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+    except (KeyError, ValueError) as exc:
+        return error("VALIDATION_ERROR", str(exc), status=400)
+
+    serialized = _serialize_cleanup_policy(updated)
+    return ok(
+        {
+            "cleanup_policy": serialized,
+            "version": serialized["version"],
+            "operation": operation,
+        },
+        meta={"op_id": operation["op_id"]},
+    )
+
+
+@backup_catalogs_bp.get("/worlds/<world_id>/cleanup-policy")
+def get_world_cleanup_policy(world_id: str) -> Any:
+    if _world(world_id) is None:
+        return error("WORLD_NOT_FOUND", "World not found.")
+    reader = _container().store.reader()
+    policy = reader.execute(
+        "SELECT * FROM cleanup_policies WHERE scope = 'world' AND world_id = ? "
+        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
+        (world_id,),
+    ).fetchone()
+    if policy is None:
+        policy = reader.execute(
+            "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
+            "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+    if policy is None:
+        return ok({
+            "cleanup_policy": {
+                "scope": "world",
+                "world_id": world_id,
+                "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
+                "space_rule_pct": None,
+                "count_rules": {},
+                "schedule_id": None,
+            },
+            "version": 0,
+            "inherited": True,
+        })
+    serialized = _serialize_cleanup_policy(policy)
+    inherited = policy["scope"] == "global"
+    return ok({
+        "cleanup_policy": serialized,
+        "version": serialized["version"] if not inherited else 0,
+        "inherited": inherited,
+    })
+
+
+@backup_catalogs_bp.patch("/worlds/<world_id>/cleanup-policy")
+def patch_world_cleanup_policy(world_id: str) -> Any:
+    container = _container()
+    if _world(world_id) is None:
+        return error("WORLD_NOT_FOUND", "World not found.")
+    body = _body()
+    allowed = {"version", "age_rule_days", "space_rule_pct", "count_rules", "schedule_id"}
+    if (
+        body is None
+        or type(body.get("version")) is not int
+        or body["version"] < 0
+        or not set(body).difference({"version"})
+        or set(body).difference(allowed)
+    ):
+        return error("VALIDATION_ERROR", "A version and editable cleanup policy fields are required.")
+
+    fields: dict[str, Any] = {}
+    if "age_rule_days" in body:
+        value = body["age_rule_days"]
+        if type(value) is not int or value < CLEANUP_AGE_FLOOR_DAYS:
+            return error("VALIDATION_ERROR", "age_rule_days must be an integer of at least 3.")
+        fields["age_rule_days"] = value
+    if "space_rule_pct" in body:
+        value = body["space_rule_pct"]
+        if value is not None and (type(value) is not int or not 1 <= value <= 90):
+            return error("VALIDATION_ERROR", "space_rule_pct must be null or an integer from 1 to 90.")
+        fields["space_rule_pct"] = value
+    if "count_rules" in body:
+        value = body["count_rules"]
+        if not isinstance(value, dict):
+            return error("VALIDATION_ERROR", "count_rules must be an object.")
+        if not all(isinstance(key, str) and key and type(count) is int and count >= CLEANUP_COUNT_FLOOR
+                   for key, count in value.items()):
+            return error("VALIDATION_ERROR", "count_rules values must be integers of at least 3.")
+        fields["count_rules"] = json.dumps(value, separators=(",", ":"))
+    if "schedule_id" in body:
+        value = body["schedule_id"]
+        if value is not None:
+            if not isinstance(value, str):
+                return error("VALIDATION_ERROR", "schedule_id must be null or a schedule ID.")
+            schedule = container.store.reader().execute(
+                "SELECT 1 FROM schedules WHERE schedule_id = ? AND scope = 'world' "
+                "AND world_id = ? AND deleted_at IS NULL",
+                (value, world_id),
+            ).fetchone()
+            if schedule is None:
+                return error("NOT_FOUND", "World cleanup schedule not found.", status=404)
+        fields["schedule_id"] = value
+
+    policy = container.store.reader().execute(
+        "SELECT * FROM cleanup_policies WHERE scope = 'world' AND world_id = ? "
+        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
+        (world_id,),
+    ).fetchone()
+    if policy is None:
+        if body["version"] != 0:
+            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+        policy_id = f"cpol_{uuid.uuid4().hex[:16]}"
+        defaults = {
+            "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
+            "space_rule_pct": None,
+            "count_rules": None,
+            "schedule_id": None,
+        }
+        defaults.update(fields)
+        fields = {"world_id": world_id, **defaults}
+    else:
+        policy_id = policy["policy_id"]
+        if policy["version"] != body["version"]:
+            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+
+    try:
+        updated, operation = container.configuration.update_versioned_with_operation(
+            VersionedUpdate(
+                entity=ConfigEditEntity.CLEANUP_POLICIES,
+                row_id=policy_id,
+                expected_version=body["version"],
+                fields=fields,
+                actor_type=ActorType.USER,
+                actor_user_id=g.current_user_id,
+            )
+        )
+    except ConfigurationConflictError:
+        return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+    except (KeyError, ValueError) as exc:
+        return error("VALIDATION_ERROR", str(exc), status=400)
+
+    serialized = _serialize_cleanup_policy(updated)
+    return ok(
+        {"cleanup_policy": serialized, "version": serialized["version"], "inherited": False,
+         "operation": operation},
+        meta={"op_id": operation["op_id"]},
+    )
+
+
 def _sync_target(world_id: str | None) -> str | None:
     return _container().catalog_operations.resolve_sync_target(world_id)
+
+
+def _validate_sync_config(config: Any, target_type: str) -> str:
+    if not isinstance(config, dict):
+        raise ValueError("config must be a JSON object.")
+    name = config.get("name")
+    if name is not None and (
+        not isinstance(name, str) or not name.strip() or len(name) > 120
+    ):
+        raise ValueError("config.name must be a non-empty string of at most 120 characters.")
+
+    def contains_secret_key(value: Any) -> bool:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key).lower().replace("-", "_")
+                if normalized in _SYNC_SECRET_CONFIG_KEYS or any(
+                    marker in normalized
+                    for marker in (
+                        "password", "credential", "secret", "token", "private_key",
+                        "authorization", "api_key", "access_key",
+                    )
+                ):
+                    return True
+                if contains_secret_key(nested):
+                    return True
+        elif isinstance(value, list):
+            return any(contains_secret_key(item) for item in value)
+        return False
+
+    if contains_secret_key(config):
+        raise ValueError("Credentials must be submitted separately from config.")
+    if target_type == SyncTargetType.NAS.value and (
+        not isinstance(config.get("path"), str) or not config["path"].strip()
+    ):
+        raise ValueError("NAS targets require a non-empty config.path.")
+    serialized = json.dumps(config, separators=(",", ":"), ensure_ascii=False)
+    if len(serialized.encode("utf-8")) > 16_384:
+        raise ValueError("config must not exceed 16384 bytes.")
+    return serialized
+
+
+def _valid_sync_target_scope(scope: Any, world_id: Any) -> bool:
+    if scope == "global":
+        return world_id is None
+    return (
+        scope == "world"
+        and isinstance(world_id, str)
+        and _world(world_id) is not None
+    )
+
+
+def _start_sync_target_edit(
+    target_id: str, world_id: str | None, fields: dict[str, Any]
+) -> dict[str, Any]:
+    operation = _container().operations.create(
+        OperationInput(
+            op_type=OperationType.CONFIG_EDIT,
+            actor_type=ActorType.USER,
+            actor_user_id=g.current_user_id,
+            world_id=world_id,
+            data={
+                "entity": ConfigEditEntity.SYNC_TARGETS.value,
+                "row_id": target_id,
+                "before": {},
+                "after": fields,
+            },
+        ),
+        initial_status=OperationStatus.QUEUED,
+        allow_world_conflict=True,
+    )
+    return _container().operations.transition(
+        operation["op_id"], OperationStatus.RUNNING
+    )
+
+
+def _config_update_sync_target(
+    target_id: str, version: int, fields: dict[str, Any]
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Any | None]:
+    try:
+        updated, operation = _container().configuration.update_versioned_with_operation(
+            VersionedUpdate(
+                entity=ConfigEditEntity.SYNC_TARGETS,
+                row_id=target_id,
+                expected_version=version,
+                fields=fields,
+                actor_type=ActorType.USER,
+                actor_user_id=g.current_user_id,
+            )
+        )
+    except ConfigurationConflictError:
+        return None, None, error(
+            "CONFIG_VERSION_CONFLICT",
+            "Configuration changed; reload and retry.",
+            status=409,
+        )
+    except KeyError:
+        return None, None, error("NOT_FOUND", "Sync target not found.", status=404)
+    except ValueError as exc:
+        return None, None, error("VALIDATION_ERROR", str(exc), status=400)
+    return updated, operation, None
 
 
 @backup_catalogs_bp.get("/sync/records")
@@ -666,8 +1049,249 @@ def list_sync_targets() -> Any:
             target["config"] = json.loads(target["config"])
         except (TypeError, json.JSONDecodeError):
             target["config"] = None
+        target["name"] = (
+            target["config"].get("name")
+            if isinstance(target["config"], dict)
+            else None
+        ) or target["sync_target_id"]
         target["enabled"] = bool(target["enabled"])
         target["effective"] = target["sync_target_id"] == effective_target
         target["resolution"] = "world_override" if target["scope"] == "world" else "global_default"
         targets.append(target)
     return ok({"sync_targets": targets})
+
+
+@backup_catalogs_bp.post("/sync/targets")
+def create_sync_target() -> Any:
+    body = _body()
+    allowed = {
+        "scope", "world_id", "target_type", "config", "credential", "enabled", "name"
+    }
+    if body is None or set(body).difference(allowed):
+        return error("VALIDATION_ERROR", "A JSON object with supported sync-target fields is required.")
+    scope = body.get("scope")
+    world_id = body.get("world_id")
+    target_type = body.get("target_type")
+    enabled = body.get("enabled", True)
+    credential = body.get("credential")
+    name = body.get("name")
+    if (
+        not _valid_sync_target_scope(scope, world_id)
+        or not isinstance(target_type, str)
+        or target_type not in {item.value for item in SyncTargetType}
+        or type(enabled) is not bool
+        or not isinstance(credential, str)
+        or not credential.strip()
+        or len(credential) > 8192
+        or (name is not None and (
+            not isinstance(name, str) or not name.strip() or len(name) > 120
+        ))
+    ):
+        return error("VALIDATION_ERROR", "Sync target fields are invalid.")
+    config = body.get("config")
+    if not isinstance(config, dict):
+        return error("VALIDATION_ERROR", "config must be a JSON object.")
+    config = dict(config)
+    if name is not None:
+        config["name"] = name.strip()
+    try:
+        serialized_config = _validate_sync_config(config, target_type)
+    except (TypeError, ValueError) as exc:
+        return error("VALIDATION_ERROR", str(exc))
+
+    container = _container()
+    target_id = f"st_{uuid.uuid4().hex[:16]}"
+    fields = {
+        "scope": scope,
+        "world_id": world_id,
+        "target_type": target_type,
+        "config": config,
+        "enabled": enabled,
+    }
+    operation = _start_sync_target_edit(target_id, world_id, fields)
+    now = int(container.clock.now())
+    writer = None
+    try:
+        secret_id = container.secrets.store(
+            secret_type=SecretType.SYNC_CREDENTIAL,
+            associated_entity_type="sync_target",
+            associated_entity_id=target_id,
+            plaintext=credential,
+        )
+        writer = container.store.writer()
+        writer.execute(
+            "INSERT INTO sync_targets (sync_target_id, scope, world_id, target_type, "
+            "config, secret_id, enabled, version, deleted_at, deleted_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)",
+            (
+                target_id, scope, world_id, target_type, serialized_config,
+                secret_id, int(enabled), now, now,
+            ),
+        )
+        writer.commit()
+        operation = container.operations.transition(
+            operation["op_id"],
+            OperationStatus.COMPLETED,
+            data={
+                "entity": ConfigEditEntity.SYNC_TARGETS.value,
+                "row_id": target_id,
+                "before": {},
+                "after": {**fields, "secret_id": secret_id},
+            },
+        )
+    except Exception:
+        if writer is not None:
+            writer.rollback()
+        container.operations.transition(
+            operation["op_id"],
+            OperationStatus.FAILED,
+            error_code="CONFIG_EDIT_FAILED",
+            message="Sync target could not be created.",
+            data={
+                "entity": ConfigEditEntity.SYNC_TARGETS.value,
+                "row_id": target_id,
+                "before": {},
+                "after": fields,
+            },
+        )
+        return error("SYNC_TARGET_CREATE_FAILED", "Sync target could not be created.", status=500)
+    row = _serialize_row(dict(
+        container.store.reader()
+        .execute("SELECT * FROM sync_targets WHERE sync_target_id = ?", (target_id,))
+        .fetchone()
+    ))
+    row["config"] = config
+    row["enabled"] = bool(row["enabled"])
+    row["name"] = config.get("name", target_id)
+    return ok(
+        {"sync_target": row, "operation": operation},
+        status=201,
+        meta={"op_id": operation["op_id"]},
+    )
+
+
+@backup_catalogs_bp.patch("/sync/targets/<target_id>")
+def update_sync_target(target_id: str) -> Any:
+    body = _body()
+    allowed = {"version", "scope", "world_id", "target_type", "config", "credential", "enabled", "name"}
+    if (
+        body is None
+        or type(body.get("version")) is not int
+        or body["version"] < 1
+        or set(body).difference({"version"}) == set()
+        or set(body).difference(allowed)
+    ):
+        return error("VALIDATION_ERROR", "A version and editable sync-target fields are required.")
+    container = _container()
+    current = container.store.reader().execute(
+        "SELECT * FROM sync_targets WHERE sync_target_id = ? AND deleted_at IS NULL",
+        (target_id,),
+    ).fetchone()
+    if current is None:
+        return error("NOT_FOUND", "Sync target not found.", status=404)
+    if current["version"] != body["version"]:
+        return error("CONFIG_VERSION_CONFLICT", "Configuration changed; reload and retry.", status=409)
+
+    fields: dict[str, Any] = {}
+    scope = body.get("scope", current["scope"])
+    world_id = body.get("world_id", current["world_id"])
+    target_type = body.get("target_type", current["target_type"])
+    if not _valid_sync_target_scope(scope, world_id):
+        return error("VALIDATION_ERROR", "Sync target scope and world_id are inconsistent.")
+    if not isinstance(target_type, str) or target_type not in {
+        item.value for item in SyncTargetType
+    }:
+        return error("VALIDATION_ERROR", "target_type is invalid.")
+
+    try:
+        current_config = json.loads(current["config"])
+    except (TypeError, json.JSONDecodeError):
+        current_config = {}
+    config = body.get("config", current_config)
+    if not isinstance(config, dict):
+        return error("VALIDATION_ERROR", "config must be a JSON object.")
+    config = dict(config)
+    if "name" in body:
+        name = body["name"]
+        if name is None:
+            config.pop("name", None)
+        elif isinstance(name, str) and name.strip() and len(name) <= 120:
+            config["name"] = name.strip()
+        else:
+            return error("VALIDATION_ERROR", "name must be a non-empty string or null.")
+    try:
+        serialized_config = _validate_sync_config(config, target_type)
+    except (TypeError, ValueError) as exc:
+        return error("VALIDATION_ERROR", str(exc))
+    if "scope" in body:
+        fields["scope"] = scope
+    if "world_id" in body or "scope" in body:
+        fields["world_id"] = world_id
+    if "target_type" in body:
+        fields["target_type"] = target_type
+    if "config" in body or "name" in body or "target_type" in body:
+        fields["config"] = serialized_config
+    if "enabled" in body:
+        if type(body["enabled"]) is not bool:
+            return error("VALIDATION_ERROR", "enabled must be a boolean.")
+        fields["enabled"] = int(body["enabled"])
+
+    credential = body.get("credential")
+    if "credential" in body:
+        if (
+            not isinstance(credential, str)
+            or not credential.strip()
+            or len(credential) > 8192
+        ):
+            return error("VALIDATION_ERROR", "credential must be a non-empty string of at most 8192 characters.")
+        try:
+            fields["secret_id"] = container.secrets.rotate(
+                current["secret_id"],
+                new_plaintext=credential,
+                associated_entity_type="sync_target",
+                associated_entity_id=target_id,
+            )
+        except Exception:
+            return error("SYNC_TARGET_CREDENTIAL_FAILED", "Sync target credential could not be updated.", status=500)
+    if not fields:
+        return error("VALIDATION_ERROR", "At least one editable field is required.")
+    updated, operation, failure = _config_update_sync_target(
+        target_id, body["version"], fields
+    )
+    if failure is not None:
+        return failure
+    updated = _serialize_row(updated)
+    updated["config"] = json.loads(updated["config"])
+    updated["enabled"] = bool(updated["enabled"])
+    updated["name"] = updated["config"].get("name", target_id)
+    return ok(
+        {"sync_target": updated, "operation": operation},
+        meta={"op_id": operation["op_id"]},
+    )
+
+
+@backup_catalogs_bp.delete("/sync/targets/<target_id>")
+def delete_sync_target(target_id: str) -> Any:
+    container = _container()
+    row = container.store.reader().execute(
+        "SELECT version, world_id FROM sync_targets "
+        "WHERE sync_target_id = ? AND deleted_at IS NULL",
+        (target_id,),
+    ).fetchone()
+    if row is None:
+        return error("NOT_FOUND", "Sync target not found.", status=404)
+    _, operation, failure = _config_update_sync_target(
+        target_id,
+        row["version"],
+        {
+            "enabled": 0,
+            "deleted_at": int(container.clock.now()),
+            "deleted_by": g.current_user_id,
+        },
+    )
+    if failure is not None:
+        return failure
+    return ok(
+        {"deleted": True, "operation": operation},
+        meta={"op_id": operation["op_id"]},
+    )

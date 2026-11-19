@@ -3,43 +3,84 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef2ff">
   <title>MCManager</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='shell.css') }}">
   <script defer src="{{ url_for('static', filename='operator_ui.js') }}"></script>
   <script defer src="{{ url_for('static', filename='stream_client.js') }}"></script>
 </head>
 <body>
-  <nav aria-label="Primary">
-    <div class="brand">MCManager</div>
-    <div class="nav-section">
-      {% for page in pages %}
-      <a class="ui-button ui-button-general{% if page.slug == active %} is-active{% endif %}" href="/pages/{{ page.slug }}" data-page="{{ page.slug }}">{{ page.title }}</a>
-      {% endfor %}
+  {% set world_slugs = ['world-main', 'world-backups', 'world-logs', 'files', 'world-maintenance', 'world-setup'] %}
+  <nav class="site-nav" aria-label="Primary navigation">
+    <div class="brand-block">
+      <span class="brand-mark" aria-hidden="true">MC</span>
+      <span><strong>MC Manager</strong><small>Server operations</small></span>
+    </div>
+    <label class="context-field" for="contextSelect">Working context
+      <select class="ui-text-input" id="contextSelect" data-context-select aria-label="Manager or selected world">
+        <option value="manager">Manager</option>
+      </select>
+    </label>
+    <div class="nav-groups">
+      <details class="nav-group" open>
+        <summary>MANAGER</summary>
+        <div class="nav-links">
+          {% for page in pages if page.slug not in world_slugs %}
+          <a class="ui-button ui-button-general nav-link{% if page.slug == active %} is-active{% endif %}"
+             href="/pages/{{ page.slug }}" data-page="{{ page.slug }}">{{ page.title }}</a>
+          {% endfor %}
+        </div>
+      </details>
+      <details class="nav-group"{% if active in world_slugs %} open{% endif %}>
+        <summary>WORLD</summary>
+        <div class="nav-links">
+          {% for page in pages if page.slug in world_slugs %}
+          <a class="ui-button ui-button-general nav-link{% if page.slug == active %} is-active{% endif %}"
+             href="/pages/{{ page.slug }}" data-page="{{ page.slug }}">{{ page.title }}</a>
+          {% endfor %}
+        </div>
+      </details>
+    </div>
+    <div class="nav-footer">
+      <div class="identity-row">
+        <span class="avatar" aria-hidden="true">MC</span>
+        <span><strong>Operator session</strong><small>Authenticated account</small></span>
+      </div>
+      <label class="theme-switch"><input type="checkbox" data-theme-toggle> Dark theme</label>
+      <button class="ui-button ui-button-general" type="button" data-logout>Sign out</button>
     </div>
   </nav>
-  <main data-active-page="{{ active }}">
-    <article class="pane">
+
+  <main class="main-shell" data-active-page="{{ active }}">
+    <header class="utility-bar">
+      <button class="ui-button ui-button-general nav-toggle" type="button" data-nav-toggle
+              aria-label="Open navigation" aria-expanded="false">Menu</button>
+      <div class="utility-context">
+        <span class="eyebrow">MC MANAGER</span>
+        <span class="context-crumb" data-context-crumb>Manager context</span>
+      </div>
+      <div class="utility-actions">
+        <span class="status-indicator" data-tone="neutral">Manager</span>
+        <button class="ui-button ui-button-general" type="button" data-notifications>Notifications</button>
+      </div>
+    </header>
+
+    <article class="page-pane">
       <header class="pane-title-area">
-        <div>
+        <div class="title-copy">
+          <p class="eyebrow">MANAGER</p>
           <h1>{{ pages|selectattr('slug', 'equalto', active)|map(attribute='title')|first }}</h1>
-          <p class="muted">Persistent manager shell</p>
         </div>
-        <div class="shell-toolbar">
-          <label class="context-control">Context
-            <select class="ui-text-input" data-context-select aria-label="Manager or world context">
-              <option value="manager">Manager</option>
-            </select>
-          </label>
-          <button class="ui-button" type="button" data-logout>Sign out</button>
+        <div class="pane-head-actions">
           <button class="ui-button ui-button-blue" type="button" data-refresh>Refresh</button>
         </div>
       </header>
-      <div class="pane-content-area">
-        <section class="module-grid" data-page-root>
-          <div class="list-surface" data-loading>Loading page module...</div>
-        </section>
+      <div class="page-content" data-page-root aria-live="polite">
+        <div class="list-surface" data-loading>Loading page module...</div>
       </div>
     </article>
+    <div class="toast-region" role="status" aria-live="polite"></div>
+    <dialog class="action-dialog" aria-labelledby="dialogTitle"></dialog>
   </main>
 </body>
 </html>

@@ -78,9 +78,10 @@ def _session_identity(user_id: str, session_id_hash: str | None = None) -> dict[
         raise SessionError("session user no longer exists")
     grants = container.store.reader().execute(
         "SELECT DISTINCT p.permission_id, p.action_category, p.world_id "
-        "FROM permissions p LEFT JOIN role_assignments ra "
-        "ON ra.role_id = p.role_id AND ra.user_id = ? AND ra.deleted_at IS NULL "
-        "WHERE p.deleted_at IS NULL AND (p.user_id = ? OR ra.user_id IS NOT NULL) "
+        "FROM permissions p WHERE p.deleted_at IS NULL AND (p.user_id = ? OR EXISTS ("
+        "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
+        "WHERE ra.user_id = ? AND ra.role_id = p.role_id "
+        "AND ra.deleted_at IS NULL AND r.deleted_at IS NULL)) "
         "ORDER BY p.action_category, p.world_id, p.permission_id",
         (user_id, user_id),
     ).fetchall()

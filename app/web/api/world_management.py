@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import secrets
 import shutil
 import time
@@ -92,6 +93,11 @@ def _resolve_under(root: Path, relative: str, *, allow_root: bool = True) -> Pat
     if not allow_root and candidate == resolved_root:
         return None
     return candidate
+
+
+def _is_guarded_properties_path(relative: str) -> bool:
+    normalized = relative.replace("\\", "/")
+    return posixpath.normpath(normalized) == "server.properties"
 
 
 def _json_body() -> dict[str, Any] | None:
@@ -560,6 +566,11 @@ def upload_world_file(world_id: str) -> Any:
     uploaded = request.files.get("file")
     if not relative or uploaded is None or not uploaded.filename:
         return error("VALIDATION_ERROR", "A destination path and file are required.")
+    if _is_guarded_properties_path(relative):
+        return error(
+            "FILE_PATH_UNAUTHORIZED",
+            "Use the guarded server-properties endpoint to edit this file.",
+        )
     content = uploaded.stream.read(64 * 1024 * 1024 + 1)
     if len(content) > 64 * 1024 * 1024:
         return error("FILE_TOO_LARGE", "File exceeds the upload limit.")
@@ -627,6 +638,13 @@ def edit_world_file(world_id: str) -> Any:
     ):
         return error("VALIDATION_ERROR", "A valid file action, source, and destination are required.")
     root = _world_directory(world)
+    if _is_guarded_properties_path(body["from"]) or _is_guarded_properties_path(
+        body["to"]
+    ):
+        return error(
+            "FILE_PATH_UNAUTHORIZED",
+            "Use the guarded server-properties endpoint to edit this file.",
+        )
     source = _resolve_under(root, body["from"], allow_root=False)
     target = _resolve_under(root, body["to"], allow_root=False)
     if source is None or target is None:
@@ -682,6 +700,11 @@ def delete_world_file(world_id: str) -> Any:
         return error("WORLD_NOT_FOUND", "World not found.")
     if body is None or not isinstance(body.get("path"), str):
         return error("VALIDATION_ERROR", "A file path is required.")
+    if _is_guarded_properties_path(body["path"]):
+        return error(
+            "FILE_PATH_UNAUTHORIZED",
+            "Use the guarded server-properties endpoint to edit this file.",
+        )
     target = _resolve_under(_world_directory(world), body["path"], allow_root=False)
     if target is None:
         return error("FILE_PATH_UNAUTHORIZED", "Path escapes the world directory.")

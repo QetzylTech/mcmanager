@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 from app.ports.persistence import PersistencePort
@@ -19,6 +20,7 @@ from app.ports.persistence import PersistencePort
 # Locked operational contract (Doc 7 section 10).
 _DEFAULT_BUSY_TIMEOUT_MS = 5000
 _WAL_CHECKPOINT_PAGES = 1000  # bounded checkpoint; never a background hammer
+_WEDGE_THRESHOLD_S = 1.0
 
 
 class PersistenceError(Exception):
@@ -39,6 +41,10 @@ class SqliteStore(PersistencePort):
         self._writer: sqlite3.Connection | None = None
         self._readers: list[sqlite3.Connection] = []
         self._mutex = threading.Lock()
+        self._writer_status = 'unknown'
+        self._last_busy_at: int | None = None
+        self._last_wedged_at: int | None = None
+        self._last_successful_checkpoint_at: int | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -125,7 +131,64 @@ class SqliteStore(PersistencePort):
         if connection is None:
             return
         mode = 'TRUNCATE' if truncate else 'PASSIVE'
-        connection.execute(f'PRAGMA wal_checkpoint({mode})')
+        try:
+            result = connection.execute(f'PRAGMA wal_checkpoint({mode})').fetchone()
+        except sqlite3.OperationalError as exc:
+            self._record_busy_if_applicable(str(exc))
+            raise
+        if result is not None and int(result[0]) != 0:
+            self._record_busy_if_applicable('checkpoint busy')
+            return
+        self._last_successful_checkpoint_at = int(time.time())
+
+    def probe_writer(self) -> dict[str, int | str]:
+        """Probe the writer and record whether it is responsive, busy, or slow."""
+        started = time.monotonic()
+        try:
+            self.writer().execute('SELECT 1').fetchone()
+        except sqlite3.OperationalError as exc:
+            elapsed = time.monotonic() - started
+            message = str(exc)
+            self._record_busy_if_applicable(message)
+            if elapsed >= _WEDGE_THRESHOLD_S:
+                self._last_wedged_at = int(time.time())
+                self._writer_status = 'wedged'
+            else:
+                self._writer_status = 'busy' if self._is_busy_error(message) else 'down'
+            return self._probe_result(elapsed)
+
+        elapsed = time.monotonic() - started
+        if elapsed >= _WEDGE_THRESHOLD_S:
+            self._last_wedged_at = int(time.time())
+            self._writer_status = 'wedged'
+        else:
+            self._writer_status = 'ok'
+        return self._probe_result(elapsed)
+
+    def _probe_result(self, elapsed: float) -> dict[str, float | int | str]:
+        return {
+            'status': self._writer_status,
+            'latency_ms': round(elapsed * 1000, 3),
+        }
+
+    @staticmethod
+    def _is_busy_error(message: str) -> bool:
+        return 'locked' in message.lower() or 'busy' in message.lower()
+
+    def _record_busy_if_applicable(self, message: str) -> None:
+        if self._is_busy_error(message):
+            self._last_busy_at = int(time.time())
+            self._writer_status = 'busy'
+
+    @property
+    def diagnostics_state(self) -> dict[str, int | str | bool | None]:
+        return {
+            'busy': self._writer_status == 'busy',
+            'wedged': self._writer_status == 'wedged',
+            'last_busy_at': self._last_busy_at,
+            'last_wedged_at': self._last_wedged_at,
+            'last_successful_checkpoint_at': self._last_successful_checkpoint_at,
+        }
 
     @property
     def path(self) -> str:

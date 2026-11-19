@@ -877,6 +877,14 @@ class WorldsService:
             )
             if cursor.rowcount != 1:
                 raise ConfigurationConflictError("World changed after deletion preview.")
+            connection.execute(
+                """
+                UPDATE cleanup_policies
+                SET deleted_at = ?, deleted_by = ?, last_changed_at = ?
+                WHERE world_id = ? AND deleted_at IS NULL
+                """,
+                (now, operation["actor_user_id"], now, world_id),
+            )
             connection.commit()
         except Exception:
             connection.rollback()

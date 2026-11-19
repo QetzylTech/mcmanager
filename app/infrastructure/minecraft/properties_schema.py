@@ -125,6 +125,38 @@ def validate_properties(
     return PropertyValidation(valid=not errors, errors=errors, deprecated_hints=hints)
 
 
+def validate_properties_file(
+    *,
+    properties: dict[str, str],
+    server_type: ServerType,
+    mc_version: str,
+) -> PropertyValidation:
+    """Validate parsed on-disk string values using their schema value types."""
+    specs = _merged_specs()
+    typed: dict[str, object] = {}
+    for key, value in properties.items():
+        spec = specs.get(key)
+        if spec is None:
+            typed[key] = value
+        elif spec.value_type == 'int':
+            try:
+                typed[key] = int(value)
+            except ValueError:
+                typed[key] = value
+        elif spec.value_type == 'bool':
+            if value.lower() in {'true', 'false'}:
+                typed[key] = value.lower() == 'true'
+            else:
+                typed[key] = value
+        else:
+            typed[key] = value
+    return validate_properties(
+        properties=typed,
+        server_type=server_type,
+        mc_version=mc_version,
+    )
+
+
 def is_valid_key(key: str, server_type: ServerType, mc_version: str) -> bool:
     """Doc 14 section 6.2: is this property key valid for the version?"""
     specs = _merged_specs()

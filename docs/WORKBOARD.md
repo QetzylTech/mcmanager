@@ -62,15 +62,16 @@ Priority: **P0** release blocker / foundational, **P1** required gate work,
 
 ## Implementation status
 
-**Last recorded verification:** 2026-11-08, Windows / Python 3.13.14. This
-summary is a dated evidence snapshot, not a claim that every gate or the
-product is release-ready.
+**Last recorded test-suite verification:** 2026-11-08, Windows / Python
+3.13.14. This summary is a dated evidence snapshot, not a claim that every
+gate or the product is release-ready.
 
 MCManager has a tested application foundation and substantial control-plane
 functionality. It is an **early functional prototype, not yet an
-operator-ready MVP**. The principal product gaps are stale-world/log cleanup
-policy and workflows, complete shell workflows, manager lifecycle operations,
-and cross-platform, deployment, and performance release acceptance.
+operator-ready MVP**. The principal known product gaps are global cleanup
+policy management, stale-world/log cleanup policy and workflows, manager
+lifecycle operations, full contract parity, and cross-platform, deployment,
+and performance release acceptance.
 
 ### Latest recorded verification
 
@@ -118,6 +119,12 @@ and cross-platform, deployment, and performance release acceptance.
 - Focused Gate 4 verification on 2026-11-08: backup, restore, cleanup, sync,
   and filesystem suites passed (68), with 3 Windows symlink-privilege skips,
   on Windows / Python 3.13.14.
+- Implementation follow-up on 2026-11-19: added guarded server-properties
+  editing, per-world cleanup-policy editing, sync-target CRUD, documentation
+  and manager-log browsing, permission-grant enforcement, and expanded
+  diagnostics/version metadata. `python3 -m compileall -q app migrations`
+  passed on Linux. No tests or browser checks were run for this follow-up;
+  these features are implementation evidence only, not acceptance completion.
 
 ### MVP Code Backlog (Tests Excluded)
 
@@ -129,10 +136,11 @@ reviews may expose additional concrete deltas.
 
 | Work item | Code still needed | Existing tracking |
 |---|---|---|
+| Global cleanup policy | Add manager-wide cleanup-policy read/edit API and UI. Per-world policy editing exists; global policy management is not exposed. | KB-G5-CLEANUP-POLICY-API |
 | Stale-world and log cleanup | After the cleanup policy is approved, implement candidate discovery, preview, retention/eligibility guards, and wet deletion for `stale_worlds` and `logs`; physical deletion must remain exclusive to `CleanupService`. The current service and API support backups only. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
-| Complete operator workflows | Finish the remaining incomplete workflows in `operator_ui.js`: authenticated documentation, manager log access, sync-target CRUD, guarded `server.properties` editing, per-world cleanup policy, and manager restore/restart/update/rollback UI once their owning backend contracts exist. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
+| Complete operator workflows | Authenticated documentation, manager log browsing, sync-target CRUD, guarded `server.properties` editing, and per-world cleanup-policy editing now have implementations. Manager restore/restart/update/rollback UI remains blocked on those backend contracts. Browser acceptance for the new UI work remains outstanding. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
 | Manager lifecycle | Manager Backup is implemented as a durable operation and ZIP+SHA `manager_config` artifact. Implement manager restore, restart, update, and rollback only after defining the recovery, host-supervisor, trusted-update, and data-compatibility contracts; those routes remain `NOT_IMPLEMENTED`. | KB-G5-8 |
-| API contract implementation | Implement audited Document 10 gaps: guarded server-properties service/routes; per-client permission-grant enforcement in middleware; diagnostics telemetry for scheduler ticks, SQLite busy state, process polling, and checkpoints; and a release version source. Settings-visibility response policy needs a product decision first. Manager and cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; owning feature cards |
+| API contract implementation | Guarded server-properties editing, per-client permission-grant enforcement, diagnostics telemetry, release-version metadata, sync-target CRUD, and documentation/log APIs now have implementations. Complete full contract parity; global cleanup-policy routes remain missing, and settings-visibility response policy needs a product decision. Manager and stale/log cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; KB-G5-CLEANUP-POLICY-API; owning feature cards |
 | Production proxy trust | Nginx configuration and `trusted_proxy_hops` support now exist. Keep hop count opt-in and matched to the actual trusted proxy chain; no additional proxy code is currently identified. | KB-G5-10 |
 | Production code health | Resolve source-level Ruff, Black, isort, mypy, and import-boundary failures in the configured project scope without broad unrelated formatting churn. | KB-G0-5 |
 | Document 8/9 behavior deltas | Implement only concrete service/concurrency behavior found missing during the contract inventory; current cards primarily track contract mapping and tests, not a fully enumerated code delta. | KB-G8-CONTRACT, KB-G9-CONTRACT |
@@ -654,6 +662,9 @@ is integrated and reviewed.
   KB-G5-CLEANUP-POLICY must resolve their eligibility and retention contract
   before those destructive workflows can be implemented/tested. Do not mark
   this card Done until the policy is documented and the scopes are covered.
+- **Implementation update (2026-11-19):** sync-target create/update/enable/
+  disable/delete endpoints were added. The new routes have not received
+  feature-test or browser acceptance; this card remains in Review.
 
 ### KB-G4-VERIFY — Close Gate 4 against its exact acceptance checks
 
@@ -757,6 +768,20 @@ is integrated and reviewed.
   acceptance workflow.
 - **Current evidence:** `CleanupService` physically removes backup artifacts
   only; the cleanup API rejects `stale_worlds` and `logs` as unsupported.
+
+### KB-G5-CLEANUP-POLICY-API — Expose global cleanup policy management
+
+- **WBS/Docs:** Documents 5, 7, 8, and 10; cleanup-policy schema in migration
+  001
+- **Priority:** P1 · **Owner:** Unassigned
+- **Acceptance:** add manager-wide cleanup-policy read and versioned edit
+  workflows and expose them in Manager Maintenance; preserve documented
+  age/count/space safeguards, ConfigEdit operation and audit behavior, and
+  global-default inheritance for world policies.
+- **Current evidence:** cleanup-policy persistence and per-world
+  GET/PATCH/editor exist. No global cleanup-policy route or manager-wide
+  editor is registered. This card does not authorize stale-world or log
+  deletion policy changes.
 
 ### KB-D12-2 — Track remaining service-layer architecture divergences
 
@@ -867,7 +892,7 @@ is integrated and reviewed.
 ### KB-G5-6 — Complete real workflows for the 17 shell modules
 
 - **WBS:** WP 5.3
-- **Priority:** P1 · **Owner:** Unassigned
+- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** KB-G5-3, KB-G5-4, KB-G5-5
 - **Acceptance:** modules are functional workflows, not scaffold fragments;
   manager/world context switching works; navigation stays in-place and obeys
@@ -876,16 +901,19 @@ is integrated and reviewed.
   point, first-run/login flow, manager/world context switching, and workflows
   for world actions, backups/restores, users/roles/devices, settings, schedules,
   templates, runtimes, files/logs, sync activity, audit, notifications, and
-  backup cleanup. Manager Backup is enabled.
-- **Remaining code:** authenticated documentation, manager log access,
-  sync-target CRUD, guarded server-properties editing, per-world cleanup policy,
-  and manager restore/restart/update/rollback UI after those backend contracts
-  are implemented.
+  backup cleanup. Manager Backup is enabled. Follow-up implementation added
+  authenticated documentation, manager log browsing, sync-target CRUD,
+  guarded server-properties editing, and per-world cleanup-policy editing.
+- **Remaining code:** manager restore/restart/update/rollback UI after those
+  backend contracts are implemented, plus manager-wide cleanup-policy UI
+  tracked by KB-G5-CLEANUP-POLICY-API.
 - **Evidence:** `node --test tests/browser/test_gate5_browser.test.cjs` passed
   (6 tests), including actual `operator_ui.js` navigation across all 17
   modules, setup/login, Manager Backup submission, style tokens, and 10-tab
   stream sharing. Two retained `shell.js` prototype checks are labeled legacy
-  and are not counted as production UI coverage.
+  and are not counted as production UI coverage. The 2026-11-19 additions
+  were not browser-tested; `python3 -m compileall -q app migrations` passed
+  but does not validate JavaScript behavior.
 
 ### KB-G1-FORGE-SHUTDOWN — Diagnose Forge process exit after RCON stop
 
@@ -920,6 +948,9 @@ is integrated and reviewed.
   `manager_config` artifact with `world_id = NULL`. The Manager Maintenance UI
   now exposes this action. Terminal operation audit is provided by
   OperationService.
+- **Remaining:** manager restore/restart/update/rollback and their UI remain
+  unimplemented; documentation, manager-log, and sync-target workflows do not
+  satisfy lifecycle acceptance.
 - **Verification:** manager-backup artifact test (1 passed); combined bootstrap
   and catalog tests (14 passed); backup/restore coordination tests (31 passed).
 - **Blocked product decisions:** Manager restore needs a defined restore scope,
@@ -1059,7 +1090,10 @@ is integrated and reviewed.
   checks remain acceptance evidence on their implementation cards. Include
   manager lifecycle routes and all cleanup scopes; this is a parity inventory,
   not a substitute for implementing the owning feature cards.
-- **Current audit:** `docs/document10_mvp_gap_audit.md` records missing guarded
-  server-properties routes/service, per-client permission-grant enforcement,
-  diagnostics telemetry fields, and a release version source. Settings
-  visibility requires product policy before implementation.
+- **Current audit:** `docs/audit.md` records the 2026-11-19 findings and
+  transfers each actionable item to this board. Server-properties editing,
+  permission-grant enforcement, diagnostics/version metadata, sync-target
+  CRUD, documentation/log browsing, and per-world cleanup-policy editing have
+  implementations from the follow-up, but lack feature-level acceptance.
+  Full parity remains open; additional concrete route or service deltas may
+  be discovered.

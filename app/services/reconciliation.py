@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from app.services.runtime import RuntimeService
@@ -14,6 +15,7 @@ class ReconciliationHealth:
     status: str
     reattached_world_ids: tuple[str, ...] = ()
     error: str | None = None
+    last_attempt_at: int | None = None
 
 
 class ReconciliationService:
@@ -29,17 +31,20 @@ class ReconciliationService:
         return self._health
 
     def reconcile(self) -> list[str]:
-        self._health = ReconciliationHealth(status='running')
+        attempted_at = int(time.time())
+        self._health = ReconciliationHealth(status='running', last_attempt_at=attempted_at)
         try:
             reattached = tuple(self._runtime.reconcile())
         except Exception as exc:
             self._health = ReconciliationHealth(
                 status='failed',
                 error=str(exc),
+                last_attempt_at=attempted_at,
             )
             raise
         self._health = ReconciliationHealth(
             status='healthy',
             reattached_world_ids=reattached,
+            last_attempt_at=attempted_at,
         )
         return list(reattached)

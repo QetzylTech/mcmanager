@@ -246,7 +246,7 @@ def validate_property_schema(
         return False, 'CONFIG_INVALID_KEY'
 
     if spec.value_type == 'int':
-        if not isinstance(value, int):
+        if type(value) is not int:
             return False, 'CONFIG_INVALID_VALUE'
     elif spec.value_type == 'bool':
         if not isinstance(value, bool):

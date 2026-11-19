@@ -114,6 +114,18 @@ class BaseProcessAdapter:
 
     def __init__(self, registry: LiveRegistry | None = None) -> None:
         self._registry = registry or LiveRegistry()
+        self._poll_health_lock = threading.Lock()
+        self._last_poll_health: dict[str, int | str | None] = {
+            'last_poll_at': None,
+            'status': 'not_started',
+            'process_state': None,
+            'error': None,
+        }
+
+    @property
+    def last_poll_health(self) -> dict[str, int | str | None]:
+        with self._poll_health_lock:
+            return dict(self._last_poll_health)
 
     # -- spawn ---------------------------------------------------------------
 
@@ -304,6 +316,31 @@ class BaseProcessAdapter:
     # -- poll / classify ---------------------------------------------------------
 
     def poll(self, handle: ProcessHandle) -> ProcessStatus:
+        """Poll a process and retain the adapter's latest poll health."""
+        try:
+            status = self._poll(handle)
+        except Exception as exc:
+            self._record_poll_health(status='failed', error=str(exc))
+            raise
+        self._record_poll_health(status='ok', process_state=status.state.value)
+        return status
+
+    def _record_poll_health(
+        self,
+        *,
+        status: str,
+        process_state: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._poll_health_lock:
+            self._last_poll_health = {
+                'last_poll_at': int(time.time()),
+                'status': status,
+                'process_state': process_state,
+                'error': error,
+            }
+
+    def _poll(self, handle: ProcessHandle) -> ProcessStatus:
         """Live status of a supervised process.
 
         Exit classification is context-free at the adapter layer: an exited

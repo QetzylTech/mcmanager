@@ -57,7 +57,9 @@ def _sections_for(slug: str) -> list[dict[str, str]]:
         'settings': [('Global Settings', 'Timezone, idle countdown, notification defaults, and paths.')],
         'users': [('Users', 'Accounts, roles, permissions, and device access.')],
         'maintenance': [('Retention Policies', 'Global cleanup rules, dry runs, and missed jobs.')],
-        'documentation': [('Documentation', 'Rendered administration and developer manuals.')],
+        'documentation': [
+            ('Documentation', 'Browse repository Markdown source; embedded HTML is not executed.')
+        ],
         'system-logs': [('Manager Logs', 'Panel activity, errors, and notifications.')],
         'audit': [('Audit History', 'Immutable actions, denials, restores, cleanup, and crashes.')],
         'sync': [('Sync Targets', 'Global and per-world offsite sync configuration.'), ('Recent Sync Activity', 'Sync records and attempt outcomes.')],

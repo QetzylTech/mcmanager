@@ -329,6 +329,82 @@ def test_sync_target_api_never_exposes_secret_values(catalog_app):
     assert "encrypted_value" not in payload
 
 
+def test_sync_target_crud_validates_versions_and_keeps_credentials_private(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+    plaintext = "sync-target-crud-credential"
+
+    created = client.post(
+        "/api/sync/targets",
+        json={
+            "scope": "global",
+            "target_type": "nas",
+            "config": {"path": "/mnt/backups"},
+            "name": "Primary NAS",
+            "credential": plaintext,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    target = created.json["data"]["sync_target"]
+    target_id = target["sync_target_id"]
+    assert target["name"] == "Primary NAS"
+    assert container.secrets.read(target["secret_id"]) == plaintext
+
+    listing = client.get("/api/sync/targets")
+    payload = json.dumps(listing.get_json())
+    assert listing.status_code == 200
+    assert target_id in payload
+    assert plaintext not in payload
+    assert "encrypted_value" not in payload
+
+    disabled = client.patch(
+        f"/api/sync/targets/{target_id}",
+        json={"version": target["version"], "enabled": False},
+        headers=headers,
+    )
+    assert disabled.status_code == 200
+    assert disabled.json["data"]["sync_target"]["enabled"] is False
+    stale = client.patch(
+        f"/api/sync/targets/{target_id}",
+        json={"version": target["version"], "enabled": True},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+    rotated = client.patch(
+        f"/api/sync/targets/{target_id}",
+        json={"version": disabled.json["data"]["sync_target"]["version"], "credential": "rotated-secret"},
+        headers=headers,
+    )
+    assert rotated.status_code == 200
+    assert container.secrets.read(rotated.json["data"]["sync_target"]["secret_id"]) == "rotated-secret"
+
+    rejected = client.post(
+        "/api/sync/targets",
+        json={
+            "scope": "global",
+            "target_type": "nas",
+            "config": {"path": "/mnt/backups", "access_token": "must-not-be-config"},
+            "credential": "another-secret",
+        },
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+    assert rejected.json["error"]["code"] == "VALIDATION_ERROR"
+
+    deleted = client.delete(f"/api/sync/targets/{target_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert client.get("/api/sync/targets").json["data"]["sync_targets"] == []
+    row = container.store.reader().execute(
+        "SELECT enabled, deleted_at FROM sync_targets WHERE sync_target_id = ?",
+        (target_id,),
+    ).fetchone()
+    assert row["enabled"] == 0
+    assert row["deleted_at"] is not None
+
+
 def test_non_superadmin_can_use_personal_notifications_but_not_admin_catalogs(catalog_app):
     admin, admin_headers = _admin_client(catalog_app)
     role = admin.post(
