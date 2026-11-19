@@ -48,6 +48,9 @@ def list_notifications():
     severity = request.args.get("severity")
     if severity is not None and severity not in {"critical", "high", "normal", "informational"}:
         return error("VALIDATION_ERROR", "severity is invalid.")
+    include_dismissed = request.args.get("include_dismissed", "false")
+    if include_dismissed.lower() not in {"true", "false"}:
+        return error("VALIDATION_ERROR", "include_dismissed must be true or false.")
     read_filter = request.args.get("read")
     if read_filter is not None and read_filter.lower() not in {"true", "false"}:
         return error("VALIDATION_ERROR", "read must be true or false.")
@@ -57,7 +60,9 @@ def list_notifications():
         return error("VALIDATION_ERROR", "Invalid pagination values.")
     limit, offset = page
     container = _container()
-    clauses = ["(reads.dismissed_at IS NULL OR reads.notification_id IS NULL)"]
+    clauses = []
+    if include_dismissed.lower() != "true":
+        clauses.append("(reads.dismissed_at IS NULL OR reads.notification_id IS NULL)")
     params: list[Any] = [g.current_user_id]
     if severity:
         clauses.append("n.severity = ?")
@@ -69,14 +74,14 @@ def list_notifications():
         clauses.append(
             "reads.read_at IS " + ("NOT " if read_filter.lower() == "true" else "") + "NULL"
         )
-    where = " AND ".join(clauses)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
     query = (
         "SELECT n.notification_id, n.category, n.severity, n.message, "
         "n.related_operation_id, n.related_world_id, n.requires_action, "
         "n.action_taken, n.created_at, reads.read_at, reads.dismissed_at "
         "FROM notifications n LEFT JOIN notification_reads reads "
         "ON reads.notification_id = n.notification_id AND reads.user_id = ? "
-        f"WHERE {where} ORDER BY (reads.read_at IS NOT NULL), {_SEVERITY_ORDER}, n.created_at DESC"
+        f"{where} ORDER BY (reads.read_at IS NOT NULL), {_SEVERITY_ORDER}, n.created_at DESC"
     )
     rows = container.store.reader().execute(query, params).fetchall()
     total = len(rows)
@@ -133,7 +138,12 @@ def dismiss_notification(notification_id: str):
 @history_bp.post("/notifications/read-all")
 def read_all_notifications():
     container = _container()
-    rows = container.store.reader().execute("SELECT notification_id FROM notifications").fetchall()
+    rows = container.store.reader().execute(
+        "SELECT n.notification_id FROM notifications n "
+        "LEFT JOIN notification_reads r ON r.notification_id = n.notification_id "
+        "AND r.user_id = ? WHERE r.notification_id IS NULL OR r.dismissed_at IS NULL",
+        (g.current_user_id,),
+    ).fetchall()
     for row in rows:
         container.notifications.mark_read(row["notification_id"], g.current_user_id)
     return ok({"read_count": len(rows)})

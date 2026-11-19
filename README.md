@@ -26,8 +26,13 @@ Run tests from the repository root:
 python -m pytest
 ```
 
-Run the app from the repository root:
+Start the app by running `app\start.bat` from Explorer or Command Prompt. The
+batch file creates a local virtual environment, installs runtime dependencies
+when they are missing, and starts the server on localhost:
 
-```powershell
-python -m flask --app "app:create_app(database_path='app/data/manager.db', keyfile_path='app/data/secrets.key', migrations_dir='migrations')" run --host 127.0.0.1 --port 5000
+```bat
+app\start.bat
 ```
+
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and complete the initial
+administrator setup.

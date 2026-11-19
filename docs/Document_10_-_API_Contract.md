@@ -188,7 +188,7 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 ### Notifications & audit
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/notifications` | any | unread-first, severity then recency; `meta.unread_count`; filters `severity`, `read`, `world_id` |
+| GET | `/api/notifications` | any | unread-first, severity then recency; `meta.unread_count`; filters `severity`, `read`, `world_id`; `include_dismissed=true` exposes dismissed rows for permanent Audit/History |
 | POST | `/api/notifications/{notification_id}/read` | any | per-user read marker |
 | POST | `/api/notifications/{notification_id}/dismiss` | any | per-user dismiss (dropdown only; row permanent) |
 | POST | `/api/notifications/read-all` | any | bulk per-user read |

@@ -8,8 +8,14 @@
   const themeToggle = document.querySelector('[data-theme-toggle]');
   const navToggle = document.querySelector('[data-nav-toggle]');
   const nav = document.querySelector('.site-nav');
+  const notificationsButton = document.querySelector('[data-notifications]');
+  const notificationPanel = document.querySelector('[data-notification-panel]');
+  const unreadCountBadge = document.querySelector('[data-unread-count]');
   let worlds = [];
   let worldId = '';
+  let notifications = [];
+  let notificationUnreadCount = 0;
+  let notificationsOpen = false;
   let statusMessage = '';
   let cleanupOperationId = '';
   let cleanupWorldId = '';
@@ -95,7 +101,9 @@
     let payload = {};
     try { payload = await response.json(); } catch (_error) { /* Non-JSON response. */ }
     if (!response.ok || payload.ok === false) {
-      throw new Error(payload.error?.message || `Request failed (${response.status}).`);
+      const failure = new Error(payload.error?.message || `Request failed (${response.status}).`);
+      failure.code = payload.error?.code;
+      throw failure;
     }
     return payload;
   }
@@ -104,6 +112,42 @@
     const prefix = `${name}=`;
     const match = document.cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith(prefix));
     return match ? decodeURIComponent(match.slice(prefix.length)) : '';
+  }
+
+  function requestStepUpPassword() {
+    const dialog = document.querySelector('.action-dialog');
+    if (!dialog || typeof dialog.showModal !== 'function') {
+      return Promise.reject(new Error('Password confirmation is unavailable.'));
+    }
+    return new Promise((resolve) => {
+      let completed = false;
+      const finish = (password) => {
+        if (completed) return;
+        completed = true;
+        dialog.removeEventListener('cancel', onCancel);
+        dialog.close();
+        resolve(password);
+      };
+      const onCancel = (event) => {
+        event.preventDefault();
+        finish(null);
+      };
+      dialog.innerHTML = `<form class="dialog-form">` +
+        `<header class="pane-title-area"><h2 id="dialogTitle">Confirm your identity</h2></header>` +
+        `<section class="pane-content-area"><p>Enter your password to authorize this action.</p>` +
+        `<label class="form-field">Password<input class="ui-text-input" name="password" type="password" autocomplete="current-password" required></label></section>` +
+        `<div class="dialog-actions"><button class="ui-button ui-button-general" type="button" data-step-up-cancel>Cancel</button>` +
+        `<button class="ui-button ui-button-blue" type="submit">Confirm</button></div></form>`;
+      const form = dialog.querySelector('form');
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        finish(new FormData(form).get('password'));
+      }, { once: true });
+      form.querySelector('[data-step-up-cancel]').addEventListener('click', () => finish(null), { once: true });
+      dialog.addEventListener('cancel', onCancel);
+      dialog.showModal();
+      form.querySelector('[name="password"]').focus();
+    });
   }
 
   async function mutate(url, method, body, multipart = false) {
@@ -119,7 +163,23 @@
         options.body = JSON.stringify(body);
       }
     }
-    return request(url, options);
+    try {
+      return await request(url, options);
+    } catch (error) {
+      if (!['STEP_UP_REQUIRED', 'AUTH_STEP_UP_REQUIRED'].includes(error.code)) throw error;
+      const password = await requestStepUpPassword();
+      if (password === null) throw new Error('Password confirmation cancelled; no action was taken.');
+      await request('/api/auth/step-up', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': cookie('csrf_token'),
+        },
+        body: JSON.stringify({ password }),
+      });
+      headers['X-CSRF-Token'] = cookie('csrf_token');
+      return request(url, options);
+    }
   }
 
   async function loadWorlds() {
@@ -215,6 +275,76 @@
 
   function worldChoices() {
     return [['', 'Manager-wide'], ...worlds.map((world) => [world.world_id, world.display_name])];
+  }
+
+  function renderNotifications() {
+    if (!notificationPanel) return;
+    const rows = notifications.length ? notifications.map((item) => {
+      const details = [item.severity, item.created_at, item.related_world_id]
+        .filter(Boolean).map(escapeHtml).join(' · ');
+      return `<div class="notification-item"><div class="notification-copy">` +
+        `<strong>${escapeHtml(item.message)}</strong><span class="table-meta">${details}</span></div>` +
+        `<div class="action-row">${item.read_at ? '' : button('Mark read', 'notification-read', item.notification_id)}` +
+        `${button('Dismiss', 'notification-dismiss', item.notification_id)}</div></div>`;
+    }).join('') : '<p class="muted">No notifications.</p>';
+    notificationPanel.innerHTML = `<div class="notification-panel-heading"><h2>Notifications</h2>` +
+      `<button class="ui-button ui-button-general" type="button" data-notifications-close>Close</button></div>` +
+      `<div class="list-surface">${rows}</div><div class="notification-panel-actions">` +
+      `<button class="ui-button ui-button-blue" type="button" data-ui-action="notification-read-all"${notificationUnreadCount ? '' : ' disabled'}>Mark all read</button>` +
+      `<a class="ui-button ui-button-general" href="/pages/audit" data-page="audit">Audit / History</a></div>`;
+  }
+
+  async function loadNotifications() {
+    const result = await request('/api/notifications?limit=20&offset=0');
+    notifications = result.data.notifications || [];
+    notificationUnreadCount = Number(result.meta?.unread_count || 0);
+    if (unreadCountBadge) {
+      unreadCountBadge.textContent = String(notificationUnreadCount);
+      unreadCountBadge.hidden = notificationUnreadCount === 0;
+    }
+    if (notificationsButton) {
+      notificationsButton.setAttribute('aria-expanded', String(notificationsOpen));
+      notificationsButton.setAttribute('aria-label', `Notifications, ${notificationUnreadCount} unread`);
+    }
+    renderNotifications();
+  }
+
+  async function toggleNotifications() {
+    notificationsOpen = !notificationsOpen;
+    if (notificationPanel) notificationPanel.hidden = !notificationsOpen;
+    if (notificationsButton) notificationsButton.setAttribute('aria-expanded', String(notificationsOpen));
+    if (!notificationsOpen) return;
+    try {
+      await loadNotifications();
+    } catch (error) {
+      if (notificationPanel) notificationPanel.innerHTML = unavailable(error.message, 'Notifications unavailable');
+    }
+  }
+
+  function closeNotifications() {
+    notificationsOpen = false;
+    if (notificationPanel) notificationPanel.hidden = true;
+    if (notificationsButton) notificationsButton.setAttribute('aria-expanded', 'false');
+  }
+
+  function setNavigationOpen(open) {
+    if (document.body?.classList) document.body.classList.toggle('nav-open', open);
+    if (navToggle) {
+      navToggle.setAttribute('aria-expanded', String(open));
+      navToggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+    }
+  }
+
+  function initializeTheme() {
+    let theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    try {
+      const savedTheme = window.localStorage?.getItem('mcmanager-theme');
+      if (savedTheme === 'light' || savedTheme === 'dark') theme = savedTheme;
+    } catch (error) {
+      console.warn('Unable to read the saved theme preference.', error);
+    }
+    document.documentElement.dataset.theme = theme;
+    if (themeToggle) themeToggle.checked = theme === 'dark';
   }
 
   async function renderHome() {
@@ -383,14 +513,16 @@
   }
 
   async function renderAudit() {
-    const [audit, notices] = await Promise.all([request(`/api/audit${query({ ...auditFilters, limit: 50, offset: 0 })}`), request('/api/notifications?limit=50&offset=0')]);
+    const [audit, notices] = await Promise.all([request(`/api/audit${query({ ...auditFilters, limit: 50, offset: 0 })}`), request('/api/notifications?limit=50&offset=0&include_dismissed=true')]);
     root.innerHTML = message() + `<form class="workflow-form" data-form="audit-filter">${field('Event type', 'event_type', auditFilters.event_type || '')}` +
       `${field('Actor user ID', 'actor_user_id', auditFilters.actor_user_id || '')}${selectField('World', 'world_id', worldChoices(), auditFilters.world_id || '')}<button class="ui-button ui-button-blue" type="submit">Filter history</button></form>` +
       card('Audit history', (audit.data.audit || []).map((item) => `<div class="table-row"><span><strong>${escapeHtml(item.event_type)}</strong>` +
         `<small>${escapeHtml(item.actor_username_snapshot || item.actor_user_id || 'system')} · ${escapeHtml(item.world_id || 'manager')} · ${escapeHtml(item.created_at)}</small></span>` +
         `${button('Details', 'audit-detail', item.audit_id)}</div>`).join('') || '<p class="muted">No audit records.</p>') +
-      card('Notifications', (notices.data.notifications || []).map((item) => `<div class="table-row"><span>${escapeHtml(item.message)}</span>` +
-        `${button('Mark read', 'notification-read', item.notification_id, '', Boolean(item.read_at))}${button('Dismiss', 'notification-dismiss', item.notification_id)}</div>`).join('') || '<p class="muted">No notifications.</p>');
+      card('Notifications', (notices.data.notifications || []).map((item) => `<div class="table-row"><span>${escapeHtml(item.message)}` +
+        `<small>${escapeHtml(item.severity)} · ${escapeHtml(item.created_at)} · ${item.dismissed_at ? 'Dismissed' : item.read_at ? 'Read' : 'Unread'}</small></span>` +
+        `${button('Mark read', 'notification-read', item.notification_id, '', Boolean(item.read_at))}` +
+        `${item.dismissed_at ? '' : button('Dismiss', 'notification-dismiss', item.notification_id)}</div>`).join('') || '<p class="muted">No notifications.</p>');
   }
 
   async function renderSync() {
@@ -720,6 +852,7 @@
       }
       case 'notification-read': await mutate(`/api/notifications/${encoded}/read`, 'POST', {}); break;
       case 'notification-dismiss': await mutate(`/api/notifications/${encoded}/dismiss`, 'POST', {}); break;
+      case 'notification-read-all': await mutate('/api/notifications/read-all', 'POST', {}); break;
       case 'audit-detail': {
         const result = await request(`/api/audit/${encoded}`);
         statusMessage = JSON.stringify(result.data.audit, null, 2); return loadPage(main.dataset.activePage);
@@ -793,6 +926,7 @@
       default: return;
     }
     statusMessage = statusMessage || 'Request completed.';
+    if (action.startsWith('notification-')) await loadNotifications();
     await loadWorlds();
     await loadPage(main.dataset.activePage);
   }
@@ -814,6 +948,17 @@
           if (key !== 'version') settings[key] = ['notification_defaults', 'offsite_sync_defaults'].includes(key) ? JSON.parse(value) : key === 'idle_countdown_seconds' ? Number(value) : value;
         });
         await mutate('/api/settings', 'PATCH', { version: Number(data.version), ...settings }); break;
+      }
+      case 'global-cleanup-policy': {
+        const countRules = JSON.parse(data.count_rules);
+        await mutate('/api/cleanup/policy', 'PATCH', {
+          version: Number(data.version),
+          age_rule_days: Number(data.age_rule_days),
+          space_rule_pct: data.space_rule_pct === '' ? null : Number(data.space_rule_pct),
+          count_rules: countRules,
+          schedule_id: data.schedule_id || null,
+        });
+        break;
       }
       case 'user-create': await mutate('/api/users', 'POST', { username: data.username, display_name: data.display_name || null, password: data.password, role_id: data.role_id }); break;
       case 'role-create': await mutate('/api/roles', 'POST', { name: data.name, description: data.description || null }); break;
@@ -907,6 +1052,23 @@
   }
 
   document.addEventListener('click', async (event) => {
+    const notificationToggle = event.target.closest && event.target.closest('[data-notifications]');
+    if (notificationToggle) {
+      event.preventDefault();
+      await toggleNotifications();
+      return;
+    }
+    if (event.target.closest && event.target.closest('[data-notifications-close]')) {
+      event.preventDefault();
+      closeNotifications();
+      return;
+    }
+    if (notificationsOpen && !event.target.closest?.('.notification-dropdown')) closeNotifications();
+    if (nav && event.target.closest && event.target.closest('[data-nav-toggle]')) {
+      event.preventDefault();
+      setNavigationOpen(!document.body?.classList?.contains('nav-open'));
+      return;
+    }
     const action = event.target.closest && event.target.closest('[data-ui-action]');
     if (action && !action.disabled) {
       event.preventDefault();
@@ -918,6 +1080,7 @@
     if (!anchor || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || (event.button !== undefined && event.button !== 0)) return;
     event.preventDefault();
     statusMessage = '';
+    setNavigationOpen(false);
     history.pushState({ slug: anchor.dataset.page }, '', anchor.href);
     await loadPage(anchor.dataset.page);
   });
@@ -942,6 +1105,7 @@
 
   if (contextSelect) contextSelect.addEventListener('change', async () => {
     statusMessage = '';
+    setNavigationOpen(false);
     if (contextSelect.value === 'manager') {
       history.pushState({ slug: 'home' }, '', '/pages/home');
       return loadPage('home');
@@ -951,6 +1115,22 @@
     await loadPage('world-main');
   });
 
+  if (themeToggle) themeToggle.addEventListener('change', () => {
+    const theme = themeToggle.checked ? 'dark' : 'light';
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage?.setItem('mcmanager-theme', theme);
+    } catch (error) {
+      console.warn('Unable to save the theme preference.', error);
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeNotifications();
+      setNavigationOpen(false);
+    }
+  });
+  initializeTheme();
   document.querySelector('[data-refresh]')?.addEventListener('click', () => loadPage(main.dataset.activePage));
   document.querySelector('[data-logout]')?.addEventListener('click', async () => {
     try { await mutate('/api/auth/logout', 'POST', {}); }
@@ -964,6 +1144,11 @@
       if (document.body) document.body.dataset.authState = 'authenticated';
       await loadWorlds();
       await loadPage(main.dataset.activePage);
+      try {
+        await loadNotifications();
+      } catch (error) {
+        console.warn('Unable to load notifications.', error);
+      }
     } catch (_error) {
       try {
         const setup = await request('/api/setup');

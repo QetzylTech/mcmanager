@@ -68,10 +68,9 @@ gate or the product is release-ready.
 
 MCManager has a tested application foundation and substantial control-plane
 functionality. It is an **early functional prototype, not yet an
-operator-ready MVP**. The principal known product gaps are global cleanup
-policy management, stale-world/log cleanup policy and workflows, manager
-lifecycle operations, full contract parity, and cross-platform, deployment,
-and performance release acceptance.
+operator-ready MVP**. The principal known product gaps are stale-world/log
+cleanup policy and workflows, manager lifecycle operations, full contract
+parity, and cross-platform, deployment, and performance release acceptance.
 
 ### Latest recorded verification
 
@@ -136,11 +135,10 @@ reviews may expose additional concrete deltas.
 
 | Work item | Code still needed | Existing tracking |
 |---|---|---|
-| Global cleanup policy | Add manager-wide cleanup-policy read/edit API and UI. Per-world policy editing exists; global policy management is not exposed. | KB-G5-CLEANUP-POLICY-API |
 | Stale-world and log cleanup | After the cleanup policy is approved, implement candidate discovery, preview, retention/eligibility guards, and wet deletion for `stale_worlds` and `logs`; physical deletion must remain exclusive to `CleanupService`. The current service and API support backups only. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
-| Complete operator workflows | Authenticated documentation, manager log browsing, sync-target CRUD, guarded `server.properties` editing, and per-world cleanup-policy editing now have implementations. Manager restore/restart/update/rollback UI remains blocked on those backend contracts. Browser acceptance for the new UI work remains outstanding. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
+| Complete operator workflows | Authenticated documentation, manager log browsing, sync-target CRUD, guarded `server.properties` editing, and per-world and manager-wide cleanup-policy editing now have implementations. Manager restore/restart/update/rollback UI remains blocked on those backend contracts. Browser acceptance for the new UI work remains outstanding. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
 | Manager lifecycle | Manager Backup is implemented as a durable operation and ZIP+SHA `manager_config` artifact. Implement manager restore, restart, update, and rollback only after defining the recovery, host-supervisor, trusted-update, and data-compatibility contracts; those routes remain `NOT_IMPLEMENTED`. | KB-G5-8 |
-| API contract implementation | Guarded server-properties editing, per-client permission-grant enforcement, diagnostics telemetry, release-version metadata, sync-target CRUD, and documentation/log APIs now have implementations. Complete full contract parity; global cleanup-policy routes remain missing, and settings-visibility response policy needs a product decision. Manager and stale/log cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; KB-G5-CLEANUP-POLICY-API; owning feature cards |
+| API contract implementation | Guarded server-properties editing, per-client permission-grant enforcement, diagnostics telemetry, release-version metadata, global cleanup-policy routes, sync-target CRUD, and documentation/log APIs now have implementations. Complete full contract parity; settings-visibility response policy needs a product decision. Manager and stale/log cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; owning feature cards |
 | Production proxy trust | Nginx configuration and `trusted_proxy_hops` support now exist. Keep hop count opt-in and matched to the actual trusted proxy chain; no additional proxy code is currently identified. | KB-G5-10 |
 | Production code health | Resolve source-level Ruff, Black, isort, mypy, and import-boundary failures in the configured project scope without broad unrelated formatting churn. | KB-G0-5 |
 | Document 8/9 behavior deltas | Implement only concrete service/concurrency behavior found missing during the contract inventory; current cards primarily track contract mapping and tests, not a fully enumerated code delta. | KB-G8-CONTRACT, KB-G9-CONTRACT |
@@ -774,14 +772,16 @@ is integrated and reviewed.
 - **WBS/Docs:** Documents 5, 7, 8, and 10; cleanup-policy schema in migration
   001
 - **Priority:** P1 · **Owner:** Unassigned
+- **Status:** Implemented
 - **Acceptance:** add manager-wide cleanup-policy read and versioned edit
   workflows and expose them in Manager Maintenance; preserve documented
   age/count/space safeguards, ConfigEdit operation and audit behavior, and
   global-default inheritance for world policies.
-- **Current evidence:** cleanup-policy persistence and per-world
-  GET/PATCH/editor exist. No global cleanup-policy route or manager-wide
-  editor is registered. This card does not authorize stale-world or log
-  deletion policy changes.
+- **Evidence:** manager-wide GET/PATCH routes, versioned ConfigEdit operation,
+  step-up enforcement, and the Manager Maintenance editor are implemented.
+  Focused catalog API checks passed (11). This card does not authorize
+  stale-world or log deletion policy changes; those remain on their separate
+  policy/implementation cards.
 
 ### KB-D12-2 — Track remaining service-layer architecture divergences
 
@@ -903,17 +903,19 @@ is integrated and reviewed.
   templates, runtimes, files/logs, sync activity, audit, notifications, and
   backup cleanup. Manager Backup is enabled. Follow-up implementation added
   authenticated documentation, manager log browsing, sync-target CRUD,
-  guarded server-properties editing, and per-world cleanup-policy editing.
+  guarded server-properties editing, per-world cleanup-policy editing, and
+  manager-wide cleanup-policy editing.
 - **Remaining code:** manager restore/restart/update/rollback UI after those
-  backend contracts are implemented, plus manager-wide cleanup-policy UI
-  tracked by KB-G5-CLEANUP-POLICY-API.
+  backend contracts are implemented.
 - **Evidence:** `node --test tests/browser/test_gate5_browser.test.cjs` passed
   (6 tests), including actual `operator_ui.js` navigation across all 17
   modules, setup/login, Manager Backup submission, style tokens, and 10-tab
   stream sharing. Two retained `shell.js` prototype checks are labeled legacy
-  and are not counted as production UI coverage. The 2026-11-19 additions
-  were not browser-tested; `python3 -m compileall -q app migrations` passed
-  but does not validate JavaScript behavior.
+  and are not counted as production UI coverage. Focused API checks for the
+  2026-11-19 follow-up passed (11); live browser validation confirmed theme,
+  notification dropdown, step-up dialog, and global policy submission. The
+  Node regression added for these flows remains unrun because Node is
+  unavailable.
 
 ### KB-G1-FORGE-SHUTDOWN — Diagnose Forge process exit after RCON stop
 

@@ -171,7 +171,47 @@ def test_missed_runs_notifications_and_audit_routes(catalog_app):
         client.post(f"/api/notifications/{notification_id}/read", headers=headers).status_code
         == 201
     )
+    assert (
+        client.post(f"/api/notifications/{notification_id}/dismiss", headers=headers).status_code
+        == 201
+    )
+    assert client.get("/api/notifications").json["meta"]["pagination"]["total"] == 0
+    dismissed_history = client.get("/api/notifications?include_dismissed=true")
+    assert dismissed_history.status_code == 200
+    assert dismissed_history.json["data"]["notifications"][0]["dismissed_at"] is not None
+    assert client.get("/api/notifications?include_dismissed=invalid").status_code == 400
+
+    dismissed_unread_id = container.notifications.publish(
+        NotificationInput(
+            category="security",
+            severity=NotificationSeverity.NORMAL,
+            message="Dismissed unread API test notification",
+        )
+    )
+    assert (
+        client.post(f"/api/notifications/{dismissed_unread_id}/dismiss", headers=headers).status_code
+        == 201
+    )
+    visible_notification_id = container.notifications.publish(
+        NotificationInput(
+            category="security",
+            severity=NotificationSeverity.NORMAL,
+            message="Visible API test notification",
+        )
+    )
     assert client.post("/api/notifications/read-all", headers=headers).status_code == 200
+    visible_history = client.get("/api/notifications?include_dismissed=true&read=true")
+    read_notifications = {
+        item["notification_id"] for item in visible_history.json["data"]["notifications"]
+    }
+    assert visible_notification_id in read_notifications
+    assert dismissed_unread_id not in read_notifications
+    permanent_history = client.get("/api/notifications?include_dismissed=true")
+    dismissed = {
+        item["notification_id"]: item["dismissed_at"]
+        for item in permanent_history.json["data"]["notifications"]
+    }
+    assert dismissed[dismissed_unread_id] is not None
 
     audit = client.get("/api/audit?sort=-created_at")
     assert audit.status_code == 200

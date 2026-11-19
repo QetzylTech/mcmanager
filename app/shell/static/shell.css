@@ -220,6 +220,7 @@ summary:focus-visible {
 }
 
 .utility-bar {
+  position: relative;
   min-height: 56px;
   display: flex;
   align-items: center;
@@ -553,6 +554,61 @@ textarea.ui-text-input {
   color: var(--muted);
   background: var(--pane-bg);
   font-size: 11px;
+}
+
+.notification-dropdown {
+  position: relative;
+}
+
+.notification-panel {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + var(--space));
+  right: 0;
+  width: min(420px, calc(100vw - 48px));
+  max-height: min(65vh, 560px);
+  overflow: auto;
+  box-shadow: var(--dialog-shadow);
+}
+
+.notification-panel[hidden] {
+  display: none;
+}
+
+.notification-panel-heading,
+.notification-item,
+.notification-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.notification-panel-heading {
+  margin-bottom: var(--space);
+}
+
+.notification-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.notification-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.notification-copy {
+  min-width: 0;
+  flex: 1 1 220px;
+  display: grid;
+  gap: 4px;
+}
+
+.notification-panel-actions {
+  margin-top: var(--space);
+  justify-content: flex-end;
 }
 
 .table-head {

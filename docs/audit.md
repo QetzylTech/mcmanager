@@ -37,21 +37,22 @@ claims arising from Documents 5, 8, 10, and the 2026-11-19 code follow-up.
 `app/web/middleware.py`, `app/services/diagnostics.py`, and
 `app/shell/static/operator_ui.js`.
 
-**Limitations:** No tests or browser checks were run for the 2026-11-19
-implementation follow-up. `python3 -m compileall -q app migrations` passed,
-but does not establish runtime correctness or route/UI acceptance. Findings
-about missing source behavior are based on inspected code; product-policy
+**Limitations:** Focused catalog API checks passed (11), and a live browser
+check confirmed theme switching, notification dropdown rendering, step-up
+confirmation, and global cleanup-policy submission. The added Node browser
+regression could not be run because Node is unavailable. Product-policy
 questions are not treated as verified implementation defects.
 
 ### Findings
 
-- **AUD-2026-11-19-01 — Global cleanup-policy management is missing**
-  - **Verified gap:** The schema and cleanup code support global policy
-    fallback, and per-world cleanup-policy GET/PATCH exists, but no
-    manager-wide policy route or editor is registered.
-  - **Impact:** Operators cannot configure global cleanup defaults through the
-    application as required by Document 5.
-  - **Transfer:** Tracked by `KB-G5-CLEANUP-POLICY-API` in `WORKBOARD.md`.
+- **AUD-2026-11-19-01 — Global cleanup-policy management (resolved)**
+  - **Resolution:** Manager-wide cleanup-policy GET/PATCH routes and the
+    Manager Maintenance editor are implemented, including versioned
+    ConfigEdit behavior and step-up enforcement. Focused catalog API checks
+    passed (11).
+  - **Transfer:** `KB-G5-CLEANUP-POLICY-API` is marked Implemented in
+    `WORKBOARD.md`. Stale-world and log cleanup remain separately blocked on
+    explicit policy decisions.
 - **AUD-2026-11-19-02 — Stale-world and log cleanup remain unsupported**
   - **Verified gap:** Cleanup currently accepts backups only; other scopes
     return `CLEANUP_SCOPE_UNSUPPORTED`.
@@ -79,9 +80,10 @@ questions are not treated as verified implementation defects.
 - **AUD-2026-11-19-06 — Recent feature follow-up lacks feature acceptance**
   - **Verified limitation:** Server-properties editing, permission-grant
     enforcement, diagnostics/version metadata, sync-target CRUD,
-    documentation/log browsing, and per-world cleanup-policy editing have
-    implementations. The follow-up received Python compilation only; tests
-    and browser checks were not run.
+    documentation/log browsing, and per-world and manager-wide
+    cleanup-policy editing have implementations. Focused API checks and live
+    browser validation cover the cleanup-policy and shell interactions; full
+    feature-specific/browser-suite acceptance remains outstanding.
   - **Transfer:** Acceptance remains with the owning implementation cards,
     including `KB-G5-3`, `KB-G5-6`, and `KB-G5-API-CONTRACT`.
 

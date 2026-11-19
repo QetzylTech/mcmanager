@@ -566,6 +566,248 @@ test('Manager Maintenance queues backup through the loaded operator UI', async (
   assert.match(backupRequest.options.headers['Idempotency-Key'], /^shell-/);
 });
 
+test('operator shell persists theme and serves notification actions from the shared menu', async () => {
+  const source = fs.readFileSync(operatorUiScriptPath, 'utf8');
+  const listeners = new Map();
+  const rootListeners = new Map();
+  const requests = [];
+  const root = {
+    innerHTML: '',
+    addEventListener(type, handler) { rootListeners.set(type, handler); },
+  };
+  const main = { dataset: { activePage: 'home' } };
+  const heading = { textContent: '' };
+  const bodyClasses = new Set();
+  const body = {
+    dataset: {},
+    classList: {
+      toggle(name, force) {
+        if (force) bodyClasses.add(name);
+        else bodyClasses.delete(name);
+      },
+      contains(name) {
+        return bodyClasses.has(name);
+      },
+    },
+  };
+  const themeToggle = { checked: false, addEventListener(type, handler) { listeners.set(`theme-${type}`, handler); } };
+  const navToggle = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
+  const notificationsButton = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
+  const notificationPanel = { hidden: true, innerHTML: '' };
+  const unreadCountBadge = { hidden: true, textContent: '' };
+  const contextSelect = { addEventListener() {} };
+  const refresh = { addEventListener() {} };
+  const logout = { addEventListener() {} };
+  const stepUpListeners = new Map();
+  const cancelButton = { addEventListener() {} };
+  const passwordInput = { focus() {} };
+  const stepUpForm = {
+    values: {},
+    addEventListener(type, handler) { stepUpListeners.set(type, handler); },
+    querySelector(selector) {
+      return selector === '[data-step-up-cancel]' ? cancelButton : passwordInput;
+    },
+  };
+  const dialog = {
+    innerHTML: '',
+    open: false,
+    listeners: new Map(),
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+    addEventListener(type, handler) { this.listeners.set(type, handler); },
+    removeEventListener(type) { this.listeners.delete(type); },
+    querySelector(selector) { return selector === 'form' ? stepUpForm : null; },
+  };
+  let csrfToken = 'csrf-notifications';
+  const document = {
+    get cookie() { return `csrf_token=${csrfToken}`; },
+    body,
+    documentElement: { dataset: { theme: 'light' } },
+    querySelector(selector) {
+      return ({
+        '[data-page-root]': root,
+        main,
+        h1: heading,
+        '[data-context-select]': contextSelect,
+        '[data-theme-toggle]': themeToggle,
+        '[data-nav-toggle]': navToggle,
+        '.site-nav': {},
+        '[data-notifications]': notificationsButton,
+        '[data-notification-panel]': notificationPanel,
+        '[data-unread-count]': unreadCountBadge,
+        '[data-refresh]': refresh,
+        '[data-logout]': logout,
+        '.action-dialog': dialog,
+      })[selector] || null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener(type, handler) { listeners.set(type, handler); },
+  };
+  const stored = new Map([['mcmanager-theme', 'dark']]);
+  const window = {
+    localStorage: {
+      getItem(key) { return stored.get(key) || null; },
+      setItem(key, value) { stored.set(key, value); },
+    },
+    addEventListener() {},
+  };
+  let unreadCount = 1;
+  let cleanupPolicyRejected = false;
+  const notification = {
+    notification_id: 'n_1',
+    severity: 'high',
+    message: 'A world needs attention.',
+    created_at: '2026-11-19T08:00:00Z',
+    read_at: null,
+    dismissed_at: null,
+  };
+  const fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    let data = {};
+    if (url === '/api/session') data = { user_id: 'u_admin' };
+    else if (url.startsWith('/api/worlds?')) data = { worlds: [] };
+    else if (url === '/api/pages/home') data = { title: 'Homepage' };
+    else if (url === '/api/system/stats') data = { worlds_count: 0, active_worlds: 0 };
+    else if (url === '/api/cleanup/policy' && options.method === 'PATCH' && !cleanupPolicyRejected) {
+      cleanupPolicyRejected = true;
+      return {
+        ok: false,
+        status: 403,
+        async json() {
+          return { ok: false, error: { code: 'STEP_UP_REQUIRED', message: 'A fresh step-up is required.' } };
+        },
+      };
+    } else if (url === '/api/auth/step-up') {
+      csrfToken = 'csrf-after-step-up';
+      data = { session: { user_id: 'u_admin' } };
+    }
+    else if (url.startsWith('/api/notifications')) {
+      if (url === '/api/notifications/read-all') unreadCount = 0;
+      data = { notifications: notification.dismissed_at ? [] : [notification] };
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            data: options.method === 'POST' ? { read_count: 1 } : data,
+            meta: { unread_count: unreadCount },
+          };
+        },
+      };
+    }
+    return {
+      ok: true,
+      async json() { return { ok: true, data, meta: { unread_count: unreadCount } }; },
+    };
+  };
+  class FakeFormData {
+    constructor(form) {
+      this.values = form.values;
+    }
+
+    get(key) {
+      return this.values[key];
+    }
+
+    entries() {
+      return Object.entries(this.values)[Symbol.iterator]();
+    }
+  }
+
+  vm.runInNewContext(source, {
+    document,
+    window,
+    history: { pushState() {} },
+    fetch,
+    URLSearchParams,
+    FormData: FakeFormData,
+  });
+  await flush();
+  await flush();
+
+  assert.equal(document.documentElement.dataset.theme, 'dark');
+  assert.equal(themeToggle.checked, true);
+  themeToggle.checked = false;
+  listeners.get('theme-change')();
+  assert.equal(document.documentElement.dataset.theme, 'light');
+  assert.equal(stored.get('mcmanager-theme'), 'light');
+
+  const clickHandler = listeners.get('click');
+  await clickHandler({
+    target: { closest: (selector) => selector === '[data-nav-toggle]' ? navToggle : null },
+    preventDefault() {},
+  });
+  assert.equal(bodyClasses.has('nav-open'), true);
+
+  await clickHandler({
+    target: { closest: (selector) => selector === '[data-notifications]' ? notificationsButton : null },
+    preventDefault() {},
+  });
+  assert.equal(notificationPanel.hidden, false);
+  assert.equal(notificationsButton.attributes['aria-expanded'], 'true');
+  assert.equal(unreadCountBadge.textContent, '1');
+  assert.match(notificationPanel.innerHTML, /A world needs attention/);
+  assert.match(notificationPanel.innerHTML, /Audit \/ History/);
+
+  const markAllRead = { disabled: false, dataset: { uiAction: 'notification-read-all', id: '' } };
+  await clickHandler({
+    target: {
+      closest(selector) {
+        if (selector === '[data-ui-action]') return markAllRead;
+        if (selector === '.notification-dropdown') return {};
+        return null;
+      },
+    },
+    preventDefault() {},
+  });
+  assert.ok(requests.some(({ url, options }) => url === '/api/notifications/read-all' && options.method === 'POST'));
+  assert.equal(unreadCountBadge.hidden, true);
+
+  const policyForm = {
+    dataset: { form: 'global-cleanup-policy' },
+    values: {
+      version: '0',
+      age_rule_days: '3',
+      space_rule_pct: '70',
+      count_rules: '{"manual":3}',
+      schedule_id: '',
+    },
+    matches() { return false; },
+  };
+  const policySubmission = rootListeners.get('submit')({
+    target: { closest: (selector) => selector === 'form' ? policyForm : null },
+    preventDefault() {},
+  });
+  await flush();
+  assert.equal(dialog.open, true);
+  assert.match(dialog.innerHTML, /type="password"/);
+  stepUpForm.values = { password: 'test-password' };
+  await stepUpListeners.get('submit')({ preventDefault() {} });
+  await policySubmission;
+
+  const policyRequests = requests.filter(({ url, options }) => (
+    url === '/api/cleanup/policy' && options.method === 'PATCH'
+  ));
+  assert.equal(policyRequests.length, 2);
+  const [initialPolicyRequest, retryPolicyRequest] = policyRequests;
+  assert.deepEqual(JSON.parse(initialPolicyRequest.options.body), {
+    version: 0,
+    age_rule_days: 3,
+    space_rule_pct: 70,
+    count_rules: { manual: 3 },
+    schedule_id: null,
+  });
+  assert.equal(initialPolicyRequest.options.headers['X-CSRF-Token'], 'csrf-notifications');
+  assert.equal(retryPolicyRequest.options.headers['X-CSRF-Token'], 'csrf-after-step-up');
+  assert.equal(
+    initialPolicyRequest.options.headers['Idempotency-Key'],
+    retryPolicyRequest.options.headers['Idempotency-Key'],
+  );
+  const stepUpRequest = requests.find(({ url }) => url === '/api/auth/step-up');
+  assert.equal(stepUpRequest.options.headers['X-CSRF-Token'], 'csrf-notifications');
+  assert.deepEqual(JSON.parse(stepUpRequest.options.body), { password: 'test-password' });
+});
+
 test('shell uses tokenized colors, 40px controls, and no inline styles', () => {
   const template = fs.readFileSync(shellTemplatePath, 'utf8');
   const stylesheet = fs.readFileSync(shellCssPath, 'utf8');

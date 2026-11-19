@@ -61,7 +61,14 @@
       </div>
       <div class="utility-actions">
         <span class="status-indicator" data-tone="neutral">Manager</span>
-        <button class="ui-button ui-button-general" type="button" data-notifications>Notifications</button>
+        <div class="notification-dropdown">
+          <button class="ui-button ui-button-general" type="button" data-notifications
+                  aria-expanded="false" aria-controls="notificationPanel">
+            Notifications <span class="notification-count" data-unread-count>0</span>
+          </button>
+          <section class="notification-panel pane-content-area" id="notificationPanel"
+                   data-notification-panel aria-label="Recent notifications" hidden></section>
+        </div>
       </div>
     </header>
 
