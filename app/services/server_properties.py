@@ -14,7 +14,7 @@ from app.domain.value_objects import (
     OperationType,
     ServerType,
 )
-from app.infrastructure.minecraft.properties_schema import (
+from app.ports.minecraft import (
     CORE_MANAGER_PROPERTIES,
     PropertyValidation,
     allowed_keys,

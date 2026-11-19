@@ -26,13 +26,16 @@ def _log_stream_app(tmp_path):
         def fetchall(self):
             return [{'session_id': session_id}]
 
+        def fetchone(self):
+            return {'role_id': 'admin'}
+
     class Configuration:
         def resolve_effective(self, _world_id):
             return {'log_root_path': str(log_root)}
 
     class Auth:
         def validate_session(self, _token, *, ip):
-            return ip
+            return type('Session', (), {'user_id': 'session-user'})()
 
     class Clock:
         def now(self):

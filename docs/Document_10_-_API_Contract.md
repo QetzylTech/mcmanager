@@ -216,7 +216,7 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 ### Documentation & manager system logs
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/documentation` | A | list repository-local Markdown documents under `docs/` |
+| GET | `/api/documentation` | A | list curated shipped Markdown documents under `app/docs/` |
 | GET | `/api/documentation/{path}` | A | source contract: `text/markdown`; `rendered_html` is null until a trusted renderer exists |
 | GET | `/api/manager/logs` | A | list existing canonical manager log channels under `app/data/logs` |
 | GET | `/api/manager/logs/{channel}` | A | list files in that channel |
@@ -230,6 +230,18 @@ Documentation and manager-log reads are authenticated and administrator-only. Do
 | GET | `/api/health` | public | `{status:"ok", version, db:"ok"}` — no sensitive data |
 | GET | `/api/system/stats` | any | CPU/RAM/storage/worlds; cached; `meta.freshness` |
 | GET | `/api/diagnostics` | A | manager diagnostics distinct from world health (ARCHITECTURE §16 ruling 12): scheduler last-tick + next-tick, SQLite writer busy/wedge status, process-adapter last-poll health, foreign_key_check status, reconciliation report, operation backlog/queue depth, last successful checkpoint |
+
+### Additional application routes
+
+These routes are outside the 110-row HTTP catalog and retain explicit contracts:
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/pages` | A | list the 17 persistent-shell page modules |
+| GET | `/api/pages/{slug}` | A | read one page module summary |
+| GET | `/api/worlds/{world_id}/cleanup-policy` | A/S | read a world cleanup-policy override |
+| PATCH | `/api/worlds/{world_id}/cleanup-policy` | A/S | compare and update a world cleanup-policy version |
+| POST | `/api/supervisor/tick` | A/S | development and test supervisor tick aid; not a public status endpoint |
 
 ## SSE stream contract
 

@@ -60,7 +60,7 @@ def test_persistent_shell_renders_all_17_nav_modules(tmp_path, migrations_dir, c
         body = response.get_data(as_text=True)
         assert response.status_code == 200
         assert body.count("data-page=") == 17
-        assert 'class="pane"' in body
+        assert 'class="page-pane pane"' in body
         assert "pane-title-area" in body
         assert "pane-content-area" in body
         for page in PAGE_MODULES:
@@ -97,7 +97,7 @@ def test_health_monitors_scheduler_sqlite_writer_and_process_adapter(
         response = app.test_client().get("/api/health")
         payload = response.get_json()
         assert response.status_code == 200
-        assert payload["data"] == {"status": "ok", "db": "ok", "version": "dev"}
+        assert payload["data"] == {"status": "ok", "db": "ok", "version": "0.1.0"}
 
         client, _headers = _authenticated_admin_client(app)
         diagnostics = client.get("/api/diagnostics").get_json()["data"]
@@ -160,7 +160,7 @@ def test_health_reports_degrades_to_503_when_writer_down(tmp_path, migrations_di
         assert response.get_json()["data"] == {
             "status": "degraded",
             "db": "down",
-            "version": "dev",
+            "version": "0.1.0",
         }
     finally:
         next(app_iter, None)

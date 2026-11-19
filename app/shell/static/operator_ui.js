@@ -509,7 +509,7 @@
         `${button('Open', 'documentation-open', item.path, '', item.path === documentationPath)}</div>`
       ).join('')) +
       card(document.title || document.path,
-        `<article class="documentation-output">${markdownToHtml(document.content)}</article>`);
+        `<article class="documentation-output"><pre>${escapeHtml(document.content)}</pre></article>`);
   }
 
   async function renderAudit() {

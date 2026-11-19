@@ -109,7 +109,6 @@ class DiagnosticsService:
             'status': 'ok' if outcome.status == 'healthy' else 'down',
             'phase': outcome.status,
             'reattached_worlds': len(outcome.reattached_world_ids),
-            'last_attempt_at': outcome.last_attempt_at,
             **({'error': outcome.error} if outcome.error is not None else {}),
         }
 

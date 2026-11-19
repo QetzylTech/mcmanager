@@ -56,7 +56,9 @@ def _operation_worker(container: Any, stop_event: threading.Event) -> None:
         if callable(dispatch):
             try:
                 dispatch()
-            except Exception:
+            except Exception as exc:
+                if stop_event.is_set():
+                    return
                 _logger.exception('Queued operation dispatch failed')
         stop_event.wait(0.25)
 
@@ -71,6 +73,8 @@ def _catalog_operation_worker(container: Any, stop_event: threading.Event) -> No
                     (OperationType.BACKUP, OperationType.RESTORE, OperationType.CLEANUP)
                 )
             except Exception:
+                if stop_event.is_set():
+                    return
                 _logger.exception('Queued backup/restore/cleanup dispatch failed')
         stop_event.wait(0.25)
 

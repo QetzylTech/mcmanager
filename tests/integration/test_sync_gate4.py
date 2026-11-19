@@ -167,6 +167,26 @@ def test_daily_transfer_cap_stops_sync_without_touching_local_artifact(
     assert Path(artifact.storage_path).is_file()
 
 
+def test_global_sync_concurrency_cap_rejects_third_in_flight_transfer(
+    store, clock, tmp_path
+) -> None:
+    service = SyncService(
+        store,
+        SimpleNamespace(upload_file=lambda *_args, **_kwargs: None),
+        clock,
+        sleeper=lambda _seconds: None,
+    )
+    service.get_bytes_transferred_today = lambda: 0
+
+    service._reserve_transfer(1)
+    service._reserve_transfer(1)
+    with pytest.raises(SyncError, match='SYNC_CONCURRENCY_CAP'):
+        service._reserve_transfer(1)
+
+    service._release_transfer(1)
+    service._release_transfer(1)
+
+
 def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(
     store, clock, tmp_path
 ):

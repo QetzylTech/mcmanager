@@ -220,6 +220,145 @@ def parse_properties(text: str) -> dict[str, str]:
     return result
 
 
+@dataclass(frozen=True)
+class PropertyValidation:
+    """Validation result for a server.properties payload."""
+
+    valid: bool
+    errors: list[str] = field(default_factory=list)
+    deprecated_hints: list[str] = field(default_factory=list)
+
+
+CORE_MANAGER_PROPERTIES = frozenset(
+    {
+        'server-port',
+        'enable-rcon',
+        'rcon.port',
+        'rcon.password',
+        'server-ip',
+        'enable-query',
+        'query.port',
+        'level-name',
+        'level-seed',
+        'online-mode',
+        'motd',
+    }
+)
+
+
+VERSIONED_PROPERTY_SPECS: dict[str, PropertySpec] = {
+    'max-players': PropertySpec('max-players', 'int', default=20),
+    'view-distance': PropertySpec('view-distance', 'int', default=16),
+    'spawn-protection': PropertySpec('spawn-protection', 'int', default=16),
+    'white-list': PropertySpec('white-list', 'bool', default=False),
+    'enforce-whitelist': PropertySpec('enforce-whitelist', 'bool', default=False),
+    'difficulty': PropertySpec(
+        'difficulty',
+        'enum',
+        default='easy',
+        enum_values=('peaceful', 'easy', 'normal', 'hard'),
+    ),
+    'gamemode': PropertySpec(
+        'gamemode',
+        'enum',
+        default='survival',
+        enum_values=('survival', 'creative', 'adventure', 'spectator'),
+    ),
+    'generator-settings': PropertySpec(
+        'generator-settings',
+        'str',
+        max_supported_version='1.12',
+        deprecated_in='1.7',
+        replaced_by_gamerule='level-seed',
+    ),
+}
+
+
+def merged_property_specs() -> dict[str, PropertySpec]:
+    specs = default_property_specs()
+    specs.update(VERSIONED_PROPERTY_SPECS)
+    return specs
+
+
+def validate_properties(
+    *,
+    properties: dict[str, object],
+    server_type: ServerType,
+    mc_version: str,
+) -> PropertyValidation:
+    specs = merged_property_specs()
+    errors: list[str] = []
+    hints: list[str] = []
+    for key, value in properties.items():
+        ok, error_code = validate_property_schema(
+            key=key,
+            value=value,
+            server_type=server_type,
+            mc_version=mc_version,
+            specs=specs,
+        )
+        if not ok:
+            errors.append(f'{key}: {error_code}')
+            continue
+        spec = specs[key]
+        if (
+            spec.deprecated_in is not None
+            and _version_tuple(mc_version) >= _version_tuple(spec.deprecated_in)
+        ):
+            hint = f'{key}: deprecated in {spec.deprecated_in}'
+            if spec.replaced_by_gamerule:
+                hint += f' (replaced by {spec.replaced_by_gamerule})'
+            hints.append(hint)
+    return PropertyValidation(valid=not errors, errors=errors, deprecated_hints=hints)
+
+
+def validate_properties_file(
+    *,
+    properties: dict[str, str],
+    server_type: ServerType,
+    mc_version: str,
+) -> PropertyValidation:
+    specs = merged_property_specs()
+    typed: dict[str, object] = {}
+    for key, value in properties.items():
+        spec = specs.get(key)
+        if spec is None:
+            typed[key] = value
+        elif spec.value_type == 'int':
+            try:
+                typed[key] = int(value)
+            except ValueError:
+                typed[key] = value
+        elif spec.value_type == 'bool':
+            if value.lower() in {'true', 'false'}:
+                typed[key] = value.lower() == 'true'
+            else:
+                typed[key] = value
+        else:
+            typed[key] = value
+    return validate_properties(
+        properties=typed,
+        server_type=server_type,
+        mc_version=mc_version,
+    )
+
+
+def allowed_keys(server_type: ServerType, mc_version: str) -> list[str]:
+    specs = merged_property_specs()
+    allowed: list[str] = []
+    for key, spec in specs.items():
+        if _version_lt(mc_version, spec.min_supported_version):
+            continue
+        if (
+            spec.max_supported_version is not None
+            and _version_gt(mc_version, spec.max_supported_version)
+            and spec.deprecated_in is None
+        ):
+            continue
+        allowed.append(key)
+    return sorted(allowed)
+
+
 def validate_property_schema(
     *,
     key: str,

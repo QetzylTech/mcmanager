@@ -201,7 +201,10 @@ class PosixProcessAdapter(BaseProcessAdapter):
             return ProbeResult(found=False)
         try:
             process = psutil.Process(handle.pid)
-            if process.is_running():
+            if (
+                process.status() != psutil.STATUS_ZOMBIE
+                and process.is_running()
+            ):
                 return ProbeResult(found=True, handle=handle, matched_launch=True)
         except psutil.NoSuchProcess:
             return ProbeResult(found=False)
@@ -216,7 +219,7 @@ class PosixProcessAdapter(BaseProcessAdapter):
             return ProbeResult(found=False)
         try:
             process = psutil.Process(fingerprint.pid)
-            if not process.is_running():
+            if process.status() == psutil.STATUS_ZOMBIE or not process.is_running():
                 return ProbeResult(found=False)
         except psutil.NoSuchProcess:
             return ProbeResult(found=False)

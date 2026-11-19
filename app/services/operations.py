@@ -316,8 +316,12 @@ class OperationService:
         """Atomically claim a durable queued operation for one dispatcher."""
         connection = self._store.writer()
         now = int(self._clock.now())
+        savepoint = 'mcmanager_cancel_operation'
         try:
-            connection.execute('BEGIN IMMEDIATE')
+            if connection.in_transaction:
+                connection.execute(f'SAVEPOINT {savepoint}')
+            else:
+                connection.execute('BEGIN IMMEDIATE')
             current = connection.execute(
                 'SELECT world_id, op_type FROM operations WHERE op_id = ? AND status = ?',
                 (op_id, OperationStatus.QUEUED.value),
@@ -914,8 +918,13 @@ class OperationService:
         """Atomically cancel an eligible operation and append its terminal audit."""
         connection = self._store.writer()
         now = int(self._clock.now())
+        savepoint = 'mcmanager_cancel_operation'
+        savepoint_active = connection.in_transaction
         try:
-            connection.execute('BEGIN IMMEDIATE')
+            if savepoint_active:
+                connection.execute(f'SAVEPOINT {savepoint}')
+            else:
+                connection.execute('BEGIN IMMEDIATE')
             row = connection.execute(
                 'SELECT * FROM operations WHERE op_id = ?', (op_id,)
             ).fetchone()
@@ -964,9 +973,16 @@ class OperationService:
                 self._notifications.publish_terminal_operation(
                     cancelled, connection=connection
                 )
-            connection.commit()
+            if savepoint_active:
+                connection.execute(f'RELEASE SAVEPOINT {savepoint}')
+            else:
+                connection.commit()
         except Exception:
-            connection.rollback()
+            if savepoint_active:
+                connection.execute(f'ROLLBACK TO SAVEPOINT {savepoint}')
+                connection.execute(f'RELEASE SAVEPOINT {savepoint}')
+            else:
+                connection.rollback()
             raise
 
         with self._progress_lock:

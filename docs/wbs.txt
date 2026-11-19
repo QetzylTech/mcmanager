@@ -3,8 +3,8 @@
 ================================================================================
 
 SYSTEM OVERVIEW:
-mcmanager is a zero-dependency, cross-platform modular monolith designed to 
-supervise and orchestrate independent Minecraft server instances natively 
+mcmanager is a Flask-backed, cross-platform modular monolith designed to
+supervise and orchestrate independent Minecraft server instances natively
 across POSIX (Linux/macOS) and Windows operating systems.
 
 --------------------------------------------------------------------------------
@@ -123,7 +123,7 @@ Objective: Build the relational database core, 3-tier settings engine, Argon2id
 security module, and optimism-locked domain entities.
 
 WP 2.1: Relational Schema & SQLite Engine
-  - File Scope: src/mcmanager/infrastructure/sqlite/ (schema.sql, migrations.py, 
+  - File Scope: app/infrastructure/sqlite/ (migrations, connection.py,
     connection.py)
   - Deliverables: 28-table SQLite DDL with ON DELETE RESTRICT constraints; migration
     runner; single-writer WAL pool with PRAGMA busy_timeout = 5000.
@@ -131,7 +131,7 @@ WP 2.1: Relational Schema & SQLite Engine
     database locked exceptions under concurrent access.
 
 WP 2.2: Domain Entities & Immutable Value Objects
-  - File Scope: src/mcmanager/domain/ (entities.py, value_objects.py, events.py, 
+  - File Scope: app/domain/ (entities.py, value_objects.py, events.py,
     exceptions.py)
   - Deliverables: Value object enums (WorldState, OperationStatus, ServerReadinessLevel, 
     EulaState); business invariants (one open session per world, atomic world lock).
@@ -139,14 +139,14 @@ WP 2.2: Domain Entities & Immutable Value Objects
     100% unit test coverage for state machine transitions.
 
 WP 2.3: Security, Password Hashing & Secrets Store
-  - File Scope: src/mcmanager/services/auth.py, src/mcmanager/infrastructure/secrets.py
+  - File Scope: app/services/auth.py, app/infrastructure/sqlite/secrets.py
   - Deliverables: Argon2id password verification; SQLite encrypted secrets store; 
     client_sessions manager supporting 10-minute step-up auth windows.
   - Acceptance Criteria: Passwords never stored in plain text; expired step-up 
     sessions correctly return 401 STEP_UP_REQUIRED.
 
 WP 2.4: 3-Tier Configuration Inheritance Service
-  - File Scope: src/mcmanager/services/configuration.py
+  - File Scope: app/services/configuration.py
   - Deliverables: Settings resolver (Global Settings -> World Override -> Effective); 
     version-based optimistic concurrency guard for ConfigEdit.
   - Acceptance Criteria: Out-of-date updates rejected with 409 CONFIG_VERSION_CONFLICT; 
@@ -159,28 +159,28 @@ Objective: Implement operational lifecycle state machine, write-optimized
 operation queue, scheduler, and process reconciliation.
 
 WP 3.1: Write-Optimized Operation Service & Derived World Locking
-  - File Scope: src/mcmanager/services/operations.py
+  - File Scope: app/services/operations.py
   - Deliverables: OperationService managing async operation states; derived 
     application-level world lock query; milestone-only disk writes for operations.
   - Acceptance Criteria: Progress updates stream in memory without writing to disk 
     on every tick; derived locking prevents concurrent destructive actions.
 
 WP 3.2: Runtime Lifecycle Service & Boot Reconciliation
-  - File Scope: src/mcmanager/services/runtime.py
+  - File Scope: app/services/runtime.py
   - Deliverables: Lifecycle commands (Start, Stop, Kill, CrashDetected); supervisor 
     loop; startup reconciliation engine for process re-attachment.
   - Acceptance Criteria: Simulated manager crash re-establishes tracking without 
     restarting game server; failed startups transition to error state after 120s.
 
 WP 3.3: Background Scheduler & Missed-Run Engine
-  - File Scope: src/mcmanager/services/scheduler.py
+  - File Scope: app/services/scheduler.py
   - Deliverables: 30-second fixed scheduler tick; missed_run_records generator 
     for skipped jobs (never auto-replayed).
   - Acceptance Criteria: Scheduled backups dispatch automatically when clear; 
     conflicting jobs create missed_run_records without crashing scheduler.
 
 WP 3.4: Terminal Audit & Notification Pipelines
-  - File Scope: src/mcmanager/services/audit.py, src/mcmanager/services/notifications.py
+  - File Scope: app/services/audit.py, app/services/notifications.py
   - Deliverables: Insert-only AuditService pipeline writing ONLY on terminal 
     operation states, auth events, and config edits; notification dispatcher.
   - Acceptance Criteria: Zero audit_records written during intermediate progress; 
@@ -193,31 +193,32 @@ Objective: Deliver native portable backup/restore, age/count retention cleanups,
 and exponential-backoff offsite synchronization.
 
 WP 4.1: Native Portable Backup Engine
-  - File Scope: src/mcmanager/services/backup.py, 
-    src/mcmanager/infrastructure/backup_engine.py
+  - File Scope: app/services/backup.py,
+    app/infrastructure/backup_engine.py
   - Deliverables: ZIP + SHA-256 archive engine writing to .part files; RCON save 
     coordination (save-off -> save-all -> verify mtime -> capture -> save-on).
   - Acceptance Criteria: Generated ZIP archives pass SHA-256 verification; 
     backup process restores RCON autosave (save-on) even if compression fails.
 
 WP 4.2: Restore Engine & Automatic Compensating Rollback
-  - File Scope: src/mcmanager/services/restore.py
+  - File Scope: app/services/restore.py
   - Deliverables: World restore pipeline with mandatory pre-restore backup; 
     post-restore boot verification; automatic compensating rollback decision tree.
   - Acceptance Criteria: If restored world crashes during boot, system automatically 
     rolls back to pre-restore backup artifact and flags bad artifact as suspect = 1.
 
 WP 4.3: Retention Sweeper & Physical Deletion Floor
-  - File Scope: src/mcmanager/services/cleanup.py
+  - File Scope: app/services/cleanup.py
   - Deliverables: Dry/wet cleanup evaluator enforcing 3-day age and 3-artifact 
     count floors; safe physical disk cleanup.
   - Acceptance Criteria: Wet cleanup fails if parameters violate retention floor 
     (min 3 newest backups per category); physical files deleted ONLY by CleanupService.
 
 WP 4.4: Offsite Sync Engine
-  - File Scope: src/mcmanager/services/sync.py
+  - File Scope: app/services/sync.py
   - Deliverables: Async offsite sync worker; exponential backoff retries 
-    (30s / 60s / 120s); global daily transfer cap enforcer; sync_attempts timeline.
+    (three total attempts; waits 30s / 60s); global concurrency and daily transfer
+    caps; sync_attempts timeline.
   - Acceptance Criteria: Failed network syncs retry according to backoff policy 
     without blocking local backup completion; daily cap halts further syncs when hit.
 
@@ -228,21 +229,21 @@ Objective: Construct thin Flask API gateway, multi-tab BroadcastChannel SSE stre
 hub, and desktop-grade persistent UI shell.
 
 WP 5.1: HTTP API Routes & Security Middleware
-  - File Scope: src/mcmanager/app/web/api/, src/mcmanager/app/web/middleware.py
+  - File Scope: app/web/api/, app/web/middleware.py
   - Deliverables: RESTful Flask blueprints (/api/worlds, /api/operations, 
     /api/backups, /api/settings); CSRF validator; security headers middleware.
   - Acceptance Criteria: Invalid CSRF returns 403 CSRF_INVALID; route handlers 
     contain zero domain logic (thin delegation to services).
 
 WP 5.2: Realtime Stream Hub & Multi-Tab Broadcast Client
-  - File Scope: src/mcmanager/app/web/streams/, src/mcmanager/static/js/stream_client.js
+  - File Scope: app/web/streams/, app/shell/static/stream_client.js
   - Deliverables: SSE endpoints (/stream/events, /stream/worlds/{id}/logs); client-side 
     BroadcastChannel leader election module for sharing 1 SSE stream across tabs.
   - Acceptance Criteria: Opening 10 browser tabs results in exactly 1 active 
     backend SSE connection; closing leader tab causes seamless leader election.
 
 WP 5.3: Persistent Web Shell & Reusable Component Layouts
-  - File Scope: src/mcmanager/templates/, src/mcmanager/static/css/
+  - File Scope: app/shell/templates/, app/shell/static/
   - Deliverables: Global persistent shell layout adhering to CSS token system and 
     40px control geometry; Manager Context pages; World Context pages.
   - Acceptance Criteria: Interface fully navigable without full-page reloads; 

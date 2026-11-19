@@ -267,10 +267,16 @@ class BaseProcessAdapter:
                 deadline = time.time() + graceful_deadline_s
                 while time.time() < deadline:
                     if self._process_exited(process):
+                        exit_code = self._safe_returncode(handle.world_id, process)
+                        exit_class = (
+                            ExitClass.GRACEFUL
+                            if exit_code in (0, 1)
+                            else ExitClass.FORCED
+                        )
                         return TerminateResult(
                             resolved=True,
-                            exit_class=ExitClass.GRACEFUL,
-                            exit_code=self._safe_returncode(handle.world_id, process),
+                            exit_class=exit_class,
+                            exit_code=exit_code,
                         )
                     time.sleep(0.2)
                 return self._kill_and_classify(handle, process)
@@ -367,7 +373,7 @@ class BaseProcessAdapter:
                 exit_class=ExitClass.RECONCILED_MISSING,
             )
         try:
-            if not process.is_running():
+            if process.status() == psutil.STATUS_ZOMBIE or not process.is_running():
                 code = self._poll_exit_code(world_id, process)
                 return ProcessStatus(
                     state=ProcessState.EXITED,

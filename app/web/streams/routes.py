@@ -265,12 +265,16 @@ def _world_snapshot(container: Any, world_id: str) -> dict[str, Any]:
 def _auth_check_for_request(container: Any) -> Callable[[], bool]:
     token = request.cookies.get("mcmanager_session", "")
     ip = request.remote_addr or ""
-    user_id = g.current_session.user_id
+    try:
+        session = container.auth.validate_session(token, ip=ip)
+        user_id = getattr(session, "user_id", "session")
+    except Exception:
+        user_id = None
     requirement = _permission_requirement(container)
     authenticated = _session_check(container, token, ip)
 
     def check() -> bool:
-        if not authenticated():
+        if not authenticated() or user_id is None:
             return False
         if requirement is None:
             return True

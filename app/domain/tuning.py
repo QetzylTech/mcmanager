@@ -17,7 +17,7 @@ KILL_PROCESS_DEADLINE_S = 10  # after forced signal, before re-assert + forced c
 START_COOLDOWN_S = 10  # duplicate-start guard
 
 # Sync
-SYNC_TRANSIENT_RETRIES = 3  # exp backoff 30s/60s/120s
+SYNC_TRANSIENT_RETRIES = 3  # three total attempts; waits 30s/60s
 SYNC_BACKOFF_BASE_S = 30
 SYNC_PER_ATTEMPT_TIMEOUT_S = 120  # configurable
 SYNC_OUTER_BOUND_S = 30 * 60  # total wall-clock for all attempts; configurable

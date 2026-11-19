@@ -121,7 +121,7 @@ def read_documentation(document_path: str) -> Any:
     root, boundary = _documentation_root()
     target = _guarded_path(root, boundary, document_path)
     if target is None:
-        return error("FILE_PATH_UNAUTHORIZED", "Document path escapes the repository docs directory.")
+        return error("FILE_PATH_UNAUTHORIZED", "Document path escapes the app docs directory.")
     if target.suffix.lower() != ".md" or not target.is_file():
         return error("NOT_FOUND", "Markdown document not found.", status=404)
     try:

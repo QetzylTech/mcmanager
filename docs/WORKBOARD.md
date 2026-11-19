@@ -21,13 +21,13 @@ tracks implementation and verification, not just code-writing.
    checks complete without running them.
 5. Only start a card when its dependencies are Done. Follow the WBS dependency
    graph; do not parallelize changes to the same world-lock or lifecycle story.
-6. Write audit findings in `docs/audit.md` first. Transfer every actionable
-   finding into a bounded card in this board and verify the transfer checklist
-   there; then clear the dated findings from the staging file. This board is
-   the source of truth for task status and evidence. When a contract changes,
-   update the governing numbered document first, then its pseudocode and the
-   audit record as needed. Numbered product documents take precedence over WBS
-   sketches and audit notes.
+6. Transfer actionable findings from the reconciliation artifacts under
+   `Audits/` into bounded cards here and verify the transfer checklist. This
+   board is the source of truth for status and evidence. Do not maintain a
+   competing dated task list outside this board. When a contract changes,
+   update the governing numbered document first, then any pseudocode and audit
+   record. Numbered product documents take precedence over WBS sketches and
+   audit notes.
 7. Record commands, pass/fail counts, and platform in `Evidence`. Do not
    overwrite evidence with a newer partial run.
 8. Feature tests belong to the owning implementation card's acceptance
@@ -52,8 +52,10 @@ Priority: **P0** release blocker / foundational, **P1** required gate work,
 
 ## Audit transfer — 2026-11-19
 
-Actionable findings from `docs/audit.md` are tracked by the cards below. The
-audit is retained as a report; this board controls task status and evidence.
+Actionable findings from the reconciliation pack are tracked by the cards below.
+`Audits/RECONCILIATION_REPORT.md`, `Audits/NEXT_STEPS.md`, and the supporting
+CSV inventories are the evidence staging artifacts; this board controls task
+status and evidence.
 
 | Audit finding | Workboard tasks |
 |---|---|
@@ -69,6 +71,31 @@ audit is retained as a report; this board controls task status and evidence.
 | AUD-2026-11-19-10 — Workboard/WBS traceability | KB-DOC-EVIDENCE-QUALITY, KB-DOC-WBS, KB-G5-API-CONTRACT, KB-G8-CONTRACT, KB-G9-CONTRACT |
 | AUD-2026-11-19-11 — Legacy documentation inventory | KB-DOC-LEGACY-ARCHIVE |
 | Detailed implementation/test inventory | Existing cleanup, lifecycle, architecture, API, test, platform, security, and performance cards above |
+
+## Reconciliation reset — 2026-11-19
+
+The historical audit snapshot is no longer sufficient as a live status source.
+Start with these bounded cards; update or close older cards only when the
+recorded evidence supports the status change.
+
+- **R0 baseline:** freeze the tested snapshot and reproduce or explicitly
+  quarantine the reported baseline.
+- **Specification normalization:** resolve only the known cross-document
+  conflicts, do not redesign unrelated product behavior.
+- **Traceability batches:** verify route, schema, source, and test mappings in
+  independently reviewable groups.
+- **External acceptance:** remain Blocked until the required host, hardware,
+  credentials, or approved fixture is available.
+
+## Reconciliation ledger
+
+`Audits/reconciliation_traceability.csv` records the stable requirement IDs
+introduced by this reconciliation, source status, implementation symbol/test
+evidence, and owning card. Use it for confirmed findings and verified fixes;
+route, schema, and external-host completeness remain explicitly
+`PRESENT_UNVERIFIED`, `MISSING`, or `DEFERRED` until their owning cards finish
+acceptance. This ledger does not create a completion percentage or treat route
+shape as full API contract conformance.
 
 ## Gate roll-up
 
@@ -821,6 +848,102 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 
 ## To Do
 
+### KB-REC-01 — Freeze the reconciliation baseline
+
+- **WBS/Docs:** `Audits/NEXT_STEPS.md` R0; Document 11
+- **Priority:** P0 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Depends on:** —
+- **Acceptance:** record the exact commit hash and clean/dirty-tree state;
+  install the repository's declared test dependencies; run collection and a
+  fresh full-suite command; attach the raw result and named environment. Re-run
+  rather than copy any eight-failure or coverage count from an older snapshot.
+  Before handoff, inspect `app/data/manager.db*` and `app/data/secrets.key`,
+  confirm whether they are tracked/distributed, and document any credential or
+  runtime-data remediation in an implementation card.
+- **DoD:** baseline commit, platform/Python versions, command, pass/fail counts,
+  coverage, skipped/deselected tests, and repository-hygiene disposition are
+  written in this card.
+- **Evidence:** `Audits/RECONCILIATION_REPORT.md` could not collect this
+  snapshot because Flask was unavailable. The 493/8/4/76.24% Windows snapshot
+  is historical until this card produces a fresh result.
+- **Fresh evidence — 2026-11-19 Linux/Python 3.14.4:** `.venv/bin/python -m
+  pytest -q --tb=short` completed in 525.02 seconds: **505 passed, 1 skipped,
+  271 warnings, 76.41% coverage**. The run exits nonzero because
+  `pyproject.toml` requires 80% coverage. This is not a passing full-suite
+  release baseline. The earlier 493/8/4 snapshot is superseded.
+- **Focused evidence:** boundary/sync suite 12 passed; boundary, sync,
+  documentation, and catalog acceptance 23 passed; SSE/cancellation 8 passed;
+  native C1–C14 sampled native C2/C4/C10/C11 cases 4 passed; shell/health 5
+  passed.
+- **Environment blocker:** no Python 3.11/3.13 interpreter is available; the
+  hosted 3.11/3.13 matrix and POSIX/live-server acceptance remain external.
+
+### KB-REC-02 — Normalize known specification conflicts
+
+- **WBS/Docs:** Documents 5, 8, 10, 12; `Audits/NEXT_STEPS.md` R1
+- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Depends on:** —
+- **Acceptance:** make one reviewable change set that (1) defines
+  `app/docs/` as shipped documentation and excludes repository planning docs
+  from runtime lookup, (2) decides and documents the sync two-transfer cap,
+  retry count, and waits, (3) reconciles stale WBS `src/mcmanager/`, dependency,
+  and fake-server references, and (4) adds the `/api/pages`,
+  `/api/worlds/{world_id}/cleanup-policy`, and `/api/supervisor/tick`
+  contracts or explicitly places them outside Document 10. Update governing
+  documents and tests as contracts change.
+- **DoD:** each decision has a source reference, implementation/test impact,
+  and no implementation card claims compliance merely from route shape.
+
+### KB-REC-03 — Verify API contract parity in bounded route groups
+
+- **WBS/Docs:** Document 10; `Audits/api_route_parity.csv`
+- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Depends on:** KB-REC-01
+- **Acceptance:** extend `KB-G5-API-CONTRACT` with a route-by-route checklist
+  split across auth/world, backup/sync/cleanup, admin/catalog, and
+  notification/files/system groups. For every row record registration,
+  session/CSRF/role/step-up authorization, input and response schema, status,
+  envelope/error mapping, SSE classification, and a named test. Create one
+  implementation card for each concrete missing behavior; do not turn this
+  card into a second implementation backlog.
+- **DoD:** all 110 catalog rows and the five SSE plus page, per-world cleanup,
+  and supervisor routes are classified as verified, missing, approved
+  deviation, or deliberately deferred.
+
+### KB-REC-04 — Verify Document 7 schema semantics
+
+- **WBS/Docs:** Document 7; `Audits/schema_table_parity.csv`
+- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Depends on:** KB-REC-01
+- **Acceptance:** add table/constraint acceptance for all 28 tables, including
+  column types, nullability, defaults, indexes, foreign keys, delete tiers,
+  uniqueness, migration ordering, rollback, and startup consistency checks.
+  Group results by table and keep feature behavior on its owning card.
+- **DoD:** name-level parity is not accepted as table-level evidence; each
+  migration rule has a named test or an explicit approved deviation.
+
+### KB-REC-05 — Seed stable requirement traceability
+
+- **WBS/Docs:** Documents 4–14 and `ARCHITECTURE.md`;
+  `Audits/planned_component_inventory.csv`
+- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Depends on:** KB-REC-02
+- **Acceptance:** assign stable `REQ-*` identifiers to normative requirements,
+  split compound statements, and map each to one governing source section,
+  exact source symbols, candidate tests, and status
+  (`MISSING/PARTIAL/PRESENT_UNVERIFIED/VERIFIED/DEFERRED/APPROVED_DEVIATION`).
+  Begin with the reconciliation gaps in this board, then expand the documents.
+  No overall completion percentage may be reported until this inventory has
+  a stable denominator.
+- **DoD:** every open reconciliation card links at least one requirement ID;
+  every Done card links source and passing evidence.
+- **Status evidence — 2026-11-19:** moved to Review. Initial stable
+  `REQ-*` rows are recorded in `Audits/reconciliation_traceability.csv`,
+  including verified boundary, sync, SSE, shell, and documentation fixes plus
+  explicitly missing/deferred lifecycle, cleanup, coverage, and external-host
+  work. The CSV is an initial ledger; it is not an exhaustive requirement
+  denominator.
+
 ### KB-G0-7 — Restore full-suite test acceptance
 
 - **WBS/Docs:** Document 11; AUD-2026-11-19-07
@@ -840,6 +963,10 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   names; the full run took 401.61 seconds. Shutdown also logged queued-operation
   workers attempting database access after the SQLite store had closed; this
   remains part of warning triage, not a separately counted test failure.
+- **Fresh evidence — 2026-11-19 Linux/Python 3.14.4:** 505 passed, 1 skipped,
+  271 warnings, 76.41% coverage. The coverage floor prevents a passing full-suite
+  baseline. The full-suite run is retained as a fresh result; stale Windows
+  counts no longer describe this Linux run.
 
 ### KB-G5-CLEANUP-POLICY — Decide safe stale-world and log cleanup policy
 
@@ -903,6 +1030,10 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   `app.infrastructure.minecraft.properties_schema`; the full-suite boundary
   test failed. `KB-D12-2` separately tracks the broader command/query and
   repository architecture decision.
+- **Status evidence — 2026-11-19:** moved to Review. `ServerPropertiesService`
+  now imports property schema types/functions through `app.ports.minecraft`;
+  `tests/unit/test_dependency_boundaries.py` plus sync/boundary focused tests
+  pass 12/12. The full architecture refactor remains `KB-D12-2`.
 
 ### KB-G8-CONTRACT — Complete Document 8 service contract acceptance
 
@@ -937,6 +1068,12 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Current evidence:** `SyncService` has transfer-byte reservations and a
   50-GiB daily cap; no explicit two-transfer admission guard was found.
   `KB-G4-VERIFY`'s overlapping-job test covers the daily-cap boundary only.
+- **Status evidence — 2026-11-19:** implementation and retry wording aligned.
+  `SyncService` now reserves an active-transfer slot against
+  `SYNC_GLOBAL_CONCURRENCY_CAP = 2`, raises `SYNC_CONCURRENCY_CAP` before
+  transfer start, and releases it in `finally` cleanup. Retry waits remain
+  30/60 seconds for three total attempts. The three-attempt policy is covered
+  by focused Gate 4 tests.
 
 ### KB-G9-CONTRACT — Complete Document 9 concurrency contract acceptance
 
@@ -1024,6 +1161,12 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   planning-document tree.
 - **Current evidence:** Documents 5 and 10 still describe repository `docs/`
   as the runtime content source, while Document 12 establishes `app/docs/`.
+- **Status evidence — 2026-11-19:** moved to Review. Documents 5 and 10 now
+  identify `app/docs/` as the shipped runtime source, while root `docs/` is
+  explicitly planning/design material. `manager_content.py` resolves
+  `app/docs/`, returns escaped source text with `rendered_html: null`, and
+  the shell displays that content inside `<pre>` rather than converting it to
+  HTML.
 
 ### KB-DOC-PSEUDOCODE-DECISION — Decide how to retain historical pseudocode
 
@@ -1055,6 +1198,9 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   Other WBS work-package paths still require reconciliation. AUD-2026-11-19-01
   found obsolete paths, a stale dependency claim, and retry timing that
   conflicts with Document 8.
+- **Status evidence — 2026-11-19:** moved to Review. Stale `src/mcmanager/`
+  paths, the zero-dependency claim, and the 30/60/120 retry description were
+  replaced with current `app/` scopes and the three-attempt 30/60 policy.
 
 ### KB-G5-6 — Complete real workflows for the 17 shell modules
 

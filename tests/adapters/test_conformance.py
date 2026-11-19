@@ -497,9 +497,19 @@ def test_c11_boot_reconciliation(kind, tmp_path):
 
         assert sent.error == 'stdin_unavailable', sent.error
 
+        from app.infrastructure.minecraft.rcon import RconError
+
         rcon = RconClient('127.0.0.1', rcon_port, 'test-pass')
         try:
-            rcon.connect()
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    rcon.connect()
+                    break
+                except RconError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
             assert rcon.ping(), 'RCON ready probe failed after re-attach'
             rcon.command('stop')
         finally:

@@ -11,7 +11,11 @@ from pathlib import Path
 from threading import Event, Lock
 from typing import Any
 
-from app.domain.tuning import SYNC_BACKOFF_BASE_S, SYNC_TRANSIENT_RETRIES
+from app.domain.tuning import (
+    SYNC_BACKOFF_BASE_S,
+    SYNC_GLOBAL_CONCURRENCY_CAP,
+    SYNC_TRANSIENT_RETRIES,
+)
 from app.domain.value_objects import (
     ActorType,
     OperationStatus,
@@ -61,6 +65,7 @@ class SyncService:
         self._sleep = sleeper
         self._transfer_reservation_lock = Lock()
         self._reserved_transfer_bytes = 0
+        self._active_transfers = 0
 
     def get_bytes_transferred_today(self) -> int:
         now = datetime.fromtimestamp(self._clock.now(), UTC)
@@ -274,14 +279,18 @@ class SyncService:
 
     def _reserve_transfer(self, size_bytes: int) -> None:
         with self._transfer_reservation_lock:
+            if self._active_transfers >= SYNC_GLOBAL_CONCURRENCY_CAP:
+                raise SyncError('SYNC_CONCURRENCY_CAP')
             reserved_total = self.get_bytes_transferred_today() + self._reserved_transfer_bytes
             if reserved_total + size_bytes > self.DAILY_TRANSFER_CAP_BYTES:
                 raise SyncError('SYNC_CAP_EXCEEDED')
             self._reserved_transfer_bytes += size_bytes
+            self._active_transfers += 1
 
     def _release_transfer(self, size_bytes: int) -> None:
         with self._transfer_reservation_lock:
             self._reserved_transfer_bytes -= size_bytes
+            self._active_transfers -= 1
 
     def _is_cancelled(self, op_id: str, cancel_event: Event) -> bool:
         if cancel_event.is_set():

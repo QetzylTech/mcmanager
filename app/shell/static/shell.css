@@ -332,7 +332,7 @@ p {
 
 .ui-button {
   min-width: var(--control-min-width);
-  height: var(--control-height);
+  height: 40px;
   box-sizing: border-box;
   padding: 0 12px;
   display: inline-flex;
