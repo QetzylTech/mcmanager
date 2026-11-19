@@ -7,7 +7,7 @@
 | 4 | style guide | Tokens; layout system; nav bans; component property table; modal kinds; responsive; status indicators |
 | 5 | nav/workflow | Shell responsibilities; manager-context pages; world-context pages; nav rules; Instructions rendering contract |
 | 6 | domain model | Global audit invariant; entities; lifecycles; event catalog; invariants; closed enum value objects; aggregate roots + deletion tiers |
-| 7 | schema | Conventions (IDs/timestamps/deleted_at/FK-restrict/invariants); 27 table definitions; constraint/cascade summary; migration strategy; startup reconciliation |
+| 7 | schema | Conventions (IDs/timestamps/deleted_at/FK-restrict/invariants); 28 table definitions; constraint/cascade summary; migration strategy; startup reconciliation |
 | 8 | services | Capability matrix; operation preconditions/terminal states; scheduler; **locked tuning constants**; retry/cancel policy; failure recovery; notification/audit pipeline |
 | 9 | concurrency | Lock taxonomy; what is not lockable; mutual-exclusion matrix; **optimistic-concurrency version table**; runtime-config-off-only; queue/reject/preempt (incl. restore-wins-over-delete) |
 | 10 | API contract | **Route catalog**; envelope; error-code catalog; SSE endpoints/topics; MetricsCadence + broadcast set |

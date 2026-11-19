@@ -29,8 +29,8 @@ _LOG_CHANNELS = frozenset(
 
 
 def _documentation_root() -> tuple[Path, Path]:
-    repository_root = Path(__file__).resolve().parents[3]
-    return repository_root / "docs", repository_root
+    app_root = Path(__file__).resolve().parents[2]
+    return app_root / "docs", app_root
 
 
 def _manager_logs_root() -> tuple[Path, Path]:

@@ -8,25 +8,31 @@ Governing: layering — ARCHITECTURE (Web Application, Coding Standards); servic
 
 - Python 3.11+, Flask, SQLite (primary store — ARCHITECTURE persistence).
 - Frontend: vanilla HTML/CSS/JS served by Flask, per Doc 4/5; no separate SPA build step (low-hardware constraint). Asset bundling optional; all assets work unchunked/offline.
-- Package manager: `pip` + `requirements.txt` (runtime) + `requirements-dev.txt` (test/lint). No build system beyond Flask's own.
+- Package manager: `pip` + `app/requirements.txt` (runtime); root
+  `requirements.txt` delegates to it for repository workflows, while
+  `requirements-dev.txt` adds test/lint tools. No build system beyond Flask's
+  own.
 
 ## 2 Top-level layout
 
 ```
 mcmanager/
 ├── app/                      # application package (the manager)
+│   ├── main.py               # OS-agnostic startup entry point
+│   ├── migrations/           # packaged schema_migrations SQL (Doc 7)
+│   ├── requirements.txt      # runtime dependencies for app-only deployment
+│   ├── .env.example          # non-secret runtime defaults
+│   ├── docs/                 # curated runtime docs; authored separately
+│   └── shell/
+│       ├── static/           # served shell assets (CSS/JS, Doc 4)
+│       └── templates/        # Jinja2 shell templates (Doc 5)
 ├── tests/                    # Doc 11 pyramid
 ├── benchmarks/               # Doc 11 performance suite + thresholds.json
-├── migrations/               # schema_migrations versioned SQL (Doc 7)
 ├── docs/                     # ARCHITECTURE.md + Documents 4-14
-├── app/shell/
-│   ├── static/               # served shell assets (CSS/JS, Doc 4)
-│   └── templates/            # Jinja2 shell templates (Doc 5)
 ├── Prototypes/               # legacy reference archive (Legacy/, V1/, V2/, V3/)
-├── requirements.txt
+├── requirements.txt         # repository wrapper around app/requirements.txt
 ├── requirements-dev.txt
 ├── pyproject.toml            # tool config: black, isort, ruff, mypy, pytest (§5)
-├── .env.example              # non-secret runtime config only; includes VERBOSE_LOGGING=false
 └── README.md
 ```
 
@@ -34,10 +40,20 @@ Decision: Flask's shell blueprint owns the live frontend assets, so they stay in
 `app/shell/static/` and `app/shell/templates/`; root-level `static/` and
 `templates/` aliases or copies are intentionally not created. The historical
 prototype archive keeps its existing `Prototypes/` spelling and versioned
-layout; do not rename or duplicate it to match a lowercase sketch. The runtime
-example remains at the repository root.
+layout; do not rename or duplicate it to match a lowercase sketch. The
+non-secret runtime environment template is `app/.env.example`; deployed
+configuration belongs in the ignored `app/.env`.
 
-Rules: `app/` never imports from `Prototypes/`, `benchmarks/`, `tests/`, `docs/`. `docs/` may contain examples/DDL extracts but is never executed or imported. Only `migrations/` + `app/` may touch the live database.
+The `app/` directory is the production distribution boundary. It carries its
+own migrations, runtime dependency list, startup entry point, and private
+`.env` location. Root `requirements.txt` is only a repository-workflow wrapper;
+development docs, tests, and tools outside `app/` are not needed to run a
+distributed copy. Curated operator documentation belongs in `app/docs/`;
+repository planning/design docs under root `docs/` are not shipped.
+
+Rules: `app/` never imports from `Prototypes/`, `benchmarks/`, `tests/`, or
+root `docs/`. `app/docs/` is read only by the authenticated documentation API.
+Only `app/migrations/` and application services may touch the live database.
 
 ## 3 Application package layout
 

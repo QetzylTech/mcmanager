@@ -23,10 +23,11 @@ tracks implementation and verification, not just code-writing.
    graph; do not parallelize changes to the same world-lock or lifecycle story.
 6. Write audit findings in `docs/audit.md` first. Transfer every actionable
    finding into a bounded card in this board and verify the transfer checklist
-   there; this board is the source of truth for task status and evidence.
-   When a contract changes, update the governing numbered document first,
-   then its pseudocode and the audit record as needed. Numbered product
-   documents take precedence over WBS sketches and audit notes.
+   there; then clear the dated findings from the staging file. This board is
+   the source of truth for task status and evidence. When a contract changes,
+   update the governing numbered document first, then its pseudocode and the
+   audit record as needed. Numbered product documents take precedence over WBS
+   sketches and audit notes.
 7. Record commands, pass/fail counts, and platform in `Evidence`. Do not
    overwrite evidence with a newer partial run.
 8. Feature tests belong to the owning implementation card's acceptance
@@ -49,11 +50,30 @@ tracks implementation and verification, not just code-writing.
 Priority: **P0** release blocker / foundational, **P1** required gate work,
 **P2** important follow-up, **P3** housekeeping.
 
+## Audit transfer — 2026-11-19
+
+Actionable findings from `docs/audit.md` are tracked by the cards below. The
+audit is retained as a report; this board controls task status and evidence.
+
+| Audit finding | Workboard tasks |
+|---|---|
+| AUD-2026-11-19-01 — Plan and WBS conflicts | KB-DOC-PLAN-COHERENCE, KB-DOC-WBS, KB-G8-SYNC-CAP |
+| AUD-2026-11-19-02 — Historical/incomplete pseudocode | KB-DOC-PSEUDOCODE-DECISION |
+| AUD-2026-11-19-03 — Product implementation gaps | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-8, KB-G5-6, KB-G5-API-CONTRACT |
+| AUD-2026-11-19-04 — Architecture boundary/divergence | KB-G0-BOUNDARY-REGRESSION, KB-D12-2 |
+| AUD-2026-11-19-05 — Sync concurrency mismatch | KB-G8-SYNC-CAP, KB-G8-CONTRACT, KB-G4-VERIFY |
+| AUD-2026-11-19-06 — Test pyramid and coverage gaps | KB-D11-TEST-PYRAMID, KB-D11-COVERAGE, KB-D11-ISO-25010; feature-owner cards |
+| AUD-2026-11-19-07 — Full-suite failures | KB-G0-7, KB-G0-BOUNDARY-REGRESSION |
+| AUD-2026-11-19-08 — Static gates and stale baselines | KB-G0-5, KB-DOC-EVIDENCE-QUALITY |
+| AUD-2026-11-19-09 — Performance evidence | KB-PERF-01, KB-G5-10, KB-D11-ISO-25010 |
+| AUD-2026-11-19-10 — Workboard/WBS traceability | KB-DOC-EVIDENCE-QUALITY, KB-DOC-WBS, KB-G5-API-CONTRACT, KB-G8-CONTRACT, KB-G9-CONTRACT |
+| Detailed implementation/test inventory | Existing cleanup, lifecycle, architecture, API, test, platform, security, and performance cards above |
+
 ## Gate roll-up
 
 | Area | Implemented and verified scope | Remaining acceptance / release state |
 |---|---|---|
-| Repository layout | Root `app/` and `migrations/`; managed world data under `app/data/worlds/` | Layout work is Done; remaining Document 12 structure differences are tracked separately |
+| Repository layout | Distributable `app/` contains startup, runtime requirements, migrations, and app-local configuration; manager state stays under `app/data/worlds/` | Package layout is Done; new curated runtime docs may be added under `app/docs/` |
 | Gate 1 / WP 1.1–1.6 | Process ports, Windows/fake conformance, readiness, EULA flow, and durable logging | Partial: the conformance workflow now targets Windows and Ubuntu, but hosted results and real-server spike evidence remain |
 | Gate 2 / WP 2.1–2.4 | WBS Gate 2 criterion verified: clean foreign-key check and migration rollback; domain, settings, and ConfigEdit slices also pass focused tests | Gate criterion passed on Windows; Document 6 model inventory and broader release acceptance remain |
 | Gate 3 / WP 3.1–3.4 | WBS Gate 3 criterion verified: runtime re-attachment and derived-lock conflict behavior pass alongside operation, audit, and scheduler suites | Gate criterion passed on Windows; full release acceptance remains |
@@ -66,11 +86,13 @@ Priority: **P0** release blocker / foundational, **P1** required gate work,
 3.13.14. This summary is a dated evidence snapshot, not a claim that every
 gate or the product is release-ready.
 
-MCManager has a tested application foundation and substantial control-plane
-functionality. It is an **early functional prototype, not yet an
-operator-ready MVP**. The principal known product gaps are stale-world/log
-cleanup policy and workflows, manager lifecycle operations, full contract
-parity, and cross-platform, deployment, and performance release acceptance.
+The production-bound application is `app/`; it has a tested foundation and
+substantial control-plane functionality, but has not passed release acceptance
+and is not yet operator-ready. `Prototypes/` is a separate legacy reference
+archive, not the current application. The principal known product gaps are
+stale-world/log cleanup policy and workflows, manager lifecycle operations,
+full contract parity, and cross-platform, deployment, and performance release
+acceptance.
 
 ### Latest recorded verification
 
@@ -121,9 +143,12 @@ parity, and cross-platform, deployment, and performance release acceptance.
 - Implementation follow-up on 2026-11-19: added guarded server-properties
   editing, per-world cleanup-policy editing, sync-target CRUD, documentation
   and manager-log browsing, permission-grant enforcement, and expanded
-  diagnostics/version metadata. `python3 -m compileall -q app migrations`
-  passed on Linux. No tests or browser checks were run for this follow-up;
-  these features are implementation evidence only, not acceptance completion.
+  diagnostics/version metadata. Before the app-only packaging change,
+  `python3 -m compileall -q app migrations`
+  passed on Linux. At that point, no tests or browser checks had yet been run;
+  later focused API checks (11) and manual browser checks are recorded under
+  KB-G5-6. The automated Node regression for those workflows remains unrun,
+  so this is not complete feature acceptance evidence.
 
 ### MVP Code Backlog (Tests Excluded)
 
@@ -170,9 +195,13 @@ mod behavior without an explicit product decision.
 Run the app from the repository root (manager state and Minecraft
 installations are kept under ignored `app/data/` directories):
 
-```powershell
-python -m flask --app "app:create_app(database_path='app/data/manager.db', keyfile_path='app/data/secrets.key', migrations_dir='migrations')" run --host 127.0.0.1 --port 5000
+```console
+python app/main.py
 ```
+
+For an app-only copy, install `app/requirements.txt`, copy
+`app/.env.example` to `app/.env`, then run `python main.py` from `app/`.
+Repository planning documents are not part of that distribution.
 
 Application startup is not evidence that operator workflows or release gates
 are complete.
@@ -243,13 +272,28 @@ is integrated and reviewed.
 
 ### KB-LAYOUT-01 — Put application and migrations at repository root
 
-- **WBS/Docs:** Document 12 §2; the prior packaging decision was superseded by
-  the explicit root-layout direction.
+- **WBS/Docs:** Document 12 §2; historical layout decision, superseded by
+  KB-PACKAGE-01.
 - **Priority:** P1 · **Owner:** repository session · **Updated:** 2026-11-06
 - **Acceptance:** `app/` and `migrations/` exist at root; `core/` is absent;
   layout contract test passes.
 - **Evidence:** `python -m pytest --no-cov -q tests/unit/test_project_tooling_contract.py`
   passed (1 test).
+
+### KB-PACKAGE-01 — Make `app/` the production distribution boundary
+
+- **WBS/Docs:** Document 12 §2; app-only distribution direction
+- **Priority:** P1 · **Owner:** repository session · **Updated:** 2026-11-19
+- **Acceptance:** `app/` contains its Python entry point, runtime
+  requirements, migrations, ignored `.env` location, and runtime-doc location;
+  startup and data paths resolve within that package without repository-level
+  files. Keep developer planning docs, tests, and tools outside the package.
+- **Evidence:** targeted startup, migration, package-layout, and world-lifecycle
+  tests passed (35) on Windows / Python 3.13.14. Scoped Ruff and Black checks
+  passed. A copied `app/` folder without repository-level files started and
+  served HTTP 200. Full suite: 493 passed, 8 failed, 4 skipped, 1 warning;
+  failures remain in existing presentation/health expectations, dependency
+  boundaries, and realtime slow-client tests.
 
 ### KB-DATA-01 — Keep managed worlds inside application data
 
@@ -395,7 +439,11 @@ is integrated and reviewed.
   suite passed (409 passed, 3 Windows symlink skips, 1 long benchmark
   deselected). Scoped Ruff and isolated strict mypy checks passed. Existing
   SQL-heavy paths remain behind the transaction-aware persistence port as
-  allowed by Documents 8 and 12.
+  allowed by Documents 8 and 12. This is historical evidence from the prior
+  run, not the current boundary state: AUD-2026-11-19-04 found
+  `app/services/server_properties.py` importing concrete
+  `app.infrastructure.minecraft.properties_schema`, and the boundary test
+  failed in the audit run. Track the regression in `KB-G0-BOUNDARY-REGRESSION`.
 
 ### KB-G1-1 — Inject process and Minecraft capabilities through ports
 
@@ -473,8 +521,8 @@ is integrated and reviewed.
 - **WBS:** WP 1.4 · **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-07
 - **Depends on:** —
 - **Acceptance:** `VERBOSE_LOGGING=false` filters debug/raw output without
-  breaking readiness; durable per-session and channel logs persist alongside
-  bounded in-memory tailing; default is documented in `.env.example`.
+breaking readiness; durable per-session and channel logs persist alongside
+bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Evidence:** process markers bypass debug filtering; tail limits count UTF-8
   bytes including truncation sentinels.
   `python -m pytest --no-cov -q --basetemp=dev_artifacts/scratch/verify-g1-logging
@@ -664,6 +712,24 @@ is integrated and reviewed.
   disable/delete endpoints were added. The new routes have not received
   feature-test or browser acceptance; this card remains in Review.
 
+### KB-G5-CLEANUP-POLICY-API — Expose global cleanup policy management
+
+- **WBS/Docs:** Documents 5, 7, 8, and 10; cleanup-policy schema in migration
+  001
+- **Priority:** P1 · **Owner:** Unassigned
+- **Status:** Review
+- **Acceptance:** add manager-wide cleanup-policy read and versioned edit
+  workflows and expose them in Manager Maintenance; preserve documented
+  age/count/space safeguards, ConfigEdit operation and audit behavior, and
+  global-default inheritance for world policies.
+- **Evidence:** manager-wide GET/PATCH routes, versioned ConfigEdit operation,
+  step-up enforcement, and the Manager Maintenance editor are implemented.
+  Focused catalog API checks passed (11). AUD-2026-11-19-10 found this card
+  under To Do despite its prior `Implemented` label; moved it to Review pending
+  confirmation that every acceptance check is satisfied. This card does not
+  authorize stale-world or log deletion policy changes; those remain on their
+  separate policy/implementation cards.
+
 ### KB-G4-VERIFY — Close Gate 4 against its exact acceptance checks
 
 - **WBS/Docs:** WP 4.1–4.4; Documents 6, 8, 9, 11, and 14.
@@ -692,7 +758,10 @@ is integrated and reviewed.
 - **Concurrent cap admission:** `python -m pytest --no-cov -q
   tests/integration/test_sync_gate4.py` passed (8 tests) on Windows / Python
   3.13.14 on 2026-11-08, including overlapping sync jobs at the daily-cap
-  boundary. Scoped Ruff and editor diagnostics passed.
+  boundary. This verifies the daily byte-cap reservation, not the distinct
+  Document 8 limit of two simultaneous transfers. The latter remains
+  unresolved under `KB-G8-SYNC-CAP` (AUD-2026-11-19-05). Scoped Ruff and
+  editor diagnostics passed.
 - **Remaining:** run the symlink checks on a supported host and record live
   RCON/NAS integration evidence; the Windows skips and focused fake/local
   tests do not satisfy these acceptance items.
@@ -741,6 +810,23 @@ is integrated and reviewed.
 
 ## To Do
 
+### KB-G0-7 — Restore full-suite test acceptance
+
+- **WBS/Docs:** Document 11; AUD-2026-11-19-07
+- **Priority:** P0 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Depends on:** —
+- **Acceptance:** reproduce the current full-suite failures, fix them without
+  weakening assertions, and record a passing full `pytest --no-cov` run.
+  Specifically resolve shell token/style and persistent-shell expectations,
+  the three health/diagnostics failures, the service-boundary failure (owned
+  by `KB-G0-BOUNDARY-REGRESSION`), and the two realtime slow-client failures.
+  Triage and record the 252 warnings from the audit run; update the dated
+  verification snapshot only with fresh results. Coverage-floor work remains
+  on `KB-D11-COVERAGE`.
+- **Current evidence:** the 2026-11-19 Windows / Python 3.13.14 coverage run
+  reported 493 passed, 8 failed, 4 skipped, 76.26% coverage, and 252 warnings.
+  This card does not claim that result is current after subsequent changes.
+
 ### KB-G5-CLEANUP-POLICY — Decide safe stale-world and log cleanup policy
 
 - **WBS/Docs:** Document 10 cleanup scopes; Documents 5 and 8
@@ -767,22 +853,6 @@ is integrated and reviewed.
 - **Current evidence:** `CleanupService` physically removes backup artifacts
   only; the cleanup API rejects `stale_worlds` and `logs` as unsupported.
 
-### KB-G5-CLEANUP-POLICY-API — Expose global cleanup policy management
-
-- **WBS/Docs:** Documents 5, 7, 8, and 10; cleanup-policy schema in migration
-  001
-- **Priority:** P1 · **Owner:** Unassigned
-- **Status:** Implemented
-- **Acceptance:** add manager-wide cleanup-policy read and versioned edit
-  workflows and expose them in Manager Maintenance; preserve documented
-  age/count/space safeguards, ConfigEdit operation and audit behavior, and
-  global-default inheritance for world policies.
-- **Evidence:** manager-wide GET/PATCH routes, versioned ConfigEdit operation,
-  step-up enforcement, and the Manager Maintenance editor are implemented.
-  Focused catalog API checks passed (11). This card does not authorize
-  stale-world or log deletion policy changes; those remain on their separate
-  policy/implementation cards.
-
 ### KB-D12-2 — Track remaining service-layer architecture divergences
 
 - **WBS/Docs:** Document 12 §§2, 4–5; Documents 8 and 12 define service
@@ -791,12 +861,34 @@ is integrated and reviewed.
 - **Acceptance:** review service-level SQL access and the partial command/query
   layer against the governing documents; record an explicit implementation
   decision or bounded migration work before treating the architecture
-  divergence as resolved.
+  divergence as resolved. Include the missing planned command/query handlers
+  (CreateWorld/DeleteWorld/RenameWorld and the base, runtime, backup, restore,
+  cleanup, sync, config, crash, and query handlers) and the missing SQLite
+  `repository.py`, `operations_repo.py`, and `audit_repo.py`; decide whether to
+  implement these boundaries or revise the architecture to match the
+  consolidated implementation.
 - **Current evidence:** services use the persistence abstraction but issue
   SQL through its connections; `app/commands/` currently contains only the
   world command module. `RuntimeService` is a facade while `WorldsService`
   retains lifecycle logic. No refactor or contract change is authorized by
-  this documentation card alone.
+  this documentation card alone. AUD-2026-11-19-04 also found a concrete
+  service-to-infrastructure import; the code fix is separately tracked by
+  `KB-G0-BOUNDARY-REGRESSION`.
+
+### KB-G0-BOUNDARY-REGRESSION — Restore the service dependency boundary
+
+- **WBS/Docs:** Document 12 §4; AUD-2026-11-19-04 and -07
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** —
+- **Acceptance:** remove the concrete infrastructure dependency from
+  `app/services/server_properties.py` using an existing or appropriately
+  extracted port/schema boundary; add/retain a focused regression assertion;
+  pass `tests/unit/test_dependency_boundaries.py` and the relevant
+  server-properties tests without broad exception lists or weakened checks.
+- **Current evidence:** the audit found the service importing
+  `app.infrastructure.minecraft.properties_schema`; the full-suite boundary
+  test failed. `KB-D12-2` separately tracks the broader command/query and
+  repository architecture decision.
 
 ### KB-G8-CONTRACT — Complete Document 8 service contract acceptance
 
@@ -806,11 +898,31 @@ is integrated and reviewed.
 - **Acceptance:** inventory Document 8 service requirements against the
   existing implementation cards; create or update an owning implementation
   card for each concrete missing behavior, and record a final acceptance map.
-  Feature-level tests and evidence stay on those owning cards, not on this
+  Explicitly reconcile the two-simultaneous-transfer cap and sync retry
+  schedule with implementation and WBS under `KB-G8-SYNC-CAP`. Feature-level
+  tests and evidence stay on those owning cards, not on this
   contract-inventory card.
 - **Current evidence:** operation, scheduler, audit, backup, restore, cleanup,
   and sync slices have focused tests; contract-wide service acceptance remains
-  open.
+  open. AUD-2026-11-19-05 found no demonstrated two-transfer admission guard.
+
+### KB-G8-SYNC-CAP — Resolve sync concurrency and retry contract
+
+- **WBS/Docs:** Documents 8 and 10; WBS sync work package; AUD-2026-11-19-01
+  and -05
+- **Priority:** P1 · **Owner:** Unassigned
+- **Depends on:** —
+- **Acceptance:** obtain and record a product decision on whether the
+  two-simultaneous-transfer cap remains required. Reconcile Document 8,
+  Document 10, WBS, API errors, and implementation. If retained, implement
+  atomic admission limiting and test concurrent transfers at, below, and
+  above the cap. If removed, remove or revise the stale cap/error contract and
+  its tests. In either case reconcile retry count/waits (three total attempts,
+  30/60-second waits) and retain tests for the selected policy. Do not treat
+  the daily byte quota as a concurrency limit.
+- **Current evidence:** `SyncService` has transfer-byte reservations and a
+  50-GiB daily cap; no explicit two-transfer admission guard was found.
+  `KB-G4-VERIFY`'s overlapping-job test covers the daily-cap boundary only.
 
 ### KB-G9-CONTRACT — Complete Document 9 concurrency contract acceptance
 
@@ -836,6 +948,8 @@ is integrated and reviewed.
   implementation cards; this card is not a queue for completing those tests.
 - **Current evidence:** focused domain and integration suites exist, but
   service-level unit coverage and full browser E2E flows are incomplete.
+  AUD-2026-11-19-06 adds the unclosed canonical real-HTTP/process flows and
+  contract-to-test mapping to this inventory.
 
 ### KB-D11-COVERAGE — Meet documented test coverage floors
 
@@ -846,7 +960,10 @@ is integrated and reviewed.
   the repository-level coverage floor. Feature-specific coverage is owned by
   each implementation card and is not deferred to this cross-cutting gate.
 - **Current evidence:** backup catalog API coverage was recorded at
-  44.46% and the documented module/overall floors as unmet.
+  44.46% in a focused run. The 2026-11-19 full coverage run reported 76.26%
+  overall, with 18 of 92 application modules below 80%; the configured
+  overall floor is still 80%, not the documented 85%, and no per-module floor
+  is enforced.
 
 ### KB-D11-ISO-25010 — Complete the quality-characteristic evidence map
 
@@ -858,7 +975,8 @@ is integrated and reviewed.
   unverified, coordinating performance thresholds with KB-PERF-01.
 - **Current evidence:** functional suitability, reliability, and security
   coverage remain partial; compatibility, performance, and flexibility have
-  not been verified.
+  not been verified. AUD-2026-11-19-06/-09 records the incomplete evidence map
+  and missing calibrated performance acceptance.
 
 ### KB-DOC-EVIDENCE-QUALITY — Reconcile status and evidence claims
 
@@ -869,25 +987,60 @@ is integrated and reviewed.
   duplicate gate/work-package summaries; narrow route and authorization
   claims to verified scope pending KB-G5-API-CONTRACT; and record exact
   commands, dates, platforms, and test scope where historical counts differ
-  (including the 36-test and 97-test Gate 1 results). Do not combine
+  (including the 36-test and 97-test Gate 1 results). Reconcile the dated
+  full-suite failures, static-gate counts, the implemented cleanup-policy API
+  card's status, and claims that tests were or were not run. Do not combine
   overlapping test counts or present historical results as fresh.
 - **Current evidence:** gate and work-package summaries are repeated in this
   board; route/auth claims require careful scoping against known exceptions;
   and the 36-test and 97-test Gate 1 records need exact test-selection
-  provenance.
+  provenance. AUD-2026-11-19-08/-10 also found stale static baselines and
+  inconsistent task/evidence status; the current full-suite failures are
+  tracked by `KB-G0-7`.
+
+### KB-DOC-PLAN-COHERENCE — Reconcile runtime documentation references
+
+- **WBS/Docs:** Documents 5, 10, and 12; AUD-2026-11-19-01
+- **Priority:** P2 · **Owner:** Unassigned
+- **Depends on:** —
+- **Acceptance:** align the runtime documentation location in Documents 5
+  and 10 with Document 12's distributed `app/docs/` boundary. Preserve the
+  distinction between repository planning docs and future curated operator
+  docs; verify no runtime documentation API or UI points at the repository's
+  planning-document tree.
+- **Current evidence:** Documents 5 and 10 still describe repository `docs/`
+  as the runtime content source, while Document 12 establishes `app/docs/`.
+
+### KB-DOC-PSEUDOCODE-DECISION — Decide how to retain historical pseudocode
+
+- **WBS/Docs:** Five gate pseudocode files; AUD-2026-11-19-02
+- **Priority:** P2 · **Owner:** Unassigned
+- **Depends on:** —
+- **Acceptance:** make an explicit keep-as-historical or refresh decision for
+  each gate pseudocode file. Keep files in place. If retained as historical,
+  label them consistently as superseded examples and link the governing
+  numbered documents; if refreshed, trace each included component/flow to
+  current plans and source. Do not present pseudocode as a complete
+  implementation or test inventory.
+- **Current evidence:** all five files identify themselves as historical or
+  superseded snapshots, and do not enumerate every planned component, route,
+  function, or acceptance flow.
 
 ### KB-DOC-WBS — Reconcile WBS paths and conformance details
 
 - **WBS/Docs:** `wbs.txt`; Documents 12 and 13
 - **Priority:** P2 · **Owner:** Unassigned
 - **Acceptance:** retain the WBS work-package/dependency structure while
-  reconciling obsolete `src/mcmanager/` file-scope paths and fake-server flag
-  names with the current root `app/` layout and conformance harness. Numbered
-  documents remain authoritative.
+  reconciling obsolete `src/mcmanager/` file-scope paths, the stale
+  “zero-dependency” description, and fake-server flag names with the current
+  root `app/` layout and conformance harness. Reconcile sync retry wording
+  under `KB-G8-SYNC-CAP`; numbered documents remain authoritative.
 - **Current evidence:** Gate 1 file-scope paths now match root `app/`; the
   fake-server harness accepts both the documented `--crash-after` and
   `--save-slow` modes and the millisecond variants used by focused tests.
-  Other WBS work-package paths still require reconciliation.
+  Other WBS work-package paths still require reconciliation. AUD-2026-11-19-01
+  found obsolete paths, a stale dependency claim, and retry timing that
+  conflicts with Document 8.
 
 ### KB-G5-6 — Complete real workflows for the 17 shell modules
 
@@ -1001,13 +1154,12 @@ is integrated and reviewed.
 - **Acceptance:** Ruff, Black, isort, mypy, and import-linter pass on the
   configured project scope; add those commands to the documented/CI gate.
   Avoid broad formatting churn without coordinating it as a dedicated slice.
-- **Evidence:** Windows / Python 3.13 baseline: `python -m ruff check app tests`
-  reports 46 errors; `python -m black --check app tests` reports 76 files to
-  reformat after aligning Black with Document 12's single-quote style;
-  `python -m isort --check-only app tests` reports 9 files; `python -m mypy app`
-  reports 217 errors. `lint-imports` cannot start because the command is not
-  installed in the selected interpreter, though `import-linter` is declared in
-  `requirements-dev.txt`. Document 12 §8 now records the canonical commands.
+- **Evidence:** The 2026-11-19 audit run on Windows / Python 3.13 reported
+  Ruff 39 errors, Black 84 files needing formatting, isort 7 failures, mypy
+  238 errors in 23 files, and a nonzero import-linter result. The audit also
+  found no general static-gate workflow. Earlier snapshots (Ruff 46, Black
+  76, isort 9, mypy 217) are historical and must not be used as current
+  baselines. Document 12 §8 records the canonical commands.
 - **Blocker:** The remaining Black set includes protected shell/backup files;
   mypy failures include process adapters and protected API slices. These files
   and their tests are outside this card's authorized edit scope. Install the
@@ -1073,9 +1225,10 @@ is integrated and reviewed.
 - **Blocked by:** A documented reference host and reproducible measurements
   must be supplied; thresholds must not be fabricated.
 - **Acceptance:** record CPU/RAM/storage profile; measure 300-second idle CPU
-  and RSS, 50-client 1Hz stream fan-out, and 1000-lines/sec ingestion with
-  measured tail latency; commit the justified `benchmarks/thresholds.json`
-  and pass its acceptance test.
+  and process RSS (not `tracemalloc` allocation peak), 50-client 1Hz stream
+  fan-out, and 1000-lines/sec ingestion with measured tail latency; ensure the
+  benchmark exercises these workloads, commit justified
+  `benchmarks/thresholds.json` values, and pass its acceptance test.
 
 ## Backlog
 
@@ -1092,10 +1245,9 @@ is integrated and reviewed.
   checks remain acceptance evidence on their implementation cards. Include
   manager lifecycle routes and all cleanup scopes; this is a parity inventory,
   not a substitute for implementing the owning feature cards.
-- **Current audit:** `docs/audit.md` records the 2026-11-19 findings and
-  transfers each actionable item to this board. Server-properties editing,
+- **Current evidence:** Server-properties editing,
   permission-grant enforcement, diagnostics/version metadata, sync-target
   CRUD, documentation/log browsing, and per-world cleanup-policy editing have
-  implementations from the follow-up, but lack feature-level acceptance.
+  implementations, but lack feature-level acceptance.
   Full parity remains open; additional concrete route or service deltas may
   be discovered.

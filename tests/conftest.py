@@ -1,6 +1,6 @@
 """Gate 2 shared fixtures (Document 11 section 1.2/1.3).
 
-Every Gate 2 test runs against a REAL SQLite file with the full 27-table
+Every Gate 2 test runs against a REAL SQLite file with the full 28-table
 schema applied through the production migration runner — foreign_keys=ON on
 every connection plus the boot FK sweep (Global Persistence Invariant) is
 exactly the production boot path (ARCHITECTURE section 9).
@@ -32,7 +32,7 @@ class FakeClock:
 
 @pytest.fixture
 def migrations_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / 'migrations'
+    return Path(__file__).resolve().parents[1] / 'app' / 'migrations'
 
 
 @pytest.fixture

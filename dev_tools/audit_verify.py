@@ -20,7 +20,7 @@ tmp.mkdir(parents=True, exist_ok=True)
 container = build_container(
     database_path=tmp / 'db.sqlite',
     keyfile_path=tmp / 'secrets.key',
-    migrations_dir=PROJECT_ROOT / 'migrations',
+    migrations_dir=PROJECT_ROOT / 'app' / 'migrations',
 )
 try:
     count = container.store.reader().execute(

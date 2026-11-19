@@ -12,7 +12,7 @@ Buildable SQLite schema derived from Document 6 — every table, column, type, k
 - Global persistence invariants (ARCHITECTURE §9 — do not restate): `PRAGMA foreign_keys = ON` every connection before any other statement; boot-time `PRAGMA foreign_key_check` after migrations before serving — violation = startup-blocking critical error, never silently repaired.
 - **No `ON DELETE CASCADE` anywhere.** Only Cleanup physically deletes, and it checks dependents explicitly.
 
-## 1 Full table list (27)
+## 1 Full table list (28)
 
 Manager/global: `manager`, `global_settings`, `schema_migrations`
 World/registry: `world_instances`, `world_settings`, `templates`, `java_runtimes`
@@ -21,6 +21,7 @@ Backup/restore/retention: `backup_artifacts`, `restore_history`, `schedules`, `m
 Sync: `sync_targets`, `sync_records`, `sync_attempts`
 Notifications/audit: `notifications`, `notification_reads`, `audit_records`
 Identity/security: `users`, `roles`, `role_assignments`, `permissions`, `devices`, `client_sessions`, `secrets`
+World properties: `server_properties_versions`
 
 ## 2 Table definitions (compact SQL-like shorthand)
 
@@ -125,6 +126,9 @@ IDX: `(artifact_id)` — has-this-backup-been-synced; `(status)` — failed-sync
 `attempt_id` PK | `sync_id` FK->sync_records | `attempt_number` INT // strictly sequential per sync_id, from 1, no gaps | `started_at` | `finished_at` | `outcome` // succeeded/failed_transient/failed_permanent | `error_message` NULL // NULL on success | `created_at`
 CONSTRAINT: UNIQUE `(sync_id, attempt_number)`
 RULE: every column write-once; no UPDATE ever — a new attempt is a new row (append-only like audit_records)
+
+**2.28 server_properties_versions** // versioned world-properties edit metadata
+`world_id` PK FK->world_instances | `version` INT | `updated_at` INT | `updated_by` FK->users
 
 ## 3 ER diagram — removed
 

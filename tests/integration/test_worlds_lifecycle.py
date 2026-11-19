@@ -26,7 +26,7 @@ from app.services.worlds import StartTimeoutError, WorldLifecycleError
 from app.web.middleware import session_csrf_token
 
 _ROOT = Path(__file__).resolve().parents[2]
-_MIGRATIONS = _ROOT / "migrations"
+_MIGRATIONS = _ROOT / "app" / "migrations"
 _FAKE_SERVER = Path(__file__).resolve().parents[1] / "adapters" / "fake_server" / "fake_server.py"
 
 

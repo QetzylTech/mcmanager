@@ -38,7 +38,7 @@ _IMPORTANT_LOG_MARKER = re.compile(
 
 
 def verbose_logging_enabled() -> bool:
-    """VERBOSE_LOGGING defaults to false (gate1 Module 3 / Doc 12 .env.example)."""
+    """VERBOSE_LOGGING defaults to false (configured in app/.env.example)."""
     return os.environ.get('VERBOSE_LOGGING', 'false').strip().lower() in {
         '1',
         'true',

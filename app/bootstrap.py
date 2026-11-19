@@ -89,8 +89,7 @@ class Container:
 
 
 def _migrations_dir() -> Path:
-    # app/bootstrap.py -> parents[1] = repository root; migrations/ is a sibling.
-    return Path(__file__).resolve().parents[1] / 'migrations'
+    return Path(__file__).resolve().parent / 'migrations'
 
 
 def _create_process_adapter() -> ProcessControlPort:

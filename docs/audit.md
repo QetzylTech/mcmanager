@@ -20,75 +20,312 @@ owners, dependencies, status, and verification evidence.
    Record the transfer status and any findings that require a decision but
    cannot yet be implemented.
 5. Once transfer is complete, the workboard controls task status and progress.
-   Keep this file as the dated audit record or replace it when starting the
-   next audit; do not maintain task status separately here.
+   Normally clear dated findings after transfer; retain a dated audit record
+   when explicitly requested, without maintaining task status here.
 
-## Current audit draft
+## Audit record — 2026-11-19
 
-**Status:** Findings transferred to `WORKBOARD.md`; retain this dated audit
-record for the 2026-11-19 implementation review.
-**Scope:** Known unbuilt application components and recent implementation
-claims arising from Documents 5, 8, 10, and the 2026-11-19 code follow-up.
-**Date:** 2026-11-19
+**Disposition:** Retained at the user's request. The workboard remains the
+source of truth for task status and progress.
 
-**Criteria and sources examined:** `docs/WORKBOARD.md`, Documents 5, 8, and
-10, `app/web/api/administration.py`, `app/web/api/backup_catalogs.py`,
-`app/web/api/server_properties.py`, `app/web/api/manager_content.py`,
-`app/web/middleware.py`, `app/services/diagnostics.py`, and
-`app/shell/static/operator_ui.js`.
+**Bottom line:** MCManager's production-bound application is a substantial,
+organized implementation, but it is not complete, fully conformant, or
+release-ready. The separate `Prototypes/` folder is a legacy reference
+archive, not the current application. The numbered documents provide a strong
+conceptual design, but the plans, legacy pseudocode/WBS, implementation,
+tests, and tracking are not synchronized enough to act as one reliable
+completion map.
 
-**Limitations:** Focused catalog API checks passed (11), and a live browser
-check confirmed theme switching, notification dropdown rendering, step-up
-confirmation, and global cleanup-policy submission. The added Node browser
-regression could not be run because Node is unavailable. Product-policy
-questions are not treated as verified implementation defects.
+**Scope:** Reviewed the numbered design documents (4–14), architecture index,
+WBS, workboard, five gate pseudocode files, application/test/benchmark
+inventories, and relevant implementation and test code. This audit focuses on
+plan coherence, implementation completeness/conformance, repository structure,
+testing, and tracking.
+
+**Verification performed:** Full `pytest` run with coverage on Windows /
+Python 3.13.14; repository-wide Ruff, Black, isort, mypy, and import-linter
+checks; targeted inspection of API, service, benchmark, and documentation
+paths. The route-by-route Document 10 parity card remains open, so this audit
+does not claim every route/schema/auth combination was independently verified.
 
 ### Findings
 
-- **AUD-2026-11-19-01 — Global cleanup-policy management (resolved)**
-  - **Resolution:** Manager-wide cleanup-policy GET/PATCH routes and the
-    Manager Maintenance editor are implemented, including versioned
-    ConfigEdit behavior and step-up enforcement. Focused catalog API checks
-    passed (11).
-  - **Transfer:** `KB-G5-CLEANUP-POLICY-API` is marked Implemented in
-    `WORKBOARD.md`. Stale-world and log cleanup remain separately blocked on
-    explicit policy decisions.
-- **AUD-2026-11-19-02 — Stale-world and log cleanup remain unsupported**
-  - **Verified gap:** Cleanup currently accepts backups only; other scopes
-    return `CLEANUP_SCOPE_UNSUPPORTED`.
-  - **Decision needed:** Candidate eligibility, retention, exclusions, and
-    destructive safeguards for stale worlds and logs are not fully specified.
-  - **Transfer:** Policy decision and implementation are tracked by
-    `KB-G5-CLEANUP-POLICY` and `KB-G5-CLEANUP-SCOPES`.
-- **AUD-2026-11-19-03 — Manager lifecycle operations are not implemented**
-  - **Verified gap:** Manager restore, restart, update, and rollback routes
-    return `NOT_IMPLEMENTED`; Manager Backup exists.
-  - **Decision needed:** Restore/recovery scope, host supervision, trusted
-    update verification, schema compatibility, and rollback behavior require
-    product/operations contracts.
-  - **Transfer:** Tracked by `KB-G5-8`.
-- **AUD-2026-11-19-04 — Session settings visibility is undefined**
-  - **Unresolved contract question:** Document 10 requests settings visibility
-    in the session response, but no governing policy defines its derivation or
-    shape.
-  - **Transfer:** Decision and contract parity are tracked by
-    `KB-G5-API-CONTRACT`.
-- **AUD-2026-11-19-05 — Full API contract parity remains unverified**
-  - **Verification gap:** The full route/auth/schema/error mapping inventory
-    has not been completed, so further concrete gaps may exist.
-  - **Transfer:** Tracked by `KB-G5-API-CONTRACT`.
-- **AUD-2026-11-19-06 — Recent feature follow-up lacks feature acceptance**
-  - **Verified limitation:** Server-properties editing, permission-grant
-    enforcement, diagnostics/version metadata, sync-target CRUD,
-    documentation/log browsing, and per-world and manager-wide
-    cleanup-policy editing have implementations. Focused API checks and live
-    browser validation cover the cleanup-policy and shell interactions; full
-    feature-specific/browser-suite acceptance remains outstanding.
-  - **Transfer:** Acceptance remains with the owning implementation cards,
-    including `KB-G5-3`, `KB-G5-6`, and `KB-G5-API-CONTRACT`.
+#### AUD-2026-11-19-01 — Numbered plans are coherent in concept, but contain stale conflicts
 
-### Transfer checklist
+- **Assessment:** The numbered documents define useful concepts and precedence,
+  but several references conflict or remain stale.
+- **Evidence:** Documents 5 and 10 still say runtime documentation comes from
+  repository `docs/`, while Document 12 makes `app/docs/` the distributed
+  runtime-documentation location. Document 8 specifies a two-transfer
+  concurrency cap, while the implementation focuses on a 50-GiB daily byte
+  cap. The WBS retains old `src/mcmanager/` paths, calls the project
+  “zero-dependency,” and specifies sync delays of 30/60/120 seconds, unlike
+  Document 8's three-attempt 30/60-second policy.
+- **Impact:** Document precedence resolves some disputes on paper, but stale
+  references make the intended current contract ambiguous to implementers.
+- **References:** [Document 5](./Document_5_-_Navigation_Workflow_Blueprint.md#L39),
+  [Document 8](./Document_8_-_Application_Services.md#L94),
+  [Document 10](./Document_10_-_API_Contract.md#L219),
+  [Document 12](./Document_12_-_Directory_Structure_and_Coding_Standards.md#L51),
+  [WBS](./wbs.txt#L6), [WBS sync package](./wbs.txt#L218).
+- **Tracking:** `KB-DOC-PLAN-COHERENCE`, `KB-DOC-WBS`, and
+  `KB-G8-SYNC-CAP`; broader service acceptance remains in `KB-G8-CONTRACT`
+  and `KB-G4-VERIFY`.
 
-- [x] Each actionable finding has a corresponding task in `WORKBOARD.md`.
-- [x] Findings requiring a product or policy decision are tracked as tasks.
-- [x] Verification limits and unresolved contract questions are recorded above.
+#### AUD-2026-11-19-02 — Gate pseudocode is historical, not a complete current specification
+
+- **Assessment:** All five gate pseudocode files identify themselves as
+  historical/superseded snapshots. They cover selected examples, not every
+  planned function, component, API, page, or acceptance flow.
+- **Impact:** Pseudocode cannot be used to prove that all planned components
+  are represented or implemented. The numbered documents must remain
+  authoritative; the pseudocode needs an explicit archive/refresh decision.
+- **References:** [Gate 1](./gate1_pseudocode.txt#L1),
+  [Gate 2](./gate2_pseudocode.txt#L1),
+  [Gate 3](./gate3_pseudocode.txt#L1),
+  [Gate 4](./gate4_pseudocode.txt#L1),
+  [Gate 5](./gate5_pseudocode.txt#L1).
+- **Tracking:** `KB-DOC-PSEUDOCODE-DECISION` now requires an explicit
+  keep-as-historical or refresh decision; `KB-DOC-WBS` and
+  `KB-DOC-EVIDENCE-QUALITY` cover related WBS/evidence cleanup.
+
+#### AUD-2026-11-19-03 — Product implementation is incomplete
+
+- **Assessment:** The source contains substantial functionality, but not every
+  planned component/workflow is implemented.
+- **Verified examples:** Manager restore, restart, update, and rollback remain
+  `NOT_IMPLEMENTED`; stale-world and log cleanup scopes remain unsupported.
+  Full Document 10 parity, full shell workflows, and manager lifecycle work
+  remain open. `app/docs/` is empty by design pending the future curated
+  runtime documentation.
+- **Impact:** The production application is under active development and is
+  not yet an operator-ready MVP. Some gaps are deliberately blocked on
+  product/operations decisions and should not be mistaken for accidental
+  omissions.
+- **References:** [Manager API](../app/web/api/administration.py#L114),
+  [cleanup API](../app/web/api/backup_catalogs.py#L455),
+  [workboard cleanup tasks](./WORKBOARD.md#L765),
+  [manager lifecycle task](./WORKBOARD.md#L958),
+  [API parity task](./WORKBOARD.md#L1103).
+- **Tracking:** Existing cards `KB-G5-CLEANUP-POLICY`,
+  `KB-G5-CLEANUP-SCOPES`, `KB-G5-8`, `KB-G5-6`, and `KB-G5-API-CONTRACT`.
+
+#### AUD-2026-11-19-04 — One verified service-layer boundary violation
+
+- **Assessment:** The source is organized into recognizable layers, but the
+  dependency rule is not consistently enforced.
+- **Evidence:** `app/services/server_properties.py` imports concrete
+  `app.infrastructure.minecraft.properties_schema`; the full suite's
+  `test_services_use_ports_instead_of_concrete_infrastructure` fails.
+  `app/commands/` contains only a small world-command module, and services
+  still use SQL through the persistence abstraction.
+- **Impact:** The architecture is not “spaghetti,” but this is a concrete
+  ports-and-adapters violation and the command/query architecture is partial.
+- **References:** [ServerPropertiesService](../app/services/server_properties.py#L17),
+  [boundary test](../tests/unit/test_dependency_boundaries.py#L66),
+  [workboard architecture task](./WORKBOARD.md#L807).
+- **Tracking:** the concrete import regression is assigned to
+  `KB-G0-BOUNDARY-REGRESSION`; broader module/repository architecture is
+  assigned to `KB-D12-2`. `KB-G0-1` retains its historical verification and
+  links the regression follow-up.
+
+#### AUD-2026-11-19-05 — Sync concurrency contract is not aligned with implementation
+
+- **Assessment:** The implementation enforces a 50-GiB daily transfer-byte
+  limit with byte reservations; no explicit two-simultaneous-transfer
+  admission guard was found in `SyncService`. The WBS also uses a different
+  retry-delay description than Document 8.
+- **Impact:** The `SYNC_CONCURRENCY_CAP` API error and the configured
+  two-transfer limit are not demonstrated by the current service behavior.
+  Resolve the intended policy before declaring sync contract parity.
+- **References:** [Document 8](./Document_8_-_Application_Services.md#L94),
+  [Document 10](./Document_10_-_API_Contract.md#L338),
+  [SyncService](../app/services/sync.py#L47),
+  [WBS sync package](./wbs.txt#L218).
+- **Tracking:** `KB-G8-SYNC-CAP` requires a policy decision and either
+  implementation/tests or contract removal; `KB-G8-CONTRACT` and
+  `KB-G4-VERIFY` include the contract and feature acceptance.
+
+#### AUD-2026-11-19-06 — Test coverage and test shape do not meet the plan
+
+- **Evidence:** The full coverage run reported 493 passed, 8 failed, 4 skipped,
+  and 76.26% overall coverage; 18 of 92 application modules are below 80%.
+  Examples include POSIX process control at 22%, process health at 0%,
+  server-properties service at 21%, and manager-content API at 19%. The
+  inventory contains 15 unit, 28 integration, and 1 adapter Python test
+  modules, plus one browser suite; there is no dedicated `tests/e2e/` package.
+- **Plan/config mismatch:** Document 11 requires 80% per module and 85%
+  overall. `pyproject.toml` enforces only an 80% overall floor; no per-module
+  floor is configured.
+- **Impact:** Tests do not cover every planned function/component, and the
+  stated release-quality test pyramid and coverage floors are not satisfied.
+- **References:** [Document 11](./Document_11_-_Testing_Strategy.md#L103),
+  [pytest configuration](../pyproject.toml#L46),
+  [coverage task](./WORKBOARD.md#L861),
+  [test layout plan](./Document_12_-_Directory_Structure_and_Coding_Standards.md#L228).
+- **Tracking:** `KB-D11-TEST-PYRAMID`, `KB-D11-COVERAGE`, and
+  `KB-D11-ISO-25010`.
+
+#### AUD-2026-11-19-07 — Current full-suite failures remain
+
+- **Evidence:** The eight failures are in shell token/style expectations,
+  persistent-shell module expectations, three health/diagnostics expectations,
+  the service dependency-boundary check, and two realtime slow-client stream
+  tests. The full coverage run also emitted 252 warnings.
+- **Impact:** A failed full suite and failed coverage gate prevent a claim of
+  repository-wide acceptance. Focused passing tests do not close these failures.
+- **Tracking:** `KB-G0-7` owns restoration of the full-suite pass;
+  `KB-G0-BOUNDARY-REGRESSION` owns the boundary failure.
+  `KB-DOC-EVIDENCE-QUALITY` owns dated result reconciliation and affected
+  feature cards retain their feature-specific checks.
+
+#### AUD-2026-11-19-08 — Static quality gates are failing and recorded counts are stale
+
+- **Evidence:** Current checks reported 39 Ruff errors, 84 files needing Black
+  formatting, 7 isort failures, 238 mypy errors in 23 files, and a nonzero
+  import-linter exit. The workboard's recorded baseline is 46 Ruff errors,
+  76 Black files, 9 isort files, and 217 mypy errors. The workflow directory
+  contains adapter-conformance and security jobs but no general static-gate job.
+- **Impact:** The documented CI/static merge gate is not green and its recorded
+  baseline no longer describes the current workspace.
+- **References:** [Document 12 tooling](./Document_12_-_Directory_Structure_and_Coding_Standards.md#L256),
+  [static gate card](./WORKBOARD.md#L1016).
+- **Tracking:** `KB-G0-5` owns restoring the static gates;
+  `KB-DOC-EVIDENCE-QUALITY` owns replacing stale recorded baselines.
+
+#### AUD-2026-11-19-09 — Performance acceptance is not evidenced by current tooling
+
+- **Evidence:** `benchmarks/thresholds.json` contains generic reference-host
+  values, but no calibrated run was found. `performance_acceptance.py` reports
+  `tracemalloc` peak as RSS, and its measured flow does not exercise the
+  documented 50-client stream fan-out or 1000-lines/sec log ingestion.
+  Nginx/proxy behavior remains unverified.
+- **Impact:** The existing benchmark cannot prove the documented RSS,
+  throughput, and stream-performance criteria.
+- **References:** [performance script](../benchmarks/performance_acceptance.py#L17),
+  [thresholds](../benchmarks/thresholds.json),
+  [Document 11 performance criteria](./Document_11_-_Testing_Strategy.md#L130),
+  [performance task](./WORKBOARD.md#L1090).
+- **Tracking:** `KB-PERF-01`, `KB-G5-10`, and `KB-D11-ISO-25010`.
+
+#### AUD-2026-11-19-10 — Workboard is useful but not a complete, current traceability source
+
+- **Evidence:** The WBS is work-package-level and retains obsolete paths; the
+  workboard describes its code backlog as “currently known,” leaves full
+  Document 8/9/10 acceptance open, and has a card under To Do marked
+  “Implemented.” Its top verification snapshot is dated 2026-11-08 even though
+  later evidence appears elsewhere in the file. The follow-up summary says no
+  tests/browser checks were run, while later entries record focused API and
+  live-browser checks.
+- **Impact:** The board is a useful partial backlog, but it does not enumerate
+  every requirement/function and should not be treated as an authoritative
+  release-status snapshot without reconciliation.
+- **References:** [workboard status snapshot](./WORKBOARD.md#L66),
+  [known code backlog](./WORKBOARD.md#L130),
+  [evidence-quality task](./WORKBOARD.md#L884),
+  [WBS reconciliation task](./WORKBOARD.md#L900).
+- **Tracking:** `KB-DOC-EVIDENCE-QUALITY`, `KB-DOC-WBS`,
+  `KB-G8-CONTRACT`, and `KB-G9-CONTRACT`.
+
+### Detailed outstanding implementation and test inventory — 2026-11-19
+
+This addendum records the complete **currently verified** list of known
+unfinished production behavior, planned architectural components, and
+acceptance tests. “Missing” is reserved for confirmed absent behavior.
+“Incomplete/unverified” means some implementation or tests exist, but the
+governing contract has not been traced and accepted end to end. These are not
+interchangeable.
+
+The inventory is bounded by the current repository and open workboard cards.
+It cannot honestly be called exhaustive down to every route, function, or test
+case until `KB-G5-API-CONTRACT`, `KB-G8-CONTRACT`, and `KB-G9-CONTRACT` finish
+their route-by-route/service-by-service inventories. Any additional gaps they
+discover must be added here and to the owning workboard cards. The open
+inventory itself is a known project-tracking gap, not evidence that every
+unlisted feature is complete.
+
+#### Production behavior and planned components not yet complete
+
+| Area | Confirmed missing or incomplete work | Evidence / qualification | Tracking |
+|---|---|---|---|
+| Stale-world cleanup | Product rules are still missing: candidate eligibility, retention, exclusions, preview contents, and execution safeguards. After approval, implement discovery, dry-run preview, and wet deletion for `stale_worlds`, including audit and result summaries. | The API currently rejects this scope as unsupported; `CleanupService` only performs backup-artifact cleanup. Destructive implementation is correctly blocked pending policy. | `KB-G5-CLEANUP-POLICY`, `KB-G5-CLEANUP-SCOPES` |
+| Log cleanup | Define log retention/eligibility and exclusions, then implement candidate discovery, preview, and wet deletion through `CleanupService`, with containment, safeguards, audit, and summaries. | The `logs` cleanup scope is also unsupported; no approved policy exists. | `KB-G5-CLEANUP-POLICY`, `KB-G5-CLEANUP-SCOPES` |
+| Manager restore | Implement the manager configuration restore operation, including scope, encryption-key handling, schema compatibility, and recovery of active sessions/world processes; then add the operator workflow. | `manager_restore()` currently returns `NOT_IMPLEMENTED` (501). | `KB-G5-8` |
+| Manager restart | Define the host-supervisor/relaunch and in-flight-operation contract, then implement the durable authorized restart workflow and UI. | `manager_restart()` currently returns `NOT_IMPLEMENTED` (501); restart also requires step-up authorization. | `KB-G5-8` |
+| Manager update | Define trusted version sources, package verification, staged replacement, migration, and post-update health checks; then implement the durable update workflow and UI. | `manager_update()` currently returns `NOT_IMPLEMENTED` (501). | `KB-G5-8` |
+| Manager rollback | Define target selection, data compatibility, and partial-failure recovery; then implement the durable rollback workflow and UI. | `manager_rollback()` currently returns `NOT_IMPLEMENTED` (501). | `KB-G5-8` |
+| Sync concurrency contract | Decide whether the documented two-simultaneous-transfer cap remains normative; if so, add an admission limit and matching error behavior. | No explicit two-transfer admission guard is evidenced in `SyncService`; its transfer reservation logic does not by itself prove a concurrency cap. The service and spec must be reconciled before calling this implemented. | `KB-G8-CONTRACT`, `KB-G4-VERIFY` |
+| Command/query layer | Complete or explicitly revise the planned command/query dispatch layer. The only command module currently present is `app/commands/world.py`, which wraps Start/Stop/Kill; the separately specified CreateWorld/DeleteWorld/RenameWorld handlers and base/protocol, runtime, backup, restore, cleanup, sync, config, crash, and query handlers are absent as components. | This is a confirmed architecture/layout divergence from Document 12, not proof that each operation's business behavior is absent; some behavior currently resides in routes/services. | `KB-D12-2` |
+| Persistence repositories | Decide and implement the planned SQLite generic, operation, and audit repositories, or update the architecture to accept the current persistence-port/SQL arrangement. | `repository.py`, `operations_repo.py`, and `audit_repo.py` are absent; the board records direct SQL through the persistence abstraction. | `KB-D12-2` |
+| Other operator workflows | Finish the remaining real workflows across the 17 shell modules, including manager lifecycle actions after their backend contracts exist. Complete browser acceptance for recently added settings, properties, sync-target, documentation, and manager-log workflows. | The shell card is partial. Existing UI/API implementation is not acceptance evidence; the recorded Node regression for the latest UI work was not run because Node was unavailable. | `KB-G5-6`, `KB-G5-8`, `KB-G5-API-CONTRACT` |
+
+The documentation separately marks the Google Drive transport, notification
+adapter, and metrics-export adapter as future/stub scope. They are **not**
+counted as missing MVP work in this inventory unless product scope changes.
+Likewise, absent module names whose responsibilities are already implemented
+inside consolidated modules are architecture differences, not automatically
+missing features.
+
+#### Tests and acceptance checks not yet written, complete, or demonstrated
+
+| Test/acceptance area | Remaining required coverage | Evidence / qualification | Tracking |
+|---|---|---|---|
+| Cleanup scopes | Policy and candidate-selection unit tests; API/integration tests for preview freshness, retention/exclusions, blast-radius safeguards, wet deletion, audit, and summaries for stale worlds and logs. | The corresponding cleanup behavior is not implemented, so its feature tests cannot yet pass; add them with the owning implementation card after policy approval. | `KB-G5-CLEANUP-POLICY`, `KB-G5-CLEANUP-SCOPES` |
+| Manager lifecycle | Integration acceptance for manager restore/restart/update/rollback authorization, durable operations, recovery/failure paths, audit, and UI submission/status. | Backup has focused evidence; the other four actions are 501 and have no completed feature acceptance. | `KB-G5-8` |
+| Document 8 service contract | A final acceptance map and any missing tests for every service/operation flow, operation persistence, audit/notification outcomes, cancellation/retry/timeout, scheduler/missed-run behavior, storage guard, and restore recovery. | Focused suites exist, but service-wide acceptance is not established; identify exact missing cases during the contract inventory rather than assuming every listed case is absent. | `KB-G8-CONTRACT`; feature-owner cards |
+| Document 9 concurrency/versioning | Complete the operation-pair conflict matrix, atomic/race behavior, lock release and queue/reject semantics, and stale-version rejection for every versioned entity. | Some conflict and ConfigEdit tests exist; the full matrix and all versioned entities have not been mapped to passing tests. | `KB-G9-CONTRACT`; feature-owner cards |
+| Document 10 API contract | Per-route checks for registration, access/session/CSRF/step-up rules, request and response shape, status/envelope/error mapping, including the newly added APIs and explicit 501 exceptions. | Full route/auth/schema parity remains open; passing selected catalog tests do not establish coverage for every route combination. | `KB-G5-API-CONTRACT` |
+| Shell/browser workflows | Browser acceptance for all production workflows and 17 shell modules, including manager lifecycle UI when implemented; run the recorded-but-unrun Node regression. | A browser suite exists, but workboard acceptance remains partial and the latest regression was not executed. | `KB-G5-6`, `KB-G5-8` |
+| End-to-end flows | Complete the canonical real-HTTP/API + process flows: login and rehydration, start/live-log/stop, SSE snapshot/replay/reconnect, and crash-to-state/operation/notification/audit. | There is no dedicated `tests/e2e/` package. Existing browser and integration tests cover slices, not the complete Document 11 E2E scope. | `KB-D11-TEST-PYRAMID`, feature-owner cards |
+| Unit/integration completeness and coverage | Complete the documented unit/service and SQLite integration inventory; achieve at least 80% line coverage per module and 85% overall; configure/enforce both floors. | Document 11's coverage and pyramid requirements are not closed. Current pytest configuration enforces only an 80% overall floor, not the per-module floor or 85% overall floor. | `KB-D11-COVERAGE`, `KB-D11-TEST-PYRAMID` |
+| Quality-characteristic evidence | Add/complete measurable tests and recorded evidence for every applicable ISO/IEC 25010 characteristic, especially compatibility, flexibility, security, and performance. | The evidence map is partial; compatibility/performance/flexibility acceptance is not established. | `KB-D11-ISO-25010` |
+| Performance acceptance | Measure a documented reference host for 300-second idle CPU/RSS, 50 concurrent 1-Hz SSE clients with compute-once/CPU-flatness, and 1,000 log lines/sec with tail latency. Correct the benchmark so RSS is actually measured as RSS. | A benchmark script exists, but calibrated results and the documented workloads are not established; the current script's `tracemalloc` peak is not process RSS. | `KB-PERF-01`, `KB-G5-10` |
+| Minecraft live acceptance | Run and record the real-server checks for Vanilla, Paper, Fabric, and Forge, covering Java/EULA preflight, readiness, RCON/save behavior where supported, shutdown, and startup-failure classification. | Fake-server and C1–C14 conformance tests are written. Live evidence is partial for Forge only; Vanilla/Paper/Fabric are untested, and Forge did not exit cleanly after RCON stop. | `KB-G1-MINECRAFT`, `KB-G1-FORGE-SHUTDOWN` |
+| Cross-platform conformance | Run the existing C1–C14 suite on a supported POSIX host and record the hosted Ubuntu result. | The tests are written and Windows evidence exists; the POSIX/hosted run remains pending. | `KB-G1-6` |
+| Security CI | Run the existing dedicated security suite on the hosted Ubuntu/Python matrix and record results. | Local focused evidence exists; hosted execution remains pending. | `KB-G5-11` |
+| Live proxy/SSE deployment | Verify proxy configuration and live HTTPS, buffering-disabled SSE reconnect/replay behavior through the supported deployment shape. | Nginx example/configuration exists; live proxy validation has not been run on the current host. | `KB-G5-10` |
+
+#### Explicitly unresolved inventory boundaries
+
+These are not additional claims that specific code is missing. They are the
+remaining audits required to discover and name any further missing functions
+or tests:
+
+- `KB-G5-API-CONTRACT` must finish the Document 10 route-by-route comparison.
+- `KB-G8-CONTRACT` and `KB-G9-CONTRACT` must finish service-flow and
+  concurrency/versioning traceability.
+- `KB-D11-TEST-PYRAMID`, `KB-D11-COVERAGE`, and `KB-D11-ISO-25010` must
+  establish the complete test inventory and measured quality gates.
+- Feature-level test gaps discovered by those audits belong on the owning
+  implementation cards; cross-cutting test infrastructure belongs on the
+  Document 11 cards.
+
+Accordingly, this addendum is the fullest evidence-backed list available now,
+but a claim that it names every missing function/test would be premature until
+the four inventory/acceptance cards above are completed.
+
+### Tracking disposition
+
+**Transfer status:** every currently identified actionable finding and
+addendum item is assigned to an existing or newly created workboard card.
+`docs/WORKBOARD.md` is authoritative for status, ownership, dependencies, and
+verification; this retained audit is not a second task board.
+
+| Audit finding | Workboard task(s) | Transfer |
+|---|---|---|
+| AUD-2026-11-19-01 | `KB-DOC-PLAN-COHERENCE`, `KB-DOC-WBS`, `KB-G8-SYNC-CAP` | Transferred |
+| AUD-2026-11-19-02 | `KB-DOC-PSEUDOCODE-DECISION` | Transferred |
+| AUD-2026-11-19-03 | `KB-G5-CLEANUP-POLICY`, `KB-G5-CLEANUP-SCOPES`, `KB-G5-8`, `KB-G5-6`, `KB-G5-API-CONTRACT` | Transferred |
+| AUD-2026-11-19-04 | `KB-G0-BOUNDARY-REGRESSION`, `KB-D12-2` | Transferred |
+| AUD-2026-11-19-05 | `KB-G8-SYNC-CAP`, `KB-G8-CONTRACT`, `KB-G4-VERIFY` | Transferred |
+| AUD-2026-11-19-06 | `KB-D11-TEST-PYRAMID`, `KB-D11-COVERAGE`, `KB-D11-ISO-25010`, feature-owner cards | Transferred |
+| AUD-2026-11-19-07 | `KB-G0-7`, `KB-G0-BOUNDARY-REGRESSION` | Transferred |
+| AUD-2026-11-19-08 | `KB-G0-5`, `KB-DOC-EVIDENCE-QUALITY` | Transferred |
+| AUD-2026-11-19-09 | `KB-PERF-01`, `KB-G5-10`, `KB-D11-ISO-25010` | Transferred |
+| AUD-2026-11-19-10 | `KB-DOC-EVIDENCE-QUALITY`, `KB-DOC-WBS`, `KB-G5-API-CONTRACT`, `KB-G8-CONTRACT`, `KB-G9-CONTRACT` | Transferred |
+| Detailed implementation/test inventory | Cleanup, manager lifecycle, architecture, API, test, platform, security, and performance cards listed above | Transferred |
+
+The inventory remains bounded by the unresolved route/service/test traceability
+cards (`KB-G5-API-CONTRACT`, `KB-G8-CONTRACT`, `KB-G9-CONTRACT`, and the
+Document 11 cards). Any newly discovered gap must be added to its owning
+workboard card; this is the explicit limit on claims of exhaustiveness.

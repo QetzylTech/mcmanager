@@ -32,10 +32,35 @@ def test_build_container_applies_migrations(
         clock=clock,
     )
     try:
-        count = container.store.reader().execute(
-            "SELECT count(*) FROM sqlite_master WHERE type='table'"
-        ).fetchone()[0]
-        assert count == 27
+        count = (
+            container.store.reader()
+            .execute(
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+            .fetchone()[0]
+        )
+        assert count == 28
+    finally:
+        container.store.close()
+
+
+def test_build_container_defaults_to_packaged_migrations(tmp_path, clock) -> None:
+    container = build_container(
+        database_path=tmp_path / 'manager.db',
+        keyfile_path=tmp_path / 'secrets.key',
+        clock=clock,
+    )
+    try:
+        count = (
+            container.store.reader()
+            .execute(
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+            .fetchone()[0]
+        )
+        assert count == 28
     finally:
         container.store.close()
 

@@ -19,13 +19,12 @@ def test_dev_tooling_contract_exists() -> None:
     assert requirements_dev.exists()
     assert 'pytest-cov' in requirements_dev.read_text(encoding='utf-8')
 
-    requirements = ROOT / 'requirements.txt'
-    assert 'psutil' in requirements.read_text(encoding='utf-8')
+    app_requirements = ROOT / 'app' / 'requirements.txt'
+    assert 'psutil' in app_requirements.read_text(encoding='utf-8')
+    assert 'python-dotenv' in app_requirements.read_text(encoding='utf-8')
+    assert '-r app/requirements.txt' in (ROOT / 'requirements.txt').read_text(encoding='utf-8')
     assert (ROOT / 'app').is_dir()
-    assert (ROOT / 'migrations').is_dir()
+    assert (ROOT / 'app' / 'migrations').is_dir()
     assert (ROOT / 'tests').is_dir()
     assert not (ROOT / 'core').exists()
-    assert (ROOT / 'app' / 'data').is_dir()
-    assert (ROOT / 'app' / 'data' / 'worlds').is_dir()
     assert not (ROOT / 'app' / 'worlds').exists()
-    assert (ROOT / 'app' / 'runtimes').is_dir()

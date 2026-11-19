@@ -1,2 +1,0 @@
-ALTER TABLE java_runtimes
-ADD COLUMN version INTEGER NOT NULL DEFAULT 1;

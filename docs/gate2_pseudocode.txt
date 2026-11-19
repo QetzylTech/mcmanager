@@ -5,13 +5,13 @@ current requirements where they conflict with numbered product documents.
 Their rationale is preserved; this notice explicitly supersedes the stale
 sketch rather than silently removing it.
 
-Documents 6 and 7 are normative for the domain and 27-table schema; Document 9
+Documents 6 and 7 are normative for the domain and 28-table schema; Document 9
 governs optimistic locking; Documents 8, 10 and 12 govern service/API/layout
 contracts. In particular, Document 7's singleton global_settings row plus
 sparse world_settings override is authoritative, not the key/value global
 settings table or the simplified users/secrets/operations/audit DDL below.
 All enforced foreign keys are RESTRICT; IDs, snapshots, deletion tiers and
-closed enums follow Documents 6–7. The schema is in migrations/001_initial_schema.sql
+closed enums follow Documents 6–7. The schema is in app/migrations/001_initial_schema.sql
 and 002_runtime_session_rcon_port.sql; persistence code is in
 app/infrastructure/sqlite/. Do not execute or apply the SQL samples in this file.
 

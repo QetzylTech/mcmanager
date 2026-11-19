@@ -16,10 +16,10 @@ from app.infrastructure.sqlite.migrations import (
     verify_foreign_keys_enforced,
 )
 
-_EXPECTED_TABLE_COUNT = 27
+_EXPECTED_TABLE_COUNT = 28
 
 
-def test_fresh_migration_creates_27_tables(store: SqliteStore) -> None:
+def test_fresh_migration_creates_28_tables(store: SqliteStore) -> None:
     rows = store.reader().execute(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
     ).fetchall()
@@ -71,13 +71,13 @@ def test_migrations_are_idempotent(store: SqliteStore, migrations_dir) -> None:
     """Re-running the runner must not re-apply or fail."""
     run_migrations(store, migrations_dir)
     versions = store.reader().execute('SELECT version FROM schema_migrations').fetchall()
-    assert [row['version'] for row in versions] == [1, 2, 3]
+    assert [row['version'] for row in versions] == [1, 2, 3, 4]
 
 
 def test_failed_migration_rolls_back_ddl_and_version_record(
     store: SqliteStore, tmp_path: Path
 ) -> None:
-    migration = tmp_path / '004_failed_change.sql'
+    migration = tmp_path / '005_failed_change.sql'
     migration.write_text(
         'CREATE TABLE rollback_probe (value TEXT);'
         "INSERT INTO rollback_probe VALUES ('uncommitted');"
@@ -85,7 +85,7 @@ def test_failed_migration_rolls_back_ddl_and_version_record(
         encoding='utf-8',
     )
 
-    with pytest.raises(PersistenceError, match='migration 4'):
+    with pytest.raises(PersistenceError, match='migration 5'):
         run_migrations(store, tmp_path)
 
     table = store.reader().execute(
@@ -95,7 +95,7 @@ def test_failed_migration_rolls_back_ddl_and_version_record(
         'SELECT version FROM schema_migrations ORDER BY version'
     ).fetchall()
     assert table is None
-    assert [row['version'] for row in versions] == [1, 2, 3]
+    assert [row['version'] for row in versions] == [1, 2, 3, 4]
 
 
 def test_sqlite_operational_pragmas_are_applied_per_connection(store: SqliteStore) -> None:

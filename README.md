@@ -1,12 +1,18 @@
 # mcmanager
 
-Minecraft server management software for local networks, built with Python and Flask. The manager supports multiple independent server worlds and versions.
+Minecraft server management software for local networks, built with Python and
+Flask. The manager supports multiple independent server worlds and versions.
+This is a ground-up rebuild of WebServerByJP focused on concurrent servers and
+portability.
 
 ## Project layout
 
-- `app/` and `migrations/` contain the application being built.
-- `docs/`, `tests/`, and `benchmarks/` contain project documentation,
-  verification suites, and performance tooling.
+- `app/` is the distributable application directory. It contains the startup
+  entry point, runtime dependencies, database migrations, the `.env.example`,
+  and the location reserved for curated runtime documentation.
+- `docs/`, `tests/`, and `benchmarks/` are repository-only project
+  documentation, verification suites, and performance tooling; they are not
+  required in an app-only production copy.
 - `app/data/` contains ignored, machine-local databases, secrets, backups,
   logs, and Minecraft server/world files; `app/runtimes/` contains downloaded
   Java runtimes.
@@ -20,19 +26,21 @@ acceptance evidence, is maintained in [docs/WORKBOARD.md](docs/WORKBOARD.md).
 
 ## Development
 
-Run tests from the repository root:
+Install development dependencies and run tests from the repository root:
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Start the app by running `app\start.bat` from Explorer or Command Prompt. The
-batch file creates a local virtual environment, installs runtime dependencies
-when they are missing, and starts the server on localhost:
+Start the app from the repository root with:
 
-```bat
-app\start.bat
+```console
+python app/main.py
 ```
 
-Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and complete the initial
-administrator setup.
+For an app-only deployment, copy `app/`, install its runtime dependencies from
+`requirements.txt`, copy `.env.example` to `.env` in that directory, and run
+`python main.py` from inside it. The `.env` file is local configuration and
+must not be committed. Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and
+complete the initial administrator setup.
