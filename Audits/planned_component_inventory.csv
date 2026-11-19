@@ -1,0 +1,177 @@
+component_id,category,name,specification,implementation_reference,pseudocode_reference,test_reference
+D6-ENTITY-1.1,Domain concept,User (aggregate root; distinct from Device),Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-1.2,Domain concept,RuntimeSession (child of WorldInstance),Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.1,Domain concept,User,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.2,Domain concept,RuntimeSession,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.3,Domain concept,WorldInstance,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.4,Domain concept,Operation,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.5,Domain concept,BackupArtifact,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.6,Domain concept,Schedule,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.6.1,Domain concept,"MissedRunRecord (T1 — permanent; never deleted, soft or hard, by anything incl. Cleanup)",Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.7,Domain concept,CleanupPolicy,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.8,Domain concept,Notification,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.9,Domain concept,AuditRecord,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.10,Domain concept,"Manager (singleton — exactly one row per deployment, hard invariant)",Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.11,Domain concept,JavaRuntime,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.12,Domain concept,Template,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.13,Domain concept,Device,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.14,Domain concept,ClientSession,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.15,Domain concept,Role,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.16,Domain concept,Permission & RoleAssignment,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.17,Domain concept,SyncTarget,Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.17.1,Domain concept,SyncRecord (job wrapper over immutable SyncAttempt rows),Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D6-ENTITY-2.17.2,Domain concept,SyncAttempt (the actual retry history),Document 6,Manual mapping required,No complete function-level pseudocode mapping,No complete requirement-level test mapping
+D7-TABLE-MANAGER,Database table,manager,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-GLOBAL_SETTINGS,Database table,global_settings,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SCHEMA_MIGRATIONS,Database table,schema_migrations,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-WORLD_INSTANCES,Database table,world_instances,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-WORLD_SETTINGS,Database table,world_settings,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-TEMPLATES,Database table,templates,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-JAVA_RUNTIMES,Database table,java_runtimes,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-RUNTIME_SESSIONS,Database table,runtime_sessions,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-OPERATIONS,Database table,operations,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-BACKUP_ARTIFACTS,Database table,backup_artifacts,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-RESTORE_HISTORY,Database table,restore_history,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SCHEDULES,Database table,schedules,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-MISSED_RUN_RECORDS,Database table,missed_run_records,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-CLEANUP_POLICIES,Database table,cleanup_policies,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SYNC_TARGETS,Database table,sync_targets,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SYNC_RECORDS,Database table,sync_records,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SYNC_ATTEMPTS,Database table,sync_attempts,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-NOTIFICATIONS,Database table,notifications,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-NOTIFICATION_READS,Database table,notification_reads,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-AUDIT_RECORDS,Database table,audit_records,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-USERS,Database table,users,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-ROLES,Database table,roles,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-ROLE_ASSIGNMENTS,Database table,role_assignments,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-PERMISSIONS,Database table,permissions,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-DEVICES,Database table,devices,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-CLIENT_SESSIONS,Database table,client_sessions,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SECRETS,Database table,secrets,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D7-TABLE-SERVER_PROPERTIES_VERSIONS,Database table,server_properties_versions,Document 7,Inspect migrations/schema and persistence code,No complete table/operation pseudocode mapping,No complete table/constraint acceptance mapping
+D8-SERVICE-WORLDSERVICE,Application service,WorldService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-RUNTIMESERVICE,Application service,RuntimeService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-OPERATIONSERVICE,Application service,OperationService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-BACKUPSERVICE,Application service,BackupService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-RESTORESERVICE,Application service,RestoreService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-CLEANUPSERVICE,Application service,CleanupService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-SYNCSERVICE,Application service,SyncService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-SCHEDULERSERVICE,Application service,SchedulerService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-AUTHENTICATIONSERVICE,Application service,AuthenticationService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-AUTHORIZATIONSERVICE,Application service,AuthorizationService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-NOTIFICATIONSERVICE,Application service,NotificationService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-AUDITSERVICE,Application service,AuditService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-FILEMANAGERSERVICE,Application service,FileManagerService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-TEMPLATESERVICE-JAVARUNTIMESERVICE,Application service,TemplateService / JavaRuntimeService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-CONFIGURATIONSERVICE,Application service,ConfigurationService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D8-SERVICE-METRICSSERVICE,Application service,MetricsService,Document 8,Service modules; responsibility mapping required,Legacy gate snapshots only,Service-by-service acceptance mapping open
+D10-ROUTE-019432A0,API route,POST /api/auth/login,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-4EFCCD3A,API route,POST /api/auth/logout,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5281D579,API route,POST /api/auth/step-up,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-CD9B6326,API route,GET /api/session,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-33861F81,API route,GET /api/worlds,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-CD6B7390,API route,POST /api/worlds,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-8E79847A,API route,GET /api/worlds/{world_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-A4A24E30,API route,PATCH /api/worlds/{world_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-B95E3575,API route,POST /api/worlds/{world_id}/delete-preview,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5EB33943,API route,DELETE /api/worlds/{world_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5BB0A17D,API route,GET /api/worlds/{world_id}/runtime-config,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-854BEDD9,API route,PATCH /api/worlds/{world_id}/runtime-config,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-F989A4AD,API route,POST /api/worlds/{world_id}/start,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-D2BB08DF,API route,POST /api/worlds/{world_id}/stop,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-0746B1EB,API route,POST /api/worlds/{world_id}/kill,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2BE06FC4,API route,POST /api/worlds/{world_id}/server-properties,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-577A2B06,API route,GET /api/worlds/{world_id}/server-properties,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-A8322318,API route,POST /api/worlds/{world_id}/eula/accept,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-733FA611,API route,GET /api/worlds/{world_id}/eula,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-4A034AB5,API route,GET /api/operations,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5CA4CA7A,API route,GET /api/operations/{op_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-9FF87855,API route,POST /api/operations/{op_id}/cancel,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-3D3204B6,API route,GET /api/worlds/{world_id}/operations,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-B4FAC0F9,API route,GET /api/worlds/{world_id}/backups,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-DB6FB0FA,API route,POST /api/worlds/{world_id}/backups,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-500647F1,API route,GET /api/backups/{artifact_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-9C71144B,API route,DELETE /api/backups/{artifact_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-4656F5F3,API route,GET /api/backups,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-947E9280,API route,GET /api/worlds/{world_id}/restores,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-32DA708B,API route,POST /api/worlds/{world_id}/restores,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2E264611,API route,POST /api/worlds/{world_id}/restores/rollback,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-9EB214D9,API route,GET /api/cleanup/policy,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-0E1EB957,API route,PATCH /api/cleanup/policy,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-DE4EEF3C,API route,POST /api/cleanup/dry-run,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2A3934A4,API route,POST /api/cleanup/execute,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-B75CAF25,API route,GET /api/cleanup/runs,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-02557F33,API route,GET /api/worlds/{world_id}/cleanup-preview,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-DFE9A4A9,API route,GET /api/sync/records,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-B1A9D288,API route,GET /api/backups/{artifact_id}/sync,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-129EEA9D,API route,POST /api/sync/retry,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-F4CA104F,API route,GET /api/sync/targets,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-8E4FEF13,API route,POST /api/sync/targets,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-B74B0062,API route,PATCH /api/sync/targets/{target_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-32930AE3,API route,DELETE /api/sync/targets/{target_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-247556BF,API route,GET /api/schedules,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-8D000936,API route,POST /api/schedules,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-3D3D200C,API route,PATCH /api/schedules/{schedule_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-A77FABA9,API route,DELETE /api/schedules/{schedule_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-E080B606,API route,GET /api/missed-runs,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-649A938A,API route,PATCH /api/missed-runs/{missed_run_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-74A933A4,API route,GET /api/settings,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-AE3EAE6A,API route,PATCH /api/settings,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-687C6FDF,API route,GET /api/worlds/{world_id}/settings,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-98989EDA,API route,PATCH /api/worlds/{world_id}/settings,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-9B116120,API route,GET /api/manager,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-D0A196EB,API route,POST /api/manager/backup,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-789F65E0,API route,POST /api/manager/restore,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-08160B45,API route,POST /api/manager/restart,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-E6B77AC4,API route,POST /api/manager/update,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-E967BABF,API route,POST /api/manager/rollback,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-62199334,API route,GET /api/setup,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-28103498,API route,POST /api/setup,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-B6AE3B1D,API route,GET /api/templates,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-3C13E416,API route,POST /api/templates,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-EB306E07,API route,PATCH /api/templates/{template_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2C567C45,API route,DELETE /api/templates/{template_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2A2E4B19,API route,GET /api/java-runtimes,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-D5D7864A,API route,POST /api/java-runtimes,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-1DB975B9,API route,POST /api/java-runtimes/{runtime_id}/verify,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-6ED05AE0,API route,PATCH /api/java-runtimes/{runtime_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-D7271DAE,API route,DELETE /api/java-runtimes/{runtime_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-CD7628B0,API route,GET /api/users,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-8C869FDF,API route,POST /api/users,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-52170027,API route,PATCH /api/users/{user_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-F4758441,API route,DELETE /api/users/{user_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-EE951F6B,API route,GET /api/roles,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-7817D70F,API route,POST /api/roles,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-17B639B7,API route,PATCH /api/roles/{role_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-FF99E7BE,API route,DELETE /api/roles/{role_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5E464FF0,API route,GET /api/roles/{role_id}/permissions,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-A805D882,API route,POST /api/permissions,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-1EDF3C53,API route,DELETE /api/permissions/{permission_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5251C510,API route,GET /api/devices,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2243A748,API route,PATCH /api/devices/{device_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-17F505CC,API route,GET /api/devices/{device_id}/sessions,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-41CA0A35,API route,GET /api/session/activity,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-50DFD790,API route,GET /api/notifications,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-7B70292D,API route,POST /api/notifications/{notification_id}/read,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-5E51B518,API route,POST /api/notifications/{notification_id}/dismiss,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-8FC2D7E3,API route,POST /api/notifications/read-all,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2BD29A75,API route,GET /api/audit,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-6C91DF2B,API route,GET /api/audit/{audit_id},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-20C9F788,API route,GET /api/worlds/{world_id}/files,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-650D13BF,API route,GET /api/worlds/{world_id}/files/download,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-7E8A7AFB,API route,POST /api/worlds/{world_id}/files,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2DBA3746,API route,POST /api/worlds/{world_id}/files/mkdir,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-95F4D625,API route,PATCH /api/worlds/{world_id}/files,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-148BAB8B,API route,DELETE /api/worlds/{world_id}/files,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-193A6D52,API route,GET /api/worlds/{world_id}/logs,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-8EB23A2B,API route,GET /api/worlds/{world_id}/logs/{channel},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-83FDD86B,API route,GET /api/worlds/{world_id}/logs/{channel}/{file},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-EFB965DB,API route,GET /api/worlds/{world_id}/logs/{channel}/tail,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-76E4922F,API route,GET /api/documentation,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-053B6F67,API route,GET /api/documentation/{path},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-33394EC3,API route,GET /api/manager/logs,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-4AF14666,API route,GET /api/manager/logs/{channel},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-472C8B25,API route,GET /api/manager/logs/{channel}/{file},Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-2F4BDBFC,API route,GET /api/health,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-3EC913B6,API route,GET /api/system/stats,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping
+D10-ROUTE-58238C6F,API route,GET /api/diagnostics,Document 10,Compare against route_inventory.csv,No route-by-route pseudocode mapping,No route-by-route test mapping

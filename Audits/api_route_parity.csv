@@ -1,0 +1,121 @@
+documented_method,documented_path,source_match_count,source_handlers,status
+POST,/api/auth/login,1,login (app/web/api/auth_routes.py:110),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/auth/logout,1,logout (app/web/api/auth_routes.py:143),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/auth/step-up,1,step_up (app/web/api/auth_routes.py:159),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/session,1,current_session (app/web/api/auth_routes.py:190),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds,1,list_worlds (app/web/api/system.py:95),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds,1,create_world (app/web/api/world_management.py:180),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id},1,get_world (app/web/api/system.py:147),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/worlds/{world_id},1,update_world (app/web/api/world_management.py:282),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/delete-preview,1,world_delete_preview (app/web/api/world_management.py:317),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/worlds/{world_id},1,delete_world (app/web/api/world_management.py:351),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/runtime-config,1,get_runtime_config (app/web/api/world_management.py:388),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/worlds/{world_id}/runtime-config,1,update_runtime_config (app/web/api/world_management.py:409),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/start,1,world_start (app/web/api/system.py:272),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/stop,1,world_stop (app/web/api/system.py:333),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/kill,1,world_kill (app/web/api/system.py:358),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/server-properties,1,update_server_properties (app/web/api/server_properties.py:69),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/server-properties,1,get_server_properties (app/web/api/server_properties.py:53),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/eula/accept,1,world_eula_accept (app/web/api/system.py:297),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/eula,1,get_world_eula (app/web/api/world_management.py:495),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/operations,1,list_operations (app/web/api/system.py:237),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/operations/{op_id},1,get_operation (app/web/api/system.py:178),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/operations/{op_id}/cancel,1,cancel_operation (app/web/api/system.py:253),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/operations,1,list_world_operations (app/web/api/system.py:242),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/backups,1,list_world_backups (app/web/api/backup_catalogs.py:216),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/backups,1,create_world_backup (app/web/api/backup_catalogs.py:243),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/backups/{artifact_id},1,get_backup (app/web/api/backup_catalogs.py:285),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/backups/{artifact_id},1,delete_backup (app/web/api/backup_catalogs.py:296),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/backups,1,list_backups (app/web/api/backup_catalogs.py:257),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/restores,1,list_world_restores (app/web/api/backup_catalogs.py:329),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/restores,1,create_restore (app/web/api/backup_catalogs.py:393),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/restores/rollback,1,rollback_restore (app/web/api/backup_catalogs.py:407),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/cleanup/policy,1,get_global_cleanup_policy (app/web/api/backup_catalogs.py:599),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/cleanup/policy,1,patch_global_cleanup_policy (app/web/api/backup_catalogs.py:623),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/cleanup/dry-run,1,cleanup_dry_run (app/web/api/backup_catalogs.py:515),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/cleanup/execute,1,cleanup_execute (app/web/api/backup_catalogs.py:523),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/cleanup/runs,1,list_cleanup_runs (app/web/api/backup_catalogs.py:570),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/cleanup-preview,1,world_cleanup_preview (app/web/api/backup_catalogs.py:582),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/sync/records,1,list_sync_records (app/web/api/backup_catalogs.py:961),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/backups/{artifact_id}/sync,1,get_backup_sync (app/web/api/backup_catalogs.py:985),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/sync/retry,1,retry_sync (app/web/api/backup_catalogs.py:1010),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/sync/targets,1,list_sync_targets (app/web/api/backup_catalogs.py:1032),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/sync/targets,1,create_sync_target (app/web/api/backup_catalogs.py:1065),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/sync/targets/{target_id},1,update_sync_target (app/web/api/backup_catalogs.py:1174),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/sync/targets/{target_id},1,delete_sync_target (app/web/api/backup_catalogs.py:1274),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/schedules,1,list_schedules (app/web/api/catalogs.py:128),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/schedules,1,create_schedule (app/web/api/catalogs.py:159),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/schedules/{schedule_id},1,update_schedule (app/web/api/catalogs.py:254),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/schedules/{schedule_id},1,delete_schedule (app/web/api/catalogs.py:339),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/missed-runs,1,list_missed_runs (app/web/api/catalogs.py:369),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/missed-runs/{missed_run_id},1,resolve_missed_run (app/web/api/catalogs.py:392),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/settings,1,get_global_settings (app/web/api/configuration.py:76),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/settings,1,update_global_settings (app/web/api/configuration.py:101),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/settings,1,get_world_settings (app/web/api/configuration.py:149),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/worlds/{world_id}/settings,1,update_world_settings (app/web/api/configuration.py:175),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/manager,1,get_manager (app/web/api/administration.py:48),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/manager/backup,1,manager_backup (app/web/api/administration.py:144),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/manager/restore,1,manager_restore (app/web/api/administration.py:154),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/manager/restart,1,manager_restart (app/web/api/administration.py:162),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/manager/update,1,manager_update (app/web/api/administration.py:170),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/manager/rollback,1,manager_rollback (app/web/api/administration.py:178),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/setup,1,get_setup (app/web/api/administration.py:71),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/setup,1,complete_setup (app/web/api/administration.py:82),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/templates,1,list_templates (app/web/api/catalogs.py:422),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/templates,1,create_template (app/web/api/catalogs.py:452),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/templates/{template_id},1,update_template (app/web/api/catalogs.py:520),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/templates/{template_id},1,deprecate_template (app/web/api/catalogs.py:558),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/java-runtimes,1,list_java_runtimes (app/web/api/catalogs.py:583),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/java-runtimes,1,register_java_runtime (app/web/api/catalogs.py:603),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/java-runtimes/{runtime_id}/verify,1,verify_java_runtime (app/web/api/catalogs.py:658),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/java-runtimes/{runtime_id},1,update_java_runtime (app/web/api/catalogs.py:710),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/java-runtimes/{runtime_id},1,deprecate_java_runtime (app/web/api/catalogs.py:750),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/users,1,list_users (app/web/api/administration.py:186),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/users,1,create_user (app/web/api/administration.py:210),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/users/{user_id},1,update_user (app/web/api/administration.py:272),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/users/{user_id},1,delete_user (app/web/api/administration.py:359),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/roles,1,list_roles (app/web/api/administration.py:413),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/roles,1,create_role (app/web/api/administration.py:432),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/roles/{role_id},1,update_role (app/web/api/administration.py:453),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/roles/{role_id},1,delete_role (app/web/api/administration.py:495),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/roles/{role_id}/permissions,1,list_role_permissions (app/web/api/administration.py:536),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/permissions,1,grant_permission (app/web/api/administration.py:553),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/permissions/{permission_id},1,revoke_permission (app/web/api/administration.py:602),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/devices,1,list_devices (app/web/api/administration.py:622),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/devices/{device_id},1,update_device (app/web/api/administration.py:641),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/devices/{device_id}/sessions,1,device_sessions (app/web/api/administration.py:688),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/session/activity,1,session_activity (app/web/api/administration.py:716),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/notifications,1,list_notifications (app/web/api/history.py:47),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/notifications/{notification_id}/read,1,read_notification (app/web/api/history.py:123),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/notifications/{notification_id}/dismiss,1,dismiss_notification (app/web/api/history.py:131),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/notifications/read-all,1,read_all_notifications (app/web/api/history.py:139),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/audit,1,list_audit (app/web/api/history.py:165),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/audit/{audit_id},1,get_audit (app/web/api/history.py:223),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/files,1,list_world_files (app/web/api/world_management.py:504),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/files/download,1,download_world_file (app/web/api/world_management.py:547),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/files,1,upload_world_file (app/web/api/world_management.py:561),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+POST,/api/worlds/{world_id}/files/mkdir,1,create_world_directory (app/web/api/world_management.py:589),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+PATCH,/api/worlds/{world_id}/files,1,edit_world_file (app/web/api/world_management.py:620),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+DELETE,/api/worlds/{world_id}/files,1,delete_world_file (app/web/api/world_management.py:696),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/logs,1,list_world_log_channels (app/web/api/world_management.py:733),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/logs/{channel},1,list_world_log_files (app/web/api/world_management.py:811),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/logs/{channel}/{file},1,download_world_log (app/web/api/world_management.py:796),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/worlds/{world_id}/logs/{channel}/tail,1,tail_world_log (app/web/api/world_management.py:751),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/documentation,1,list_documentation (app/web/api/manager_content.py:93),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/documentation/{path},1,read_documentation (app/web/api/manager_content.py:120),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/manager/logs,1,list_manager_log_channels (app/web/api/manager_content.py:157),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/manager/logs/{channel},1,list_manager_log_files (app/web/api/manager_content.py:163),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/manager/logs/{channel}/{file},1,download_manager_log (app/web/api/manager_content.py:189),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/health,1,health (app/web/api/system.py:73),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/system/stats,1,system_stats (app/web/api/system.py:86),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+GET,/api/diagnostics,1,diagnostics (app/web/api/system.py:80),ROUTE SHAPE FOUND — contract/auth/schema/test still unverified
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /api/worlds/<world_id>/cleanup-policy → get_world_cleanup_policy (app/web/api/backup_catalogs.py:725),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,PATCH /api/worlds/<world_id>/cleanup-policy → patch_world_cleanup_policy (app/web/api/backup_catalogs.py:762),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /api/pages → list_pages (app/web/api/pages.py:18),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /api/pages/<slug> → page_module (app/web/api/pages.py:30),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,POST /api/supervisor/tick → supervisor_tick (app/web/api/system.py:383),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /stream/events → manager_events (app/web/streams/routes.py:294),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /stream/worlds/<world_id>/events → world_events (app/web/streams/routes.py:306),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /stream/worlds/<world_id>/logs → world_logs (app/web/streams/routes.py:318),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /stream/restore_logs → restore_logs (app/web/streams/routes.py:491),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
+NOT IN DOC 10 ROUTE CATALOG,NOT IN DOC 10 ROUTE CATALOG,1,GET /stream/metrics → metrics (app/web/streams/routes.py:508),ADDITIONAL ROUTE — determine whether documented elsewhere or needs contract update
