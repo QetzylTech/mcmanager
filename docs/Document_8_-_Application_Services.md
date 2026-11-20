@@ -13,7 +13,7 @@ Concrete service behavior from Doc 6/7 — who does what, in what order, with re
 | OperationService | Op:Create/Status/Checkpoint/Idempotency/Timeout/Cancel, in-memory progress broadcast, milestone-only persistence, Lock:ReleaseAtTerminal (Doc 9 §1.1) | Domain action:owning service | `operations` |
 | BackupService | Backup:Capture/RegisterArtifact/ResumeAutosave, RCON:NotifyPlayers, Sync:TriggerFollowOn, ManagerBackup(world_id=NULL) | When:Scheduler/User, Transfer:SyncService | `backup_artifacts`, `operations`(checkpoints), `runtime_sessions`(R) |
 | RestoreService | Restore:Validate/PreBackup/Stage/Archive/Switch/RestartIfWasRunning, History:Record | PreBackup:BackupService | `restore_history`, `backup_artifacts`, `world_instances`, `operations` |
-| CleanupService | Retention:Dry/Wet, Delete:HardOnlyPath (any Tier 2 past window) | — | `backup_artifacts`(file+row), stale world dirs, aged-out soft-deleted Tier 2 rows |
+| CleanupService | Retention:Preview/Wet, StaleBackup:Tombstone/Purge, ScheduledBackup:Cap(3), HistoricalLog:Expire | — | `backup_artifacts`(file+row), expired rotated session-log files; never world directories or records |
 | SyncService | Sync:Transfer, Records:JobPerArtifact+AttemptPerTry, Retry:TransientBackoff (§6) | Target/Creds:ConfigurationService, Backup:BackupService | `sync_records`, `sync_attempts`, `sync_targets`(R), `backup_artifacts`(R), `secrets`(adapter) |
 | SchedulerService | Schedule:Evaluate/Dispatch, Missed:Detect+Record(create only) | Work:owning service | `schedules`, `missed_run_records`(create), `operations`(create) |
 | AuthenticationService | Login:User+Pass, Session:Issue/StepUp, Throttle:PassRetry/Lockout | Authorize:AuthorizationService | `users`, `secrets`(password check), `client_sessions`, `devices`(context) |
@@ -54,7 +54,7 @@ Standard shape for all: authorize → validate preconditions → create Operatio
 - **Start:** POST /worlds/{id}/start → authz(start) → create Op(Queued) → dispatch → launch via platform adapter → checkpoint(starting) → wait readiness → checkpoint(running) + open RuntimeSession → audit(OpCompleted) → notify(WorldStarted).
 - **Backup (running):** trigger → create Op → dispatch → storage guard → RCON pause autosave → capture archive → register BackupArtifact → RCON resume autosave → checkpoint(Completed) → audit.
 - **Restore:** create Op (password-verified) → dispatch → validate artifact integrity → **mandatory pre-restore backup** → stage extracted files → archive old world → switch server.properties → record restore_history → checkpoint(Completed | Failed[reverted]) → audit.
-- **Cleanup (wet):** create Op(wet=true, password+ack) → dispatch → evaluate candidates against CleanupPolicy floors → apply blast-radius cap → physical DELETE (only hard-delete path) → checkpoint(Completed, summary in data_json) → audit.
+- **Cleanup (wet):** require an exact completed preview → dispatch → evaluate candidates against the current CleanupPolicy and references → enforce the 500-target cap/elevated confirmation → stale backups are tombstoned under storage pressure, then purged only after the 3-day grace; eligible rotated logs may be removed under finite retention → checkpoint(Completed, summary in data_json) → audit. World directories and records are never selected.
 - **Sync (auto after backup):** register artifact → create Op(Sync, artifact_id) → dispatch → create sync_records(pending) → resolve SyncTarget → loop attempts: upload; insert immutable sync_attempts row (attempt_number+1) → update sync_records.status from latest attempt → checkpoint(Completed|Failed) → notify(SyncFailed) on terminal failure.
 - **Crash detection:** probe observes unexpected exit → create Op(CrashDetected, actor=system) → state=crashed, close RuntimeSession(end_reason=crashed) → audit → notify(WorldCrashed).
 - **ConfigEdit:** PATCH with version → authz → **compare submitted version vs current; stale → 409 CONFIG_VERSION_CONFLICT, no Operation** (Doc 9 §4) → create Op → apply write (deleted_at/revoked marker if applicable) → checkpoint(Completed) → audit with before/after diff in payload.
@@ -73,6 +73,7 @@ Standard shape for all: authorize → validate preconditions → create Operatio
 
 - Evaluate all enabled `schedules` on a fixed tick: **every 30 seconds** (locked, §6.0).
 - Per due schedule: check conflicting in-flight Operation for the same scope (Doc 9); if clear, create+dispatch; if not clear, or tick missed (manager down/skipped), create `missed_run_records` row — **missed runs are never auto-caught-up**.
+- Scheduled world backups are classified as `scheduled`; on success they enqueue a durable Cleanup Operation that retains the newest three scheduled artifacts. Restore/sync-referenced artifacts are protected, so the count may exceed three when references prevent safe deletion.
 - A missed run sits `pending` until an operator marks it `resolved` (manually running the job) or `ignored`.
 
 ## 5 Retry, timeout, cancellation
@@ -100,6 +101,12 @@ Ship as defaults in `global_settings`; globally overridable only where the table
 | Supervisor poll cadence | **1s** running; **15s** idle/all-off | Doc 13 §4.1; not user-configurable |
 | Render interval (live metrics) | **1Hz** | bounded by MetricsCadence |
 | Blast-radius cap | **500 candidates** per cleanup action | beyond this, elevated confirmation required (Doc 10 `CLEANUP_BLAST_RADIUS`); configurable |
+| Scheduled backup cap | **3 artifacts per world** | enforced by a durable Cleanup Operation after scheduled backups; referenced artifacts may exceed the cap |
+| Stale-backup age floor | **3 days** | hard minimum; default 3 days |
+| Stale-backup session threshold | **7 completed runtime sessions** | counted for the same world after artifact creation |
+| Stale-backup storage trigger | **90% used** | tombstoning only; matured purge is not blocked by lower utilization |
+| Stale-backup tombstone grace | **3 days** | minimum delay before file and metadata purge |
+| Historical-log retention | **Unlimited** | only explicitly configured finite retention enables expired rotated-log deletion |
 | Password retry throttle | **5 failures** → lockout; lockout **15 min** | configurable via `global_settings` (Doc 6 §1.1) |
 | Session expiry | **7 days** inactivity; absolute max **30 days** | Doc 6 §2.14; configurable |
 | Idle auto-stop default | **off** (disabled) | per-world `idle_countdown_seconds`; 3-tier settings (Doc 6 §2.10) |

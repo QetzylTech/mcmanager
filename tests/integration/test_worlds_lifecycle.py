@@ -182,9 +182,7 @@ def test_worlds_start_reaches_running_then_stop_returns_off(tmp_path):
         )
         assert session is not None
         assert session["rcon_port"] == port + 10
-        session_log = (
-            tmp_path / "worlds" / "logs" / "world_1" / f"{session_id}.log"
-        )
+        session_log = tmp_path / "worlds" / "logs" / "world_1" / f"{session_id}.log"
         channel_log = session_log.with_name(f"{session_id}.stdout.log")
         assert _wait_for(
             lambda: session_log.exists()
@@ -239,6 +237,52 @@ def test_worlds_reports_open_session_crash_and_reconciles_missing(tmp_path):
         container.store.close()
 
 
+def test_reconcile_never_probes_eula_required_world(tmp_path, monkeypatch):
+    container = build_container(
+        database_path=tmp_path / "eula-reconcile.db",
+        keyfile_path=tmp_path / "eula-reconcile.key",
+        migrations_dir=_MIGRATIONS,
+    )
+    try:
+        port = _free_port()
+        _seed_world(container.store, "world_eula_reconcile", port, tmp_path / "worlds")
+        now = int(container.clock.now())
+        connection = container.store.writer()
+        connection.execute(
+            "UPDATE world_instances SET state = ? WHERE world_id = ?",
+            (WorldState.EULA_REQUIRED.value, "world_eula_reconcile"),
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_sessions (
+                session_id, world_id, started_at, ended_at, end_reason,
+                rcon_secret_id, port_used, java_runtime_id,
+                launch_args_snapshot, rcon_port, created_at
+            ) VALUES (?, ?, ?, NULL, NULL, 'sec_admin', ?, 'java', '{}', ?, ?)
+            """,
+            ("rs_eula_reconcile", "world_eula_reconcile", now, port, port + 10, now),
+        )
+        connection.commit()
+
+        def unexpected_probe(*_args, **_kwargs):
+            raise AssertionError("eula_required worlds must not be probed")
+
+        monkeypatch.setattr(container.process_adapter, "probe", unexpected_probe)
+
+        assert container.worlds.reconcile() == []
+        session = (
+            container.store.reader()
+            .execute(
+                "SELECT ended_at FROM runtime_sessions WHERE session_id = ?",
+                ("rs_eula_reconcile",),
+            )
+            .fetchone()
+        )
+        assert session["ended_at"] is None
+    finally:
+        container.store.close()
+
+
 def test_reconcile_fails_interrupted_start_without_open_session(tmp_path):
     container = build_container(
         database_path=tmp_path / "interrupted-start.db",
@@ -267,10 +311,15 @@ def test_reconcile_fails_interrupted_start_without_open_session(tmp_path):
         assert operation_row["status"] == OperationStatus.FAILED.value
         assert operation_row["error_code"] == "manager_restart_incomplete"
         assert _state(container.store, "world_interrupted") == WorldState.ERROR.value
-        assert container.store.reader().execute(
-            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-            (operation["op_id"],),
-        ).fetchone()[0] == 1
+        assert (
+            container.store.reader()
+            .execute(
+                "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+                (operation["op_id"],),
+            )
+            .fetchone()[0]
+            == 1
+        )
     finally:
         container.store.close()
 
@@ -319,19 +368,28 @@ def test_reconcile_fails_start_when_open_session_process_is_missing(tmp_path, mo
         assert container.worlds.reconcile() == []
 
         operation_row = container.operations.get(operation["op_id"])
-        session = container.store.reader().execute(
-            "SELECT ended_at, end_reason FROM runtime_sessions WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
+        session = (
+            container.store.reader()
+            .execute(
+                "SELECT ended_at, end_reason FROM runtime_sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            .fetchone()
+        )
         assert operation_row["status"] == OperationStatus.FAILED.value
         assert operation_row["error_code"] == "manager_restart_incomplete"
         assert _state(container.store, "world_missing_process") == WorldState.ERROR.value
         assert session["ended_at"] is not None
         assert session["end_reason"] == EndReason.RECONCILED_MISSING.value
-        assert container.store.reader().execute(
-            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-            (operation["op_id"],),
-        ).fetchone()[0] == 1
+        assert (
+            container.store.reader()
+            .execute(
+                "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+                (operation["op_id"],),
+            )
+            .fetchone()[0]
+            == 1
+        )
     finally:
         container.store.close()
 
@@ -357,23 +415,36 @@ def test_start_timeout_terminalizes_operation_and_closes_session(tmp_path, monke
         with pytest.raises(StartTimeoutError):
             container.worlds.start(world_id="world_start_timeout")
 
-        operation = container.store.reader().execute(
-            "SELECT op_id, status, error_code FROM operations WHERE world_id = ?",
-            ("world_start_timeout",),
-        ).fetchone()
-        session = container.store.reader().execute(
-            "SELECT ended_at, end_reason FROM runtime_sessions WHERE world_id = ?",
-            ("world_start_timeout",),
-        ).fetchone()
+        operation = (
+            container.store.reader()
+            .execute(
+                "SELECT op_id, status, error_code FROM operations WHERE world_id = ?",
+                ("world_start_timeout",),
+            )
+            .fetchone()
+        )
+        session = (
+            container.store.reader()
+            .execute(
+                "SELECT ended_at, end_reason FROM runtime_sessions WHERE world_id = ?",
+                ("world_start_timeout",),
+            )
+            .fetchone()
+        )
         assert operation["status"] == OperationStatus.TIMED_OUT.value
         assert operation["error_code"] == "START_TIMEOUT"
         assert _state(container.store, "world_start_timeout") == WorldState.ERROR.value
         assert session["ended_at"] is not None
         assert session["end_reason"] == EndReason.CRASHED.value
-        assert container.store.reader().execute(
-            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-            (operation["op_id"],),
-        ).fetchone()[0] == 1
+        assert (
+            container.store.reader()
+            .execute(
+                "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+                (operation["op_id"],),
+            )
+            .fetchone()[0]
+            == 1
+        )
     finally:
         container.store.close()
 
@@ -412,27 +483,44 @@ def test_reconcile_records_crash_operation_audit_and_notification(tmp_path, monk
 
         assert container.worlds.reconcile() == []
 
-        crash = container.store.reader().execute(
-            "SELECT op_id, status FROM operations WHERE op_type = ?",
-            (OperationType.CRASH_DETECTED.value,),
-        ).fetchone()
-        session = container.store.reader().execute(
-            "SELECT ended_at, end_reason FROM runtime_sessions WHERE session_id = ?",
-            ("rs_reconciled_crash",),
-        ).fetchone()
-        notification = container.store.reader().execute(
-            "SELECT category, severity, related_operation_id, related_world_id "
-            "FROM notifications WHERE related_operation_id = ?",
-            (crash["op_id"],),
-        ).fetchone()
+        crash = (
+            container.store.reader()
+            .execute(
+                "SELECT op_id, status FROM operations WHERE op_type = ?",
+                (OperationType.CRASH_DETECTED.value,),
+            )
+            .fetchone()
+        )
+        session = (
+            container.store.reader()
+            .execute(
+                "SELECT ended_at, end_reason FROM runtime_sessions WHERE session_id = ?",
+                ("rs_reconciled_crash",),
+            )
+            .fetchone()
+        )
+        notification = (
+            container.store.reader()
+            .execute(
+                "SELECT category, severity, related_operation_id, related_world_id "
+                "FROM notifications WHERE related_operation_id = ?",
+                (crash["op_id"],),
+            )
+            .fetchone()
+        )
         assert crash["status"] == OperationStatus.COMPLETED.value
         assert _state(container.store, "world_reconciled_crash") == WorldState.CRASHED.value
         assert session["ended_at"] is not None
         assert session["end_reason"] == EndReason.RECONCILED_MISSING.value
-        assert container.store.reader().execute(
-            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-            (crash["op_id"],),
-        ).fetchone()[0] == 1
+        assert (
+            container.store.reader()
+            .execute(
+                "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+                (crash["op_id"],),
+            )
+            .fetchone()[0]
+            == 1
+        )
         assert notification["category"] == "world_lifecycle"
         assert notification["severity"] == "critical"
         assert notification["related_world_id"] == "world_reconciled_crash"
@@ -486,9 +574,9 @@ def test_external_eula_file_edit_cannot_bypass_audited_acceptance(tmp_path):
             container.worlds.start(world_id="world_external_eula")
 
         assert _state(container.store, "world_external_eula") == WorldState.EULA_REQUIRED.value
-        assert container.store.reader().execute(
-            "SELECT COUNT(*) FROM operations"
-        ).fetchone()[0] == 0
+        assert (
+            container.store.reader().execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
+        )
     finally:
         container.store.close()
 
@@ -540,22 +628,35 @@ def test_eula_acceptance_is_explicit_and_audited(tmp_path):
 
         assert "eula=true" in (world_dir / "eula.txt").read_text(encoding="utf-8")
         assert _state(container.store, "world_accept_eula") == WorldState.OFF.value
-        audit = container.store.reader().execute(
-            "SELECT actor_user_id, world_id, event_type FROM audit_records "
-            "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
-            ("world_accept_eula",),
-        ).fetchone()
+        audit = (
+            container.store.reader()
+            .execute(
+                "SELECT actor_user_id, world_id, event_type FROM audit_records "
+                "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
+                ("world_accept_eula",),
+            )
+            .fetchone()
+        )
         assert audit["actor_user_id"] == "u_admin"
         assert audit["world_id"] == "world_accept_eula"
-        assert container.store.reader().execute(
-            "SELECT count(*) FROM audit_records "
-            "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
-            ("world_accept_eula",),
-        ).fetchone()[0] == 1
-        operation = container.store.reader().execute(
-            "SELECT op_type, status, data_json FROM operations WHERE world_id = ?",
-            ("world_accept_eula",),
-        ).fetchone()
+        assert (
+            container.store.reader()
+            .execute(
+                "SELECT count(*) FROM audit_records "
+                "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
+                ("world_accept_eula",),
+            )
+            .fetchone()[0]
+            == 1
+        )
+        operation = (
+            container.store.reader()
+            .execute(
+                "SELECT op_type, status, data_json FROM operations WHERE world_id = ?",
+                ("world_accept_eula",),
+            )
+            .fetchone()
+        )
         operation_data = json.loads(operation["data_json"])
         assert operation["op_type"] == OperationType.CONFIG_EDIT.value
         assert operation["status"] == OperationStatus.COMPLETED.value
@@ -653,17 +754,26 @@ def test_eula_accept_api_requires_step_up_and_records_operator(tmp_path):
         assert replay_payload["meta"]["idempotency_key"] == "accept-world-eula-api"
         assert replay_payload["meta"]["op_id"] == accepted_payload["meta"]["op_id"]
         assert "eula=true" in (world_dir / "eula.txt").read_text(encoding="utf-8")
-        audit = container.store.reader().execute(
-            "SELECT actor_user_id, event_type FROM audit_records "
-            "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
-            ("world_eula_api",),
-        ).fetchone()
+        audit = (
+            container.store.reader()
+            .execute(
+                "SELECT actor_user_id, event_type FROM audit_records "
+                "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
+                ("world_eula_api",),
+            )
+            .fetchone()
+        )
         assert audit["actor_user_id"] == user_id
-        assert container.store.reader().execute(
-            "SELECT count(*) FROM audit_records "
-            "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
-            ("world_eula_api",),
-        ).fetchone()[0] == 1
+        assert (
+            container.store.reader()
+            .execute(
+                "SELECT count(*) FROM audit_records "
+                "WHERE world_id = ? AND event_type = 'world_eula_accepted'",
+                ("world_eula_api",),
+            )
+            .fetchone()[0]
+            == 1
+        )
     finally:
         app.extensions["mcmanager_shutdown"]()
 

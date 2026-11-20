@@ -21,13 +21,12 @@ tracks implementation and verification, not just code-writing.
    checks complete without running them.
 5. Only start a card when its dependencies are Done. Follow the WBS dependency
    graph; do not parallelize changes to the same world-lock or lifecycle story.
-6. Transfer actionable findings from the reconciliation artifacts under
-   `Audits/` into bounded cards here and verify the transfer checklist. This
-   board is the source of truth for status and evidence. Do not maintain a
-   competing dated task list outside this board. When a contract changes,
-   update the governing numbered document first, then any pseudocode and audit
-   record. Numbered product documents take precedence over WBS sketches and
-   audit notes.
+6. Transfer actionable findings from current evidence under `Audits/` into
+   bounded cards here and verify the transfer checklist. This board is the
+   source of truth for status and evidence. Do not maintain a competing status
+   tracker. When a contract changes, update the governing numbered document
+   first, then any pseudocode and audit record. Numbered product documents
+   take precedence over WBS sketches and audit notes.
 7. Record commands, pass/fail counts, and platform in `Evidence`. Do not
    overwrite evidence with a newer partial run.
 8. Feature tests belong to the owning implementation card's acceptance
@@ -50,12 +49,12 @@ tracks implementation and verification, not just code-writing.
 Priority: **P0** release blocker / foundational, **P1** required gate work,
 **P2** important follow-up, **P3** housekeeping.
 
-## Audit transfer — 2026-11-19
+## Audit transfer — 2026-11-20
 
-Actionable findings from the reconciliation pack are tracked by the cards below.
-`Audits/RECONCILIATION_REPORT.md`, `Audits/NEXT_STEPS.md`, and the supporting
-CSV inventories are the evidence staging artifacts; this board controls task
-status and evidence.
+Current findings and verification notes are under `Audits/`; this board
+controls task status and evidence. The 2026-11-19 reconciliation pack and
+inventories are historical snapshots under `old doc/Audits/` and must not be
+treated as current results without fresh verification.
 
 | Audit finding | Workboard tasks |
 |---|---|
@@ -70,9 +69,11 @@ status and evidence.
 | AUD-2026-11-19-09 — Performance evidence | KB-PERF-01, KB-G5-10, KB-D11-ISO-25010 |
 | AUD-2026-11-19-10 — Workboard/WBS traceability | KB-DOC-EVIDENCE-QUALITY, KB-DOC-WBS, KB-G5-API-CONTRACT, KB-G8-CONTRACT, KB-G9-CONTRACT |
 | AUD-2026-11-19-11 — Legacy documentation inventory | KB-DOC-LEGACY-ARCHIVE |
+| AUD-2026-11-20-01 — Restore active workboard and current Audits evidence layout | KB-DOC-EVIDENCE-QUALITY, KB-REC-01, KB-REC-05 |
+| AUD-2026-11-20-02 — Record sync, API/SSE, diagnostics, schema, and restore realignments | KB-G8-SYNC-CAP, KB-G5-API-CONTRACT, KB-G1-LOG-REPLAY, KB-G4-VERIFY, KB-G0-7 |
 | Detailed implementation/test inventory | Existing cleanup, lifecycle, architecture, API, test, platform, security, and performance cards above |
 
-## Reconciliation reset — 2026-11-19
+## Reconciliation reset — 2026-11-19 (historical snapshot)
 
 The historical audit snapshot is no longer sufficient as a live status source.
 Start with these bounded cards; update or close older cards only when the
@@ -89,13 +90,12 @@ recorded evidence supports the status change.
 
 ## Reconciliation ledger
 
-`Audits/reconciliation_traceability.csv` records the stable requirement IDs
-introduced by this reconciliation, source status, implementation symbol/test
-evidence, and owning card. Use it for confirmed findings and verified fixes;
-route, schema, and external-host completeness remain explicitly
-`PRESENT_UNVERIFIED`, `MISSING`, or `DEFERRED` until their owning cards finish
-acceptance. This ledger does not create a completion percentage or treat route
-shape as full API contract conformance.
+`Audits/reconciliation_traceability.csv` records current stable requirement
+IDs, source status, implementation/test evidence, and owning cards. Historical
+inventories in `old doc/Audits/` are source material only. Route, schema, and
+external-host completeness remain explicitly `PRESENT_UNVERIFIED`, `MISSING`,
+or `DEFERRED` until their owning cards finish acceptance. This ledger does not
+create a completion percentage or treat route shape as full API conformance.
 
 ## Gate roll-up
 
@@ -106,31 +106,57 @@ shape as full API contract conformance.
 | Gate 2 / WP 2.1–2.4 | WBS Gate 2 criterion verified: clean foreign-key check and migration rollback; domain, settings, and ConfigEdit slices also pass focused tests | Gate criterion passed on Windows; Document 6 model inventory and broader release acceptance remain |
 | Gate 3 / WP 3.1–3.4 | WBS Gate 3 criterion verified: runtime re-attachment and derived-lock conflict behavior pass alongside operation, audit, and scheduler suites | Gate criterion passed on Windows; full release acceptance remains |
 | Gate 4 / WP 4.1–4.4 | WBS Gate 4 pre-restore backup and compensating rollback criterion verified with focused backup/restore/cleanup/sync/filesystem suites | Gate criterion passed on Windows; three symlink checks, POSIX, and live RCON/NAS acceptance remain |
-| Gate 5 / WP 5.1–5.3 | Auth, selected world/admin APIs, backup/restore/backup-cleanup/sync catalog, cancellation, SSE sharing, and world-list workflow | Partial: stale-world/log cleanup policy, full shell workflows, manager lifecycle endpoints, hosted security job, and supported-proxy validation remain |
+| Gate 5 / WP 5.1–5.3 | Auth, selected world/admin APIs, backup/restore/backup-cleanup/sync catalog, cancellation, SSE sharing, and world-list workflow | Partial: approved stale-backup/log cleanup implementation and tests, full shell workflows, manager lifecycle endpoints, hosted security job, and supported-proxy validation remain |
 
 ## Implementation status
 
-**Latest recorded full-suite verification:** 2026-11-19, Windows / Python
-3.13.14. The app is not release-ready; this failed run is a current baseline,
-not acceptance evidence.
+**Current release state:** not release-ready. The latest full-suite evidence
+and its limitation are recorded below and in
+`Audits/REALIGNMENT_2026-11-20.md`.
 
 The production-bound application is `app/`; it has a tested foundation and
 substantial control-plane functionality, but has not passed release acceptance
 and is not yet operator-ready. `Prototypes/` is a separate legacy reference
 archive, not the current application. The principal known product gaps are
-stale-world/log cleanup policy and workflows, manager lifecycle operations,
+stale-backup/log cleanup workflows, manager lifecycle operations,
 full contract parity, and cross-platform, deployment, and performance release
 acceptance.
 
-### Latest recorded verification
+### Current verification — 2026-11-20
 
-- `.\.venv\Scripts\python.exe -m pytest -q --tb=no`: **493 passed,
-  8 failed, 4 skipped, 76.24% coverage, 251 warnings** (401.61s).
-  Failures: shell token/style, persistent-shell module list, three health/
-  diagnostics checks, service dependency boundary, and two realtime log-stream
-  checks. The output also contained background operation workers attempting
-  dispatch after the SQLite store had closed; triage this with the test
-  warnings. No full-suite pass is claimed.
+- Consolidated focused API, middleware, SSE, diagnostics/presentation, and sync
+  run: **75 passed**; browser contract suite: **7 passed**. Separate schema/EULA
+  checks passed (16 tests), world lifecycle checks passed (12 tests), and the
+  coverage-focused additions passed (13 tests). These selections overlap and
+  must not be added into one aggregate.
+- Full suite before the coverage additions: **507 passed, 1 failed, 3 skipped,
+  76.87% coverage, 259 warnings**. The sole test failure was missing
+  `python-dotenv`; that dependency is already declared in `app/requirements.txt`.
+  After installing the declared dependency, `tests/unit/test_main.py` passed
+  (2 tests).
+- The clean `.venv-phase4` run (`.\.venv-phase4\Scripts\python.exe -m pytest
+  -q --tb=no`, Python 3.13.18) collected 526 tests: **523 passed, 0 failed,
+  3 skipped, 79.85% coverage, 258 warnings** in 403.46s. Coverage missed the
+  configured 80% floor. The captured shell exit code was reported as 0 despite
+  pytest output reporting the floor failure; acceptance is based on the
+  coverage result, not that wrapper exit code. The earlier agent claim of a
+  passing coverage gate was incorrect; see
+  `Audits/verification_log_2026-11-20.md`. This P0 card remains open.
+- The focused run emitted worker/scheduler/metrics shutdown warnings about
+  accessing the SQLite store after close. Track warning triage without counting
+  these as test failures.
+- `git -c core.whitespace=cr-at-eol diff --check` passed after restoring the
+  active tracker and audit layout.
+- Static cleanup: `python -m compileall -q app tests` passed; scoped Ruff on
+  touched Python files passed. Repository Ruff still reports 41 findings and
+  the broader service mypy run reports 232 errors.
+
+### Historical verification snapshots
+
+- The 2026-11-19 Windows / Python 3.13.14 full-suite run recorded **493 passed,
+  8 failed, 4 skipped, 76.24% coverage, 251 warnings**. Its failures have since
+  been addressed in focused changes; this run is historical, not current
+  acceptance evidence.
 - Repository-wide static checks on Windows / Python 3.13.14: Ruff **39**
   errors (28 fixable with `--fix`; 9 additional unsafe fixes are available);
   Black **84** files would be reformatted; isort **7** files were flagged.
@@ -138,24 +164,24 @@ acceptance.
   could not parse it;
   mypy **238** errors in 23 of 92 application files. `lint-imports` could not
   run because `lint_imports` is not installed in the project virtualenv.
-- `python -m pytest --no-cov -q -k "not performance_acceptance_smoke"`:
+- Historical `python -m pytest --no-cov -q -k "not performance_acceptance_smoke"`:
   **448 passed, 3 skipped, 1 deselected**. The skips require Windows symlink
   privileges unavailable on the recorded host; the deselected smoke is the
   long performance test. This is the 2026-11-08 historical result.
-- `node --test tests\browser\test_gate5_browser.test.cjs`: **6 passed**,
+- Historical `node --test tests\browser\test_gate5_browser.test.cjs`: **6 passed**,
   including actual `operator_ui.js` navigation across all 17 modules, setup/
   login, Manager Backup submission, tokenized shell styling, and 10-tab stream
   sharing/failover. One additional check targets the unused legacy `shell.js`
   prototype and is not counted as production UI coverage.
 - Dedicated security acceptance modules: **53 passed** locally; hosted
   GitHub Actions execution remains pending.
-- Focused Gate 5/API/log verification: **57 passed** across
+- Historical focused Gate 5/API/log verification: **57 passed** across
   `test_document10_catalog_apis.py`, `test_gate5_acceptance.py`,
   `test_world_management_api.py`, and `test_realtime_slow_client.py`;
   Gate 5 browser regression: **6 passed**.
   These verify existing API/browser behavior and do not close the manager
   lifecycle, shell workflow, cleanup-policy, hosted-security, or proxy gaps.
-- Metrics/control-plane/presentation/Gate 5 integration: **42 passed,
+- Historical metrics/control-plane/presentation/Gate 5 integration: **42 passed,
   1 deselected**; the deselected test is the long performance smoke.
 - Scoped Ruff, compilation, and focused mypy checks passed for the recorded
   feature slices; this is not a repository-wide static-gate pass.
@@ -182,10 +208,9 @@ acceptance.
   and manager-log browsing, permission-grant enforcement, and expanded
   diagnostics/version metadata. Before the app-only packaging change,
   `python3 -m compileall -q app migrations`
-  passed on Linux. At that point, no tests or browser checks had yet been run;
-  later focused API checks (11) and manual browser checks are recorded under
-  KB-G5-6. The automated Node regression for those workflows remains unrun,
-  so this is not complete feature acceptance evidence.
+  passed on Linux. Initial testing was still pending at that point. Later
+  focused API checks and the 2026-11-20 browser contract suite (7 passed) are
+  recorded under KB-G5-6; complete workflow acceptance remains open.
 
 ### MVP Code Backlog (Tests Excluded)
 
@@ -197,7 +222,7 @@ reviews may expose additional concrete deltas.
 
 | Work item | Code still needed | Existing tracking |
 |---|---|---|
-| Stale-world and log cleanup | After the cleanup policy is approved, implement candidate discovery, preview, retention/eligibility guards, and wet deletion for `stale_worlds` and `logs`; physical deletion must remain exclusive to `CleanupService`. The current service and API support backups only. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
+| Stale-backup and log cleanup | Implement and verify the approved `stale_backups` and `logs` policy: eligibility, pressure-gated tombstones, 3-day grace/purge, protected references, rotated-log retention, previews, and scheduled execution. Never select world directories or world records. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
 | Complete operator workflows | Authenticated documentation, manager log browsing, sync-target CRUD, guarded `server.properties` editing, and per-world and manager-wide cleanup-policy editing now have implementations. Manager restore/restart/update/rollback UI remains blocked on those backend contracts. Browser acceptance for the new UI work remains outstanding. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
 | Manager lifecycle | Manager Backup is implemented as a durable operation and ZIP+SHA `manager_config` artifact. Implement manager restore, restart, update, and rollback only after defining the recovery, host-supervisor, trusted-update, and data-compatibility contracts; those routes remain `NOT_IMPLEMENTED`. | KB-G5-8 |
 | API contract implementation | Guarded server-properties editing, per-client permission-grant enforcement, diagnostics telemetry, release-version metadata, global cleanup-policy routes, sync-target CRUD, and documentation/log APIs now have implementations. Complete full contract parity; settings-visibility response policy needs a product decision. Manager and stale/log cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; owning feature cards |
@@ -328,9 +353,10 @@ is integrated and reviewed.
 - **Evidence:** targeted startup, migration, package-layout, and world-lifecycle
   tests passed (35) on Windows / Python 3.13.14. Scoped Ruff and Black checks
   passed. A copied `app/` folder without repository-level files started and
-  served HTTP 200. An earlier full-suite run recorded 493 passed, 8 failed,
-  4 skipped, and 1 warning; the latest 2026-11-19 run records the same test
-  counts with 251 warnings and confirms those failures are still present.
+  served HTTP 200. The 2026-11-19 full-suite counts are historical. The
+  2026-11-20 clean full run had 523 passed, 0 failed, and 3 skipped, but
+  coverage was 79.85% and remains below the configured gate; see KB-G0-7 and
+  KB-D11-COVERAGE.
 
 ### KB-DATA-01 — Keep managed worlds inside application data
 
@@ -551,7 +577,8 @@ is integrated and reviewed.
   operation details, and rejection of unaudited external EULA edits.
   `python -m pytest --no-cov -q` for Gate 1 contracts, readiness, Java,
   bootstrap, and world lifecycle passed (73 tests) on Windows; scoped Ruff
-  passed.
+  passed. The focused schema/EULA and world-lifecycle regressions passed 16
+  and 12 tests respectively on 2026-11-20.
 
 ### KB-G1-2 — Complete durable, configurable process logging
 
@@ -677,9 +704,10 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   tests/integration/test_gate5_acceptance.py -k
   "progress_is_cached or sse or stream"` passed (8), covering replay, complete
   snapshots, auth expiry, cleanup on close, all documented topic names, and
-  orderly shutdown. `node --test tests/browser/test_gate5_browser.test.cjs`
-  passed (2), covering 10-tab connection sharing/failover, topic forwarding,
-  auth expiry/recovery, and manager shutdown. Scoped Ruff and diff checks passed.
+  orderly shutdown. The 2026-11-20 `node --test
+  tests/browser/test_gate5_browser.test.cjs` run passed (7), including
+  10-tab connection sharing/failover, topic forwarding, auth expiry/recovery,
+  and manager shutdown. Scoped Ruff and diff checks passed.
 
 ### KB-G2-DOMAIN — Verify domain model and transition coverage
 
@@ -740,14 +768,16 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   The focused deletion test passed; all 4 module tests passed before the module
   command exited on the global 80% coverage gate (44.46%). Scoped Ruff passed
   on changed Python files. Backup-scope cleanup preview/execute is covered.
-- **Remaining:** Document 10 also defines `stale_worlds` and `logs` cleanup
-  scopes, but the route currently returns `CLEANUP_SCOPE_UNSUPPORTED` for both.
-  KB-G5-CLEANUP-POLICY must resolve their eligibility and retention contract
-  before those destructive workflows can be implemented/tested. Do not mark
-  this card Done until the policy is documented and the scopes are covered.
+- **Remaining:** Complete route-by-route Document 10 acceptance and browser
+  verification. The stale-backup/log policy has since been approved and scope
+  implementation is tracked on KB-G5-CLEANUP-SCOPES; the earlier unsupported-
+  scope observation is historical and superseded.
 - **Implementation update (2026-11-19):** sync-target create/update/enable/
   disable/delete endpoints were added. The new routes have not received
-  feature-test or browser acceptance; this card remains in Review.
+  standalone browser acceptance. The 2026-11-20 consolidated focused API,
+  middleware, SSE, diagnostics/presentation, and sync selection passed
+  (75 tests total); API test coverage now includes catalog and sync-target
+  behavior. Full route-by-route Document 10 acceptance remains open.
 
 ### KB-G5-CLEANUP-POLICY-API — Expose global cleanup policy management
 
@@ -755,17 +785,18 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   001
 - **Priority:** P1 · **Owner:** Unassigned
 - **Status:** Review
-- **Acceptance:** add manager-wide cleanup-policy read and versioned edit
-  workflows and expose them in Manager Maintenance; preserve documented
-  age/count/space safeguards, ConfigEdit operation and audit behavior, and
-  global-default inheritance for world policies.
+- **Acceptance:** expose manager-wide and world cleanup-policy reads and
+  versioned edits in Maintenance; include age/count/space, stale-session, and
+  optional log-retention fields; preserve ConfigEdit/audit behavior and
+  global-default inheritance.
 - **Evidence:** manager-wide GET/PATCH routes, versioned ConfigEdit operation,
   step-up enforcement, and the Manager Maintenance editor are implemented.
-  Focused catalog API checks passed (11). AUD-2026-11-19-10 found this card
-  under To Do despite its prior `Implemented` label; moved it to Review pending
-  confirmation that every acceptance check is satisfied. This card does not
-  authorize stale-world or log deletion policy changes; those remain on their
-  separate policy/implementation cards.
+  Migration 005 and the policy endpoints now include `stale_session_threshold`
+  and nullable `log_retention_days`; focused API verification passed as part of
+  the 97-test cleanup/API/scheduler/schema/operation run.
+  AUD-2026-11-19-10 found this card under To Do despite its prior `Implemented`
+  label; moved it to Review pending confirmation that every acceptance check
+  is satisfied.
 
 ### KB-G4-VERIFY — Close Gate 4 against its exact acceptance checks
 
@@ -793,12 +824,16 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   checks passed. The sync retry test now uses the injected sleeper instead of
   monkeypatching a removed module-level `time.sleep` hook.
 - **Concurrent cap admission:** `python -m pytest --no-cov -q
-  tests/integration/test_sync_gate4.py` passed (8 tests) on Windows / Python
-  3.13.14 on 2026-11-08, including overlapping sync jobs at the daily-cap
-  boundary. This verifies the daily byte-cap reservation, not the distinct
-  Document 8 limit of two simultaneous transfers. The latter remains
-  unresolved under `KB-G8-SYNC-CAP` (AUD-2026-11-19-05). Scoped Ruff and
-  editor diagnostics passed.
+  tests/integration/test_sync_gate4.py` passed (9 tests) on Windows / Python
+  3.13 on 2026-11-20. The current service reserves an active-transfer slot
+  before target resolution and releases it on completion/failure. Tests cover
+  the cap constant, direct rejection of a third reserved slot, and reservation
+  behavior. They do not yet exercise three simultaneous `dispatch_sync` calls
+  with a blocking transport; add that integration case before treating the
+  global concurrency requirement as fully accepted.
+- **Restore cleanup — 2026-11-20:** successful world restore removes the
+  temporary restore archive while retaining the recovery pre-backup.
+  `tests/integration/test_gate4_acceptance.py` includes the cleanup assertion.
 - **Remaining:** run the symlink checks on a supported host and record live
   RCON/NAS integration evidence; the Windows skips and focused fake/local
   tests do not satisfy these acceptance items.
@@ -839,18 +874,118 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   queue fills.
 - **Evidence:** `/stream/worlds/{world_id}/logs` supports durable cursor replay
   and emits `log.replay`/`log.gap`; the stream client retains cursors and
-  requests replay. `tests/unit/test_realtime_slow_client.py` was included in
-  the focused API/log run (57 passed across four modules), including backlog
-  replay beyond subscriber queue capacity and unavailable-cursor resnapshot.
+  requests replay. The earlier focused API/log run (57 passed across four
+  modules) included backlog replay beyond subscriber queue capacity and
+  unavailable-cursor resnapshot. The prior 2026-11-19 failure report for the
+  slow-client tests is historical.
 - **Remaining:** review browser/client recovery under a live proxy; the full
-  repository suite now completes in 401.61 seconds but has eight failures,
-  including both realtime slow-client tests (AUD-2026-11-19-07).
+  repository suite completed on 2026-11-20 with 523 passed, 0 failed, and
+  3 skipped; coverage missed the configured floor. The 2026-11-19 failures,
+  including the slow-client tests, are historical and resolved. Live proxy
+  recovery remains unverified.
+
+### KB-DOC-PLAN-COHERENCE — Reconcile runtime documentation references
+
+- **WBS/Docs:** Documents 5, 10, and 12; AUD-2026-11-19-01
+- **Priority:** P2 · **Owner:** Unassigned
+- **Status:** Review
+- **Acceptance:** align the runtime documentation location in Documents 5
+  and 10 with Document 12's distributed `app/docs/` boundary. Preserve the
+  distinction between repository planning docs and future curated operator
+  docs; verify no runtime documentation API or UI points at the repository's
+  planning-document tree.
+- **Audit snapshot:** the 2026-11-19 report and inventory under
+  `old doc/Audits/` describe
+  the earlier conflict. The current Documents 5, 10, and 12 consistently
+  identify `app/docs/` as shipped runtime content and root `docs/` as planning
+  material; do not treat the older snapshot wording as current.
+- **Current evidence:** `manager_content.py` resolves `app/docs/`, returns
+  escaped source text with `rendered_html: null`, and the shell displays the
+  content in `<pre>`. `app/docs/` currently contains only `.gitkeep`, so
+  curated runtime documentation content remains future work.
+
+### KB-DOC-PSEUDOCODE-DECISION — Decide how to retain historical pseudocode
+
+- **WBS/Docs:** Five gate pseudocode files; AUD-2026-11-19-02
+- **Priority:** P2 · **Owner:** Unassigned
+- **Status:** Review
+- **Decision:** retain all five gate files as historical, superseded examples;
+  do not refresh them into a complete implementation or test inventory.
+- **Acceptance:** each file must label its body as historical/superseded and
+  point readers to the governing numbered documents. Do not present
+  pseudocode as a complete implementation or test inventory.
+- **Evidence:** all five files consistently identify themselves as historical
+  snapshots and link to their governing numbered documents. They cover
+  selected Gate 1–5 slices only, not every planned component, route, function,
+  or acceptance flow. No pseudocode was changed by this decision.
+
+### KB-DOC-WBS — Reconcile WBS paths and conformance details
+
+- **WBS/Docs:** `wbs.txt`; Documents 12 and 13
+- **Priority:** P2 · **Owner:** Unassigned
+- **Status:** Review
+- **Acceptance:** retain the WBS work-package/dependency structure while
+  reconciling obsolete `src/mcmanager/` file-scope paths, the stale
+  “zero-dependency” description, and fake-server flag names with the current
+  root `app/` layout and conformance harness. Reconcile sync retry wording
+  under `KB-G8-SYNC-CAP`; numbered documents remain authoritative.
+- **Audit snapshot:** the 2026-11-19 audit pack counted 21 stale paths in its
+  uploaded snapshot. The current `wbs.txt` contains no `src/mcmanager/` paths
+  or zero-dependency claim; pure-domain “zero infrastructure dependencies”
+  remains an acceptance criterion, not a project dependency claim.
+- **Current evidence — 2026-11-20:** WBS file scopes use the current `app/`
+  layout; the SQLite migration path and duplicate connection-file typo were
+  corrected. Fake-server flags match the harness, sync retries are stated as
+  three total attempts with 30s/60s waits (no 120s retry wait), and the
+  runtime-document boundary now points to `app/docs/`. Kept the work-package
+  plan structure; numbered documents remain authoritative.
+
+### KB-G0-BOUNDARY-REGRESSION — Restore the service dependency boundary
+
+- **WBS/Docs:** Document 12 §4; AUD-2026-11-19-04 and -07
+- **Priority:** P1 · **Owner:** Copilot current session
+- **Status:** Review
+- **Acceptance:** remove the concrete infrastructure dependency from
+  `app/services/server_properties.py` using an existing or appropriately
+  extracted port/schema boundary; add/retain a focused regression assertion;
+  pass `tests/unit/test_dependency_boundaries.py` and the relevant
+  server-properties tests without broad exception lists or weakened checks.
+- **Historical evidence:** the 2026-11-19 audit found the service importing
+  `app.infrastructure.minecraft.properties_schema`; this was stale by the
+  time it was rechecked. `KB-D12-2` separately tracks the broader command/query
+  and repository architecture decision.
+- **Current evidence — 2026-11-20:** `ServerPropertiesService` imports
+  property schema types/functions through `app.ports.minecraft`; the focused
+  server-properties boundary and persistence-port selection passed 31 tests
+  with `--no-cov`. Broader architecture work remains open under `KB-D12-2`.
+
+### KB-G8-SYNC-CAP — Resolve sync concurrency and retry contract
+
+- **WBS/Docs:** Documents 8 and 10; WBS sync work package; AUD-2026-11-19-01
+  and -05
+- **Priority:** P1 · **Owner:** Copilot current session
+- **Status:** Review
+- **Acceptance:** retain Document 8's two-simultaneous-transfer cap and align
+  Document 10, WBS, API errors, and implementation. Retain three total
+  attempts with 30/60-second retry waits. Add a dispatch-level integration
+  test with blocking transfers that proves the active cap is enforced at two,
+  a third transfer is rejected, and slots are released after completion or
+  failure; do not let the daily byte quota mask concurrency behavior.
+- **Historical evidence — 2026-11-19:** the original scan found transfer byte
+  reservations and a 50-GiB daily cap but no explicit two-transfer admission
+  guard. This predates the implementation below.
+- **Current evidence — 2026-11-20:** `SyncService` reserves an active-transfer
+  slot against `SYNC_GLOBAL_CONCURRENCY_CAP = 2`, raises
+  `SYNC_CONCURRENCY_CAP` before transfer start, and releases it in `finally`.
+  Retry wording and three-attempt behavior are aligned and tested.
+  `tests/integration/test_sync_gate4.py` passed (9 tests), but it does not yet
+  prove admission across three simultaneous `dispatch_sync` calls.
 
 ## To Do
 
 ### KB-REC-01 — Freeze the reconciliation baseline
 
-- **WBS/Docs:** `Audits/NEXT_STEPS.md` R0; Document 11
+- **WBS/Docs:** `old doc/Audits/NEXT_STEPS.md` R0; Document 11
 - **Priority:** P0 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** —
 - **Acceptance:** record the exact commit hash and clean/dirty-tree state;
@@ -863,24 +998,29 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **DoD:** baseline commit, platform/Python versions, command, pass/fail counts,
   coverage, skipped/deselected tests, and repository-hygiene disposition are
   written in this card.
-- **Evidence:** `Audits/RECONCILIATION_REPORT.md` could not collect this
-  snapshot because Flask was unavailable. The 493/8/4/76.24% Windows snapshot
-  is historical until this card produces a fresh result.
-- **Fresh evidence — 2026-11-19 Linux/Python 3.14.4:** `.venv/bin/python -m
-  pytest -q --tb=short` completed in 525.02 seconds: **505 passed, 1 skipped,
-  271 warnings, 76.41% coverage**. The run exits nonzero because
-  `pyproject.toml` requires 80% coverage. This is not a passing full-suite
-  release baseline. The earlier 493/8/4 snapshot is superseded.
+- **Historical evidence:** the 2026-11-19 reports and test runs are archived
+  under `old doc/Audits/` and are not current acceptance evidence.
+- **Fresh evidence — 2026-11-20:** Windows/Python 3.13 full run before the
+  coverage additions reported **507 passed, 1 failed, 3 skipped, 76.87%
+  coverage, 259 warnings**. The sole failure was missing `python-dotenv`; that
+  already-declared dependency was installed and `tests/unit/test_main.py`
+  passed (2 tests). The later clean `.venv-phase4` run used Python 3.13.18 and
+  recorded 523 passed, 0 failed, 3 skipped, 79.85% coverage, and 258 warnings
+  in 403.46 seconds; it did not meet the configured 80% coverage floor.
+  `Audits/verification_log_2026-11-20.md` retains the command and summary, but
+  not raw console output. This card also requires the exact baseline commit,
+  tree state, and runtime-data hygiene disposition before it can be marked Done.
 - **Focused evidence:** boundary/sync suite 12 passed; boundary, sync,
   documentation, and catalog acceptance 23 passed; SSE/cancellation 8 passed;
   native C1–C14 sampled native C2/C4/C10/C11 cases 4 passed; shell/health 5
   passed.
-- **Environment blocker:** no Python 3.11/3.13 interpreter is available; the
-  hosted 3.11/3.13 matrix and POSIX/live-server acceptance remain external.
+- **Environment:** local verification used `.venv-phase4` with Python
+  3.13.18. Hosted Python 3.11/3.13 matrix, POSIX conformance, and live-server
+  acceptance remain external.
 
 ### KB-REC-02 — Normalize known specification conflicts
 
-- **WBS/Docs:** Documents 5, 8, 10, 12; `Audits/NEXT_STEPS.md` R1
+- **WBS/Docs:** Documents 5, 8, 10, 12; `old doc/Audits/NEXT_STEPS.md` R1
 - **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** —
 - **Acceptance:** make one reviewable change set that (1) defines
@@ -896,7 +1036,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 
 ### KB-REC-03 — Verify API contract parity in bounded route groups
 
-- **WBS/Docs:** Document 10; `Audits/api_route_parity.csv`
+- **WBS/Docs:** Document 10; historical inventory
+  `old doc/Audits/api_route_parity.csv`
 - **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** KB-REC-01
 - **Acceptance:** extend `KB-G5-API-CONTRACT` with a route-by-route checklist
@@ -912,7 +1053,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 
 ### KB-REC-04 — Verify Document 7 schema semantics
 
-- **WBS/Docs:** Document 7; `Audits/schema_table_parity.csv`
+- **WBS/Docs:** Document 7; historical inventory
+  `old doc/Audits/schema_table_parity.csv`
 - **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** KB-REC-01
 - **Acceptance:** add table/constraint acceptance for all 28 tables, including
@@ -925,7 +1067,7 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 ### KB-REC-05 — Seed stable requirement traceability
 
 - **WBS/Docs:** Documents 4–14 and `ARCHITECTURE.md`;
-  `Audits/planned_component_inventory.csv`
+  `old doc/Audits/planned_component_inventory.csv`
 - **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** KB-REC-02
 - **Acceptance:** assign stable `REQ-*` identifiers to normative requirements,
@@ -937,62 +1079,92 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   a stable denominator.
 - **DoD:** every open reconciliation card links at least one requirement ID;
   every Done card links source and passing evidence.
-- **Status evidence — 2026-11-19:** moved to Review. Initial stable
-  `REQ-*` rows are recorded in `Audits/reconciliation_traceability.csv`,
-  including verified boundary, sync, SSE, shell, and documentation fixes plus
-  explicitly missing/deferred lifecycle, cleanup, coverage, and external-host
-  work. The CSV is an initial ledger; it is not an exhaustive requirement
-  denominator.
+- **Status evidence — 2026-11-19:** moved to Review. The archived
+  `old doc/Audits/reconciliation_traceability.csv` is an initial ledger, not
+  an exhaustive requirement denominator.
+- **Current evidence — 2026-11-20:** current IDs and statuses are recorded in
+  `Audits/reconciliation_traceability.csv`; the ledger remains limited to
+  audited items and does not establish a completion percentage.
 
 ### KB-G0-7 — Restore full-suite test acceptance
 
 - **WBS/Docs:** Document 11; AUD-2026-11-19-07
 - **Priority:** P0 · **Owner:** Unassigned · **Updated:** 2026-11-19
 - **Depends on:** —
-- **Acceptance:** reproduce the current full-suite failures, fix them without
-  weakening assertions, and record a passing full `pytest --no-cov` run.
-  Specifically resolve shell token/style and persistent-shell expectations,
-  the three health/diagnostics failures, the service-boundary failure (owned
-  by `KB-G0-BOUNDARY-REGRESSION`), and the two realtime slow-client failures.
-  Triage and record the 251 warnings from the audit run; update the dated
-  verification snapshot only with fresh results. Coverage-floor work remains
+- **Acceptance:** rerun the full suite with `pytest --no-cov` on the current
+  tree and retain the exact command/output; triage and record the current
+  shutdown warnings. The 2026-11-19 test failures, including shell,
+  diagnostics, dependency-boundary, and realtime slow-client failures, are
+  historical and must not be listed as current. Coverage-floor work remains
   on `KB-D11-COVERAGE`.
-- **Current evidence:** the 2026-11-19 Windows / Python 3.13.14 full coverage
-  run reported 493 passed, 8 failed, 4 skipped, 76.24% coverage, and 251
-  warnings. A rerun of the eight failing cases confirmed the same failure
-  names; the full run took 401.61 seconds. Shutdown also logged queued-operation
-  workers attempting database access after the SQLite store had closed; this
-  remains part of warning triage, not a separately counted test failure.
-- **Fresh evidence — 2026-11-19 Linux/Python 3.14.4:** 505 passed, 1 skipped,
-  271 warnings, 76.41% coverage. The coverage floor prevents a passing full-suite
-  baseline. The full-suite run is retained as a fresh result; stale Windows
-  counts no longer describe this Linux run.
+- **Historical evidence:** 2026-11-19 Windows and Linux test counts are
+  preserved under `old doc/Audits/` and are not current.
+- **Earlier evidence — 2026-11-20:** Windows/Python 3.13 full run before the
+  coverage additions reported **507 passed, 1 failed, 3 skipped, 76.87%
+  coverage, 259 warnings**. The sole failure was missing `python-dotenv`; that
+  already-declared dependency was installed and `tests/unit/test_main.py`
+  passed (2 tests).
+- **Latest clean evidence — 2026-11-20:** `.venv-phase4`, Python 3.13.18,
+  `.\.venv-phase4\Scripts\python.exe -m pytest -q --tb=no`: **523 passed,
+  0 failed, 3 skipped, 79.85% coverage, 258 warnings** in 403.46s. Coverage
+  missed the configured 80% floor, so release acceptance remains open.
+  Exact summary is retained in `Audits/verification_log_2026-11-20.md`; raw
+  console output and a clean `--no-cov` full-suite run are still required.
 
-### KB-G5-CLEANUP-POLICY — Decide safe stale-world and log cleanup policy
+### KB-G5-CLEANUP-POLICY — Approve safe stale-backup and log cleanup policy
 
 - **WBS/Docs:** Document 10 cleanup scopes; Documents 5 and 8
 - **Priority:** P1 · **Owner:** Unassigned
-- **Acceptance:** obtain an explicit product-owner decision for stale-world
-  eligibility and log retention/eligibility; document safeguards, exclusions,
-  preview information, and execution requirements in the governing documents.
-  Do not implement destructive cleanup until the policy is approved and
-  documented.
-- **Current evidence:** `stale_worlds` and `logs` cleanup scopes currently
-  return `CLEANUP_SCOPE_UNSUPPORTED`; the governing documents do not define
-  safe candidate eligibility or retention parameters.
+- **Status:** In Progress
+- **Acceptance:** obtain explicit product-owner decisions for backup eligibility,
+  storage trigger, session threshold, tombstone grace, references, log retention,
+  and protected log categories; document safeguards and execution requirements.
+- **Evidence:** user approved `stale_backups` (never worlds/records), eligible
+  categories `session_end`, `manual`, `emergency`, `pre_restore`, default 3-day
+  age / 7 sessions / 90% pressure, latest/category-floor guards, 3-day
+  tombstone grace, restore/sync reference protection, and unlimited-by-default
+  logs restricted to expired rotated historical files. Documents 5–10 record
+  the policy; implementation and acceptance remain on KB-G5-CLEANUP-SCOPES.
 
-### KB-G5-CLEANUP-SCOPES — Implement stale-world and log cleanup
+### KB-G5-CLEANUP-SCOPES — Implement stale-backup and log cleanup
 
 - **WBS/Docs:** WP 4.3 and WP 5.1; Documents 5, 8, and 10
 - **Priority:** P1 · **Owner:** Unassigned
 - **Depends on:** KB-G5-CLEANUP-POLICY
+- **Status:** In Progress
 - **Acceptance:** implement policy-backed candidate discovery, preview, and
-  execution for `stale_worlds` and `logs`; enforce exclusions, retention floors,
-  path containment, and audit requirements; keep all physical deletion inside
-  `CleanupService`. Feature-level tests and evidence belong to this card's
-  acceptance workflow.
-- **Current evidence:** `CleanupService` physically removes backup artifacts
-  only; the cleanup API rejects `stale_worlds` and `logs` as unsupported.
+  execution for `stale_backups` and `logs`; enforce exclusions, retention floors,
+  pressure gating, tombstone grace, reference/path/in-flight guards, and audits;
+  keep all physical deletion inside `CleanupService`. Also verify scheduled
+  execution and the stated scheduled-backup count cap.
+- **Current evidence:** migration 005, cleanup policy fields, stale-backup/log
+  candidate planning, preview binding, tombstone/purge/log deletion helpers,
+  scheduled dispatch, API scopes, and the scheduled-backup cap are implemented.
+  Windows targeted acceptance passed: **97 passed** with `pytest --no-cov` across
+  cleanup, backup catalog API, scheduler, Gate 3 operation behavior, and schema
+  migrations; the Gate 5 browser suite passed (**7 passed**). Scoped Ruff, Black,
+  isort, JavaScript syntax, and CRLF-aware `git diff --check` passed. The
+  repository coverage threshold fails when these targeted tests run with
+  coverage enabled, so the focused pass intentionally used `--no-cov`. After
+  those checks, dispatcher error-code mapping was edited and has not been
+  revalidated; keep this card In Progress until the handoff checks below pass.
+- **Handoff:** First rerun the focused command:
+  `python -m pytest --no-cov -q tests/integration/test_cleanup_service.py
+  tests/integration/test_backup_catalog_api.py
+  tests/integration/test_scheduler_service.py
+  tests/integration/test_gate3_operation_engine_behavior.py
+  tests/integration/test_schema_migrations.py`
+  Then rerun scoped Ruff/Black/isort, `node --check
+  app/shell/static/operator_ui.js`, and
+  `git -c core.whitespace=cr-at-eol diff --check`. Complete the error contract:
+  `CatalogOperationDispatcher` now maps `BACKUP_PATH_UNSAFE`,
+  `CLEANUP_PATH_UNSAFE`, and `CLEANUP_STORAGE_USAGE_INVALID`, but
+  `backup_catalogs.delete_backup` still converts every `RetentionError` to
+  `BACKUP_RETENTION_GUARD`, and the new codes are not yet registered in
+  `app/web/errors.py`. Add the narrowly scoped API/error mapping and an
+  unsafe-path regression test before marking Done. Scheduled backups are
+  explicitly categorized and enqueue a durable cleanup operation; the cap is
+  three, with referenced artifacts retained even if that means exceeding it.
 
 ### KB-D12-2 — Track remaining service-layer architecture divergences
 
@@ -1016,25 +1188,6 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   service-to-infrastructure import; the code fix is separately tracked by
   `KB-G0-BOUNDARY-REGRESSION`.
 
-### KB-G0-BOUNDARY-REGRESSION — Restore the service dependency boundary
-
-- **WBS/Docs:** Document 12 §4; AUD-2026-11-19-04 and -07
-- **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** —
-- **Acceptance:** remove the concrete infrastructure dependency from
-  `app/services/server_properties.py` using an existing or appropriately
-  extracted port/schema boundary; add/retain a focused regression assertion;
-  pass `tests/unit/test_dependency_boundaries.py` and the relevant
-  server-properties tests without broad exception lists or weakened checks.
-- **Current evidence:** the audit found the service importing
-  `app.infrastructure.minecraft.properties_schema`; the full-suite boundary
-  test failed. `KB-D12-2` separately tracks the broader command/query and
-  repository architecture decision.
-- **Status evidence — 2026-11-19:** moved to Review. `ServerPropertiesService`
-  now imports property schema types/functions through `app.ports.minecraft`;
-  `tests/unit/test_dependency_boundaries.py` plus sync/boundary focused tests
-  pass 12/12. The full architecture refactor remains `KB-D12-2`.
-
 ### KB-G8-CONTRACT — Complete Document 8 service contract acceptance
 
 - **WBS/Docs:** Documents 8 and 11; related implementation cards in Gates 2–4
@@ -1049,31 +1202,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   contract-inventory card.
 - **Current evidence:** operation, scheduler, audit, backup, restore, cleanup,
   and sync slices have focused tests; contract-wide service acceptance remains
-  open. AUD-2026-11-19-05 found no demonstrated two-transfer admission guard.
-
-### KB-G8-SYNC-CAP — Resolve sync concurrency and retry contract
-
-- **WBS/Docs:** Documents 8 and 10; WBS sync work package; AUD-2026-11-19-01
-  and -05
-- **Priority:** P1 · **Owner:** Unassigned
-- **Depends on:** —
-- **Acceptance:** obtain and record a product decision on whether the
-  two-simultaneous-transfer cap remains required. Reconcile Document 8,
-  Document 10, WBS, API errors, and implementation. If retained, implement
-  atomic admission limiting and test concurrent transfers at, below, and
-  above the cap. If removed, remove or revise the stale cap/error contract and
-  its tests. In either case reconcile retry count/waits (three total attempts,
-  30/60-second waits) and retain tests for the selected policy. Do not treat
-  the daily byte quota as a concurrency limit.
-- **Current evidence:** `SyncService` has transfer-byte reservations and a
-  50-GiB daily cap; no explicit two-transfer admission guard was found.
-  `KB-G4-VERIFY`'s overlapping-job test covers the daily-cap boundary only.
-- **Status evidence — 2026-11-19:** implementation and retry wording aligned.
-  `SyncService` now reserves an active-transfer slot against
-  `SYNC_GLOBAL_CONCURRENCY_CAP = 2`, raises `SYNC_CONCURRENCY_CAP` before
-  transfer start, and releases it in `finally` cleanup. Retry waits remain
-  30/60 seconds for three total attempts. The three-attempt policy is covered
-  by focused Gate 4 tests.
+  open. The 2026-11-19 missing-cap finding is historical; see the verified
+  implementation and focused test evidence under `KB-G8-SYNC-CAP`.
 
 ### KB-G9-CONTRACT — Complete Document 9 concurrency contract acceptance
 
@@ -1110,11 +1240,13 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   overall coverage to at least 85%; preserve meaningful assertions and record
   the repository-level coverage floor. Feature-specific coverage is owned by
   each implementation card and is not deferred to this cross-cutting gate.
-- **Current evidence:** backup catalog API coverage was recorded at
-  44.46% in a focused run. The 2026-11-19 full coverage run reported 76.24%
-  overall, with 18 of 92 application modules below 80%; the configured
-  overall floor is still 80%, not the documented 85%, and no per-module floor
-  is enforced.
+- **Current evidence:** coverage-focused additions passed 13 tests, but a
+  clean full run reached only 79.85%, below both the configured 80% floor and
+  Document 11's 85% overall requirement. Document 11 also requires an 80%
+  per-module floor, which is not enforced by the current pytest configuration.
+  The threshold mismatch and per-module enforcement remain open. Prior
+  evidence: backup catalog API coverage was recorded at 44.46%; the
+  2026-11-19 run reported 76.24% overall, with 18 of 92 modules below 80%.
 
 ### KB-D11-ISO-25010 — Complete the quality-characteristic evidence map
 
@@ -1145,62 +1277,10 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Current evidence:** gate and work-package summaries are repeated in this
   board; route/auth claims require careful scoping against known exceptions;
   and the 36-test and 97-test Gate 1 records need exact test-selection
-  provenance. AUD-2026-11-19-08/-10 also found stale static baselines and
-  inconsistent task/evidence status; the current full-suite failures are
-  tracked by `KB-G0-7`.
-
-### KB-DOC-PLAN-COHERENCE — Reconcile runtime documentation references
-
-- **WBS/Docs:** Documents 5, 10, and 12; AUD-2026-11-19-01
-- **Priority:** P2 · **Owner:** Unassigned
-- **Depends on:** —
-- **Acceptance:** align the runtime documentation location in Documents 5
-  and 10 with Document 12's distributed `app/docs/` boundary. Preserve the
-  distinction between repository planning docs and future curated operator
-  docs; verify no runtime documentation API or UI points at the repository's
-  planning-document tree.
-- **Current evidence:** Documents 5 and 10 still describe repository `docs/`
-  as the runtime content source, while Document 12 establishes `app/docs/`.
-- **Status evidence — 2026-11-19:** moved to Review. Documents 5 and 10 now
-  identify `app/docs/` as the shipped runtime source, while root `docs/` is
-  explicitly planning/design material. `manager_content.py` resolves
-  `app/docs/`, returns escaped source text with `rendered_html: null`, and
-  the shell displays that content inside `<pre>` rather than converting it to
-  HTML.
-
-### KB-DOC-PSEUDOCODE-DECISION — Decide how to retain historical pseudocode
-
-- **WBS/Docs:** Five gate pseudocode files; AUD-2026-11-19-02
-- **Priority:** P2 · **Owner:** Unassigned
-- **Depends on:** —
-- **Acceptance:** make an explicit keep-as-historical or refresh decision for
-  each gate pseudocode file. Keep files in place. If retained as historical,
-  label them consistently as superseded examples and link the governing
-  numbered documents; if refreshed, trace each included component/flow to
-  current plans and source. Do not present pseudocode as a complete
-  implementation or test inventory.
-- **Current evidence:** all five files identify themselves as historical or
-  superseded snapshots, and do not enumerate every planned component, route,
-  function, or acceptance flow.
-
-### KB-DOC-WBS — Reconcile WBS paths and conformance details
-
-- **WBS/Docs:** `wbs.txt`; Documents 12 and 13
-- **Priority:** P2 · **Owner:** Unassigned
-- **Acceptance:** retain the WBS work-package/dependency structure while
-  reconciling obsolete `src/mcmanager/` file-scope paths, the stale
-  “zero-dependency” description, and fake-server flag names with the current
-  root `app/` layout and conformance harness. Reconcile sync retry wording
-  under `KB-G8-SYNC-CAP`; numbered documents remain authoritative.
-- **Current evidence:** Gate 1 file-scope paths now match root `app/`; the
-  fake-server harness accepts both the documented `--crash-after` and
-  `--save-slow` modes and the millisecond variants used by focused tests.
-  Other WBS work-package paths still require reconciliation. AUD-2026-11-19-01
-  found obsolete paths, a stale dependency claim, and retry timing that
-  conflicts with Document 8.
-- **Status evidence — 2026-11-19:** moved to Review. Stale `src/mcmanager/`
-  paths, the zero-dependency claim, and the 30/60/120 retry description were
-  replaced with current `app/` scopes and the three-attempt 30/60 policy.
+  provenance. The 2026-11-20 audit found the workboard had been incorrectly
+  archived and that `Audits/` was missing; both locations have been restored.
+  Stale snapshots remain under `old doc/`, while `Audits/` now contains current
+  evidence. The full-suite/coverage outcome still needs a retained raw run.
 
 ### KB-G5-6 — Complete real workflows for the 17 shell modules
 
@@ -1221,14 +1301,13 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Remaining code:** manager restore/restart/update/rollback UI after those
   backend contracts are implemented.
 - **Evidence:** `node --test tests/browser/test_gate5_browser.test.cjs` passed
-  (6 tests), including actual `operator_ui.js` navigation across all 17
+  (7 tests), including actual `operator_ui.js` navigation across all 17
   modules, setup/login, Manager Backup submission, style tokens, and 10-tab
   stream sharing. Two retained `shell.js` prototype checks are labeled legacy
   and are not counted as production UI coverage. Focused API checks for the
   2026-11-19 follow-up passed (11); live browser validation confirmed theme,
-  notification dropdown, step-up dialog, and global policy submission. The
-  Node regression added for these flows remains unrun because Node is
-  unavailable.
+  notification dropdown, step-up dialog, global policy submission, and
+  updated step-up/theme behavior. Broader full workflow acceptance remains open.
 
 ### KB-G1-FORGE-SHUTDOWN — Diagnose Forge process exit after RCON stop
 
@@ -1266,6 +1345,10 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Remaining:** manager restore/restart/update/rollback and their UI remain
   unimplemented; documentation, manager-log, and sync-target workflows do not
   satisfy lifecycle acceptance.
+- **Current implementation update — 2026-11-20:** uninitialized manager
+  responses now include stable `updated_at: null`; focused manager response
+  assertions passed. Manager restore/restart/update/rollback remain blocked on
+  their approved safety contracts.
 - **Verification:** manager-backup artifact test (1 passed); combined bootstrap
   and catalog tests (14 passed); backup/restore coordination tests (31 passed).
 - **Blocked product decisions:** Manager restore needs a defined restore scope,
@@ -1316,10 +1399,12 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   Avoid broad formatting churn without coordinating it as a dedicated slice.
 - **Evidence:** The 2026-11-19 audit run on Windows / Python 3.13 reported
   Ruff 39 errors, Black 84 files needing formatting, isort 7 failures, mypy
-  238 errors in 23 files, and a nonzero import-linter result. The audit also
-  found no general static-gate workflow. Earlier snapshots (Ruff 46, Black
-  76, isort 9, mypy 217) are historical and must not be used as current
-  baselines. Document 12 §8 records the canonical commands.
+  238 errors in 23 files, and a nonzero import-linter result. The latest
+  2026-11-20 checks report 41 repository-wide Ruff findings and 232 broad
+  service mypy errors; compileall and scoped Ruff on touched files pass. No
+  newer Black, isort, or import-linter results are available. Earlier
+  snapshots (Ruff 46, Black 76, isort 9, mypy 217) are historical and must not
+  be used as current baselines. Document 12 §8 records the canonical commands.
 - **Blocker:** The remaining Black set includes protected shell/backup files;
   mypy failures include process adapters and protected API slices. These files
   and their tests are outside this card's authorized edit scope. Install the

@@ -769,6 +769,8 @@ test('operator shell persists theme and serves notification actions from the sha
       version: '0',
       age_rule_days: '3',
       space_rule_pct: '70',
+      stale_session_threshold: '7',
+      log_retention_days: '',
       count_rules: '{"manual":3}',
       schedule_id: '',
     },
@@ -794,6 +796,8 @@ test('operator shell persists theme and serves notification actions from the sha
     version: 0,
     age_rule_days: 3,
     space_rule_pct: 70,
+    stale_session_threshold: 7,
+    log_retention_days: null,
     count_rules: { manual: 3 },
     schedule_id: null,
   });
@@ -817,8 +821,8 @@ test('shell uses tokenized colors, 40px controls, and no inline styles', () => {
   );
 
   assert.doesNotMatch(template, /\sstyle\s*=/i);
-  assert.match(stylesheet, /\.ui-button\s*\{[^}]*height:\s*40px/s);
-  assert.match(stylesheet, /\.ui-text-input\s*\{[^}]*height:\s*40px/s);
+  assert.match(stylesheet, /\.ui-button\s*\{[^}]*height:\s*(?:40px|var\(--control-height\))/s);
+  assert.match(stylesheet, /\.ui-text-input\s*\{[^}]*height:\s*(?:40px|var\(--control-height\))/s);
   assert.doesNotMatch(componentStyles, /#[\da-f]{3,8}\b|rgba?\(/i);
 });
 

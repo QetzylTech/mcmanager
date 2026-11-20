@@ -348,6 +348,21 @@ def test_privileged_world_action_requires_unexpired_step_up(gate5_app):
     _json_error(expired_response, "STEP_UP_REQUIRED")
 
 
+def test_supervisor_tick_requires_step_up(gate5_app):
+    session = _login(gate5_app.extensions["mcmanager_container"])
+    client = gate5_app.test_client()
+    client.set_cookie("mcmanager_session", session.token)
+    client.get("/api/session")
+
+    response = client.post(
+        "/api/supervisor/tick",
+        headers={"X-CSRF-Token": client.get_cookie("csrf_token").value},
+    )
+
+    assert response.status_code == 403
+    _json_error(response, "STEP_UP_REQUIRED")
+
+
 @pytest.mark.parametrize("path", ["/", "/api/health", "/api/route-that-does-not-exist"])
 def test_security_headers_cover_html_and_api_responses(gate5_app, path):
     response = gate5_app.test_client().get(path)
@@ -481,6 +496,7 @@ def test_start_returns_202_operation_envelope(gate5_app, monkeypatch):
     client.set_cookie("mcmanager_session", session.token)
     client.get("/api/session")
     csrf_token = client.get_cookie("csrf_token").value
+
     def enqueue_start(**kwargs):
         return (
             {
@@ -544,19 +560,21 @@ def test_world_action_is_durably_queued_and_idempotent(gate5_app, monkeypatch):
     assert first_payload["meta"]["idempotency_key"] == "gate5-stop-once"
     assert second_payload["meta"]["op_id"] == operation_id
     assert container.operations.get(operation_id)["status"] == "Queued"
-    assert container.store.reader().execute(
-        "SELECT COUNT(*) FROM operations "
-        "WHERE op_type = 'Stop' AND idempotency_key = ?",
-        ("gate5-stop-once",),
-    ).fetchone()[0] == 1
+    assert (
+        container.store.reader()
+        .execute(
+            "SELECT COUNT(*) FROM operations " "WHERE op_type = 'Stop' AND idempotency_key = ?",
+            ("gate5-stop-once",),
+        )
+        .fetchone()[0]
+        == 1
+    )
 
     assert dispatch() == [operation_id]
     assert container.operations.get(operation_id)["status"] == "Completed"
 
 
-def test_dispatcher_resumes_durable_queue_after_container_rebuild(
-    tmp_path, migrations_dir, clock
-):
+def test_dispatcher_resumes_durable_queue_after_container_rebuild(tmp_path, migrations_dir, clock):
     database_path = tmp_path / "queued-operation.db"
     keyfile_path = tmp_path / "queued-operation.key"
     first = bootstrap.build_container(
@@ -666,8 +684,7 @@ def test_canonical_world_list_filters_and_paginates_authenticated_results(gate5_
     client = gate5_app.test_client()
     client.set_cookie("mcmanager_session", session.token)
     filtered_response = client.get(
-        "/api/worlds?state=off&server_type=vanilla&mc_version=1.21&search=Gate"
-        "&limit=1&offset=0"
+        "/api/worlds?state=off&server_type=vanilla&mc_version=1.21&search=Gate" "&limit=1&offset=0"
     )
     paged_response = client.get("/api/worlds?limit=1&offset=1")
     deleted_response = client.get("/api/worlds")
@@ -676,9 +693,7 @@ def test_canonical_world_list_filters_and_paginates_authenticated_results(gate5_
     assert anonymous_response.status_code == 401
     assert filtered_response.status_code == 200
     filtered = filtered_response.get_json()
-    assert [world["world_id"] for world in filtered["data"]["worlds"]] == [
-        "world_list_vanilla"
-    ]
+    assert [world["world_id"] for world in filtered["data"]["worlds"]] == ["world_list_vanilla"]
     assert filtered["meta"]["pagination"] == {"limit": 1, "offset": 0, "total": 1}
     paged = paged_response.get_json()
     assert paged["meta"]["pagination"] == {"limit": 1, "offset": 1, "total": 2}
@@ -686,16 +701,13 @@ def test_canonical_world_list_filters_and_paginates_authenticated_results(gate5_
         world["world_id"] for world in deleted_response.get_json()["data"]["worlds"]
     }
     assert "world_list_deleted" in {
-        world["world_id"]
-        for world in include_deleted_response.get_json()["data"]["worlds"]
+        world["world_id"] for world in include_deleted_response.get_json()["data"]["worlds"]
     }
 
 
 def test_world_management_page_uses_canonical_world_list_api():
     root = Path(__file__).resolve().parents[2]
-    source = (root / "app" / "shell" / "static" / "shell.js").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "app" / "shell" / "static" / "shell.js").read_text(encoding="utf-8")
 
     assert "fetch(`/api/worlds?" in source
     assert "data-world-list" in source
@@ -802,8 +814,10 @@ def test_all_documented_sse_topics_pass_through_the_hub(gate5_app):
         for topic in topics:
             container.realtime.publish("events", topic, {"topic": topic})
         received = [_sse_chunk(iterator) for _ in topics]
-        assert [next(line[7:] for line in frame.splitlines() if line.startswith("event: "))
-                for frame in received] == list(topics)
+        assert [
+            next(line[7:] for line in frame.splitlines() if line.startswith("event: "))
+            for frame in received
+        ] == list(topics)
     finally:
         response.close()
 
@@ -845,9 +859,36 @@ def test_manager_sse_replays_events_after_last_event_id(gate5_app):
         replay = _sse_chunk(iterator)
 
         assert "event: snapshot" in snapshot
+        assert "id: 1" in snapshot
         assert "id: 2" in replay
         assert "event: operation.terminal" in replay
         assert '"op_id":"op_after"' in replay
+    finally:
+        response.close()
+
+
+def test_manager_sse_clamps_future_last_event_id(gate5_app):
+    container = gate5_app.extensions["mcmanager_container"]
+    session = _login(container)
+    container.realtime.publish("events", "world.state", {"world_id": "world_one"})
+    container.realtime.publish("events", "world.state", {"world_id": "world_two"})
+    client = gate5_app.test_client()
+    client.set_cookie("mcmanager_session", session.token)
+    response = client.get(
+        "/stream/events",
+        headers={"Last-Event-ID": "99"},
+        buffered=False,
+    )
+    iterator = iter(response.response)
+    try:
+        snapshot = _sse_chunk(iterator)
+        assert "event: snapshot" in snapshot
+        assert "id: 2" in snapshot
+
+        container.realtime.publish("events", "world.state", {"world_id": "world_three"})
+        next_event = _sse_chunk(iterator)
+        assert "id: 3" in next_event
+        assert '"world_id":"world_three"' in next_event
     finally:
         response.close()
 

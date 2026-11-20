@@ -10,7 +10,12 @@ from typing import Any
 
 from flask import Blueprint, current_app, g, request
 
-from app.domain.tuning import CLEANUP_AGE_FLOOR_DAYS, CLEANUP_COUNT_FLOOR
+from app.domain.tuning import (
+    CLEANUP_AGE_FLOOR_DAYS,
+    CLEANUP_COUNT_FLOOR,
+    CLEANUP_STALE_SESSION_DEFAULT,
+    CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
+)
 from app.domain.value_objects import (
     ActorType,
     ConfigEditEntity,
@@ -26,11 +31,22 @@ from app.services.operations import OperationConflictError, OperationInput
 from app.web.errors import error, ok
 
 backup_catalogs_bp = Blueprint("api_backup_catalogs", __name__, url_prefix="/api")
-_CLEANUP_SCOPES = frozenset({"backups", "stale_worlds", "logs"})
+_CLEANUP_SCOPES = frozenset({"backups", "stale_backups", "logs"})
 _SYNC_SECRET_CONFIG_KEYS = frozenset(
-    {"password", "credential", "secret", "token", "access_token", "refresh_token",
-     "client_secret", "private_key", "auth_token", "authorization", "api_key",
-     "access_key"}
+    {
+        "password",
+        "credential",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "private_key",
+        "auth_token",
+        "authorization",
+        "api_key",
+        "access_key",
+    }
 )
 _TERMINAL_STATUSES = frozenset(
     {
@@ -62,6 +78,7 @@ def _serialize_row(row: Any) -> dict[str, Any]:
     for key in (
         "created_at",
         "deleted_at",
+        "stale_tombstoned_at",
         "started_at",
         "finished_at",
         "updated_at",
@@ -97,25 +114,40 @@ def _page(query: str, params: list[Any]) -> tuple[list[dict[str, Any]], dict[str
 
 
 def _world(world_id: str) -> dict[str, Any] | None:
-    row = _container().store.reader().execute(
-        "SELECT * FROM world_instances WHERE world_id = ? AND deleted_at IS NULL",
-        (world_id,),
-    ).fetchone()
+    row = (
+        _container()
+        .store.reader()
+        .execute(
+            "SELECT * FROM world_instances WHERE world_id = ? AND deleted_at IS NULL",
+            (world_id,),
+        )
+        .fetchone()
+    )
     return dict(row) if row is not None else None
 
 
-def _serialize_cleanup_policy(row: Any | None) -> dict[str, Any] | None:
-    if row is None:
-        return None
+def _serialize_cleanup_policy(row: Any) -> dict[str, Any]:
     policy = dict(row)
     for key in ("created_at", "last_changed_at", "deleted_at"):
         if key in policy:
             policy[key] = _iso(policy[key])
     if policy.get("count_rules"):
         try:
-            policy["count_rules"] = json.loads(policy["count_rules"])
-        except (TypeError, json.JSONDecodeError):
-            policy["count_rules"] = None
+            count_rules = json.loads(policy["count_rules"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Stored cleanup count rules are invalid.") from exc
+        if not isinstance(count_rules, dict) or not all(
+            isinstance(key, str) and key and type(value) is int and value >= CLEANUP_COUNT_FLOOR
+            for key, value in count_rules.items()
+        ):
+            raise ValueError("Stored cleanup count rules are invalid.")
+        policy["count_rules"] = count_rules
+    else:
+        policy["count_rules"] = {}
+    policy.setdefault("stale_session_threshold", CLEANUP_STALE_SESSION_DEFAULT)
+    if policy.get("space_rule_pct") is None:
+        policy["space_rule_pct"] = CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT
+    policy.setdefault("log_retention_days", None)
     policy["deleted"] = policy.get("deleted_at") is not None
     return policy
 
@@ -123,20 +155,25 @@ def _serialize_cleanup_policy(row: Any | None) -> dict[str, Any] | None:
 def _operation_response(operation: dict[str, Any], *, replayed: bool) -> Any:
     queue_position = None
     if operation.get("status") == OperationStatus.QUEUED.value and operation.get("world_id"):
-        queue_position = _container().store.reader().execute(
-            """
+        queue_position = (
+            _container()
+            .store.reader()
+            .execute(
+                """
             SELECT COUNT(*) FROM operations
             WHERE world_id = ? AND status = ?
               AND (created_at < ? OR (created_at = ? AND op_id <= ?))
             """,
-            (
-                operation["world_id"],
-                OperationStatus.QUEUED.value,
-                operation["created_at"],
-                operation["created_at"],
-                operation["op_id"],
-            ),
-        ).fetchone()[0]
+                (
+                    operation["world_id"],
+                    OperationStatus.QUEUED.value,
+                    operation["created_at"],
+                    operation["created_at"],
+                    operation["op_id"],
+                ),
+            )
+            .fetchone()[0]
+        )
     payload = _serialize_row(operation)
     if payload.get("checkpoint"):
         with suppress(TypeError, json.JSONDecodeError):
@@ -244,7 +281,11 @@ def create_world_backup(world_id: str) -> Any:
     if _world(world_id) is None:
         return error("WORLD_NOT_FOUND", "World not found.")
     body = _body()
-    if body is None or set(body).difference({"category"}) or body.get("category", "manual") != "manual":
+    if (
+        body is None
+        or set(body).difference({"category"})
+        or body.get("category", "manual") != "manual"
+    ):
         return error("VALIDATION_ERROR", "Only manual world backups can be requested here.")
     return _enqueue(
         OperationType.BACKUP,
@@ -283,9 +324,12 @@ def list_backups() -> Any:
 
 @backup_catalogs_bp.get("/backups/<artifact_id>")
 def get_backup(artifact_id: str) -> Any:
-    row = _container().store.reader().execute(
-        _artifact_query() + " WHERE b.artifact_id = ?", (artifact_id,)
-    ).fetchone()
+    row = (
+        _container()
+        .store.reader()
+        .execute(_artifact_query() + " WHERE b.artifact_id = ?", (artifact_id,))
+        .fetchone()
+    )
     if row is None:
         return error("BACKUP_ARTIFACT_NOT_FOUND", "Backup artifact not found.")
     serialized = _serialize_row(row)
@@ -306,9 +350,7 @@ def delete_backup(artifact_id: str) -> Any:
         if replay is not None:
             return _operation_response(replay, replayed=True)
     try:
-        artifact = _container().cleanup.validate_backup_artifact_delete(
-            artifact_id, force=force
-        )
+        artifact = _container().cleanup.validate_backup_artifact_delete(artifact_id, force=force)
     except KeyError:
         return error("BACKUP_ARTIFACT_NOT_FOUND", "Backup artifact not found.")
     except RetentionError as exc:
@@ -345,23 +387,28 @@ def _restore_precondition(world_id: str) -> Any | None:
         return error("WORLD_NOT_FOUND", "World not found.")
     if world["state"] != "off":
         return error("WORLD_NOT_OFF", "World must be off to restore.")
-    conflict = _container().store.reader().execute(
-        """
+    conflict = (
+        _container()
+        .store.reader()
+        .execute(
+            """
         SELECT 1 FROM operations
         WHERE world_id = ? AND op_type IN (?, ?, ?) AND status IN (?, ?, ?, ?)
         LIMIT 1
         """,
-        (
-            world_id,
-            OperationType.BACKUP.value,
-            OperationType.RESTORE.value,
-            OperationType.CLEANUP.value,
-            OperationStatus.CREATED.value,
-            OperationStatus.QUEUED.value,
-            OperationStatus.VALIDATING.value,
-            OperationStatus.RUNNING.value,
-        ),
-    ).fetchone()
+            (
+                world_id,
+                OperationType.BACKUP.value,
+                OperationType.RESTORE.value,
+                OperationType.CLEANUP.value,
+                OperationStatus.CREATED.value,
+                OperationStatus.QUEUED.value,
+                OperationStatus.VALIDATING.value,
+                OperationStatus.RUNNING.value,
+            ),
+        )
+        .fetchone()
+    )
     if conflict is not None:
         return error("OP_CONFLICT_IN_FLIGHT", "World has an in-flight operation.", status=409)
     return None
@@ -370,17 +417,27 @@ def _restore_precondition(world_id: str) -> Any | None:
 def _resolve_restore_artifact(world_id: str, body: dict[str, Any]) -> str | Any:
     if set(body) == {"artifact_id"} and isinstance(body["artifact_id"], str):
         artifact_id = body["artifact_id"]
-        row = _container().store.reader().execute(
-            "SELECT artifact_id FROM backup_artifacts "
-            "WHERE artifact_id = ? AND world_id = ? AND deleted_at IS NULL",
-            (artifact_id, world_id),
-        ).fetchone()
+        row = (
+            _container()
+            .store.reader()
+            .execute(
+                "SELECT artifact_id FROM backup_artifacts "
+                "WHERE artifact_id = ? AND world_id = ? AND deleted_at IS NULL",
+                (artifact_id, world_id),
+            )
+            .fetchone()
+        )
     elif set(body) == {"source_path"} and isinstance(body["source_path"], str):
-        row = _container().store.reader().execute(
-            "SELECT artifact_id FROM backup_artifacts "
-            "WHERE storage_path = ? AND world_id = ? AND deleted_at IS NULL",
-            (body["source_path"], world_id),
-        ).fetchone()
+        row = (
+            _container()
+            .store.reader()
+            .execute(
+                "SELECT artifact_id FROM backup_artifacts "
+                "WHERE storage_path = ? AND world_id = ? AND deleted_at IS NULL",
+                (body["source_path"], world_id),
+            )
+            .fetchone()
+        )
         artifact_id = str(row["artifact_id"]) if row is not None else ""
     else:
         return error("VALIDATION_ERROR", "artifact_id or source_path is required.")
@@ -412,26 +469,41 @@ def rollback_restore(world_id: str) -> Any:
     if body is None or len(body) != 1:
         return error("VALIDATION_ERROR", "restore_id is required.")
     if "restore_id" in body and isinstance(body["restore_id"], str):
-        history = _container().store.reader().execute(
-            "SELECT restore_id, operation_id, pre_restore_artifact_id "
-            "FROM restore_history WHERE restore_id = ? AND world_id = ?",
-            (body["restore_id"], world_id),
-        ).fetchone()
+        history = (
+            _container()
+            .store.reader()
+            .execute(
+                "SELECT restore_id, operation_id, pre_restore_artifact_id "
+                "FROM restore_history WHERE restore_id = ? AND world_id = ?",
+                (body["restore_id"], world_id),
+            )
+            .fetchone()
+        )
     elif "pre_restore_artifact_id" in body and isinstance(body["pre_restore_artifact_id"], str):
-        history = _container().store.reader().execute(
-            "SELECT restore_id, operation_id, pre_restore_artifact_id "
-            "FROM restore_history WHERE pre_restore_artifact_id = ? AND world_id = ? "
-            "ORDER BY created_at DESC LIMIT 1",
-            (body["pre_restore_artifact_id"], world_id),
-        ).fetchone()
+        history = (
+            _container()
+            .store.reader()
+            .execute(
+                "SELECT restore_id, operation_id, pre_restore_artifact_id "
+                "FROM restore_history WHERE pre_restore_artifact_id = ? AND world_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (body["pre_restore_artifact_id"], world_id),
+            )
+            .fetchone()
+        )
     else:
         return error("VALIDATION_ERROR", "restore_id is required.")
     if history is None:
         return error("RESTORE_ARTIFACT_INVALID", "Restore history was not found.")
-    artifact = _container().store.reader().execute(
-        "SELECT 1 FROM backup_artifacts WHERE artifact_id = ? AND deleted_at IS NULL",
-        (history["pre_restore_artifact_id"],),
-    ).fetchone()
+    artifact = (
+        _container()
+        .store.reader()
+        .execute(
+            "SELECT 1 FROM backup_artifacts WHERE artifact_id = ? AND deleted_at IS NULL",
+            (history["pre_restore_artifact_id"],),
+        )
+        .fetchone()
+    )
     if artifact is None:
         return error("BACKUP_ARTIFACT_NOT_FOUND", "Pre-restore artifact not found.")
     return _enqueue(
@@ -450,12 +522,14 @@ def _cleanup_parameters(
 ) -> tuple[dict[str, Any] | None, Any | None]:
     if scope not in _CLEANUP_SCOPES:
         return None, error("VALIDATION_ERROR", "Unknown cleanup scope.")
-    if scope != "backups":
-        return None, error(
-            "CLEANUP_SCOPE_UNSUPPORTED",
-            "This cleanup service currently supports the backups scope only.",
-        )
-    if world_id is not None and (not isinstance(world_id, str) or _world(world_id) is None):
+    if world_id is not None and (
+        not isinstance(world_id, str)
+        or _container()
+        .store.reader()
+        .execute("SELECT 1 FROM world_instances WHERE world_id = ?", (world_id,))
+        .fetchone()
+        is None
+    ):
         return None, error("WORLD_NOT_FOUND", "World not found.")
 
     reader = _container().store.reader()
@@ -475,7 +549,9 @@ def _cleanup_parameters(
         if type(policy_version) is not int or policy_version < 1:
             return None, error("VALIDATION_ERROR", "policy_version must be a positive integer.")
         if policy is None or policy["version"] != policy_version:
-            return None, error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.")
+            return None, error(
+                "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry."
+            )
     older_than_days = max(
         CLEANUP_AGE_FLOOR_DAYS,
         int(policy["age_rule_days"]) if policy is not None else CLEANUP_AGE_FLOOR_DAYS,
@@ -484,18 +560,36 @@ def _cleanup_parameters(
     if policy is not None and policy["count_rules"]:
         try:
             count_rules = json.loads(policy["count_rules"])
-            if isinstance(count_rules, dict):
-                values = [value for value in count_rules.values() if type(value) is int]
-                if values:
-                    keep_per_category = max(keep_per_category, *values)
         except (TypeError, json.JSONDecodeError):
-            pass
+            return None, error(
+                "CLEANUP_POLICY_INVALID", "Stored cleanup count rules are invalid.", status=409
+            )
+        if not isinstance(count_rules, dict) or not all(
+            isinstance(key, str) and key and type(value) is int and value >= CLEANUP_COUNT_FLOOR
+            for key, value in count_rules.items()
+        ):
+            return None, error(
+                "CLEANUP_POLICY_INVALID", "Stored cleanup count rules are invalid.", status=409
+            )
+        if count_rules:
+            keep_per_category = max(keep_per_category, *count_rules.values())
     return {
         "scope": scope,
         "world_id": world_id,
         "policy_version": policy["version"] if policy is not None else None,
         "older_than_days": older_than_days,
         "keep_per_category": keep_per_category,
+        "stale_session_threshold": (
+            int(policy["stale_session_threshold"])
+            if policy is not None
+            else CLEANUP_STALE_SESSION_DEFAULT
+        ),
+        "space_rule_pct": (
+            int(policy["space_rule_pct"])
+            if policy is not None and policy["space_rule_pct"] is not None
+            else CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT
+        ),
+        "log_retention_days": (policy["log_retention_days"] if policy is not None else None),
     }, None
 
 
@@ -508,6 +602,7 @@ def _cleanup_preview(body: dict[str, Any]) -> Any:
     )
     if failure is not None:
         return failure
+    assert parameters is not None
     return _enqueue(OperationType.CLEANUP, parameters["world_id"], {**parameters, "wet": False})
 
 
@@ -541,6 +636,7 @@ def cleanup_execute() -> Any:
     )
     if failure is not None:
         return failure
+    assert parameters is not None
     preview = _container().operations.get(body["dry_run_operation_id"])
     try:
         preview_data = json.loads(preview.get("data_json") or "{}") if preview else {}
@@ -553,7 +649,9 @@ def cleanup_execute() -> Any:
         or preview_data.get("scope") != parameters["scope"]
         or preview_data.get("world_id") != parameters["world_id"]
     ):
-        return error("CLEANUP_PREVIEW_REQUIRED", "A matching completed cleanup preview is required.")
+        return error(
+            "CLEANUP_PREVIEW_REQUIRED", "A matching completed cleanup preview is required."
+        )
     return _enqueue(
         OperationType.CLEANUP,
         parameters["world_id"],
@@ -597,10 +695,15 @@ def world_cleanup_preview(world_id: str) -> Any:
 
 @backup_catalogs_bp.get("/cleanup/policy")
 def get_global_cleanup_policy() -> Any:
-    policy = _container().store.reader().execute(
-        "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
-        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
-    ).fetchone()
+    policy = (
+        _container()
+        .store.reader()
+        .execute(
+            "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
+            "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+        )
+        .fetchone()
+    )
     if policy is None:
         return ok(
             {
@@ -608,8 +711,10 @@ def get_global_cleanup_policy() -> Any:
                     "scope": "global",
                     "world_id": None,
                     "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
-                    "space_rule_pct": None,
+                    "space_rule_pct": CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
                     "count_rules": {},
+                    "stale_session_threshold": CLEANUP_STALE_SESSION_DEFAULT,
+                    "log_retention_days": None,
                     "schedule_id": None,
                 },
                 "version": 0,
@@ -623,7 +728,15 @@ def get_global_cleanup_policy() -> Any:
 def patch_global_cleanup_policy() -> Any:
     container = _container()
     body = _body()
-    allowed = {"version", "age_rule_days", "space_rule_pct", "count_rules", "schedule_id"}
+    allowed = {
+        "version",
+        "age_rule_days",
+        "space_rule_pct",
+        "count_rules",
+        "stale_session_threshold",
+        "log_retention_days",
+        "schedule_id",
+    }
     if (
         body is None
         or type(body.get("version")) is not int
@@ -631,7 +744,9 @@ def patch_global_cleanup_policy() -> Any:
         or not set(body).difference({"version"})
         or set(body).difference(allowed)
     ):
-        return error("VALIDATION_ERROR", "A version and editable cleanup policy fields are required.")
+        return error(
+            "VALIDATION_ERROR", "A version and editable cleanup policy fields are required."
+        )
 
     fields: dict[str, Any] = {}
     if "age_rule_days" in body:
@@ -642,17 +757,28 @@ def patch_global_cleanup_policy() -> Any:
     if "space_rule_pct" in body:
         value = body["space_rule_pct"]
         if value is not None and (type(value) is not int or not 1 <= value <= 90):
-            return error("VALIDATION_ERROR", "space_rule_pct must be null or an integer from 1 to 90.")
+            return error(
+                "VALIDATION_ERROR", "space_rule_pct must be null or an integer from 1 to 90."
+            )
         fields["space_rule_pct"] = value
+    if "stale_session_threshold" in body:
+        value = body["stale_session_threshold"]
+        if type(value) is not int or value < 1:
+            return error("VALIDATION_ERROR", "stale_session_threshold must be a positive integer.")
+        fields["stale_session_threshold"] = value
+    if "log_retention_days" in body:
+        value = body["log_retention_days"]
+        if value is not None and (type(value) is not int or value < CLEANUP_AGE_FLOOR_DAYS):
+            return error(
+                "VALIDATION_ERROR", "log_retention_days must be null or an integer of at least 3."
+            )
+        fields["log_retention_days"] = value
     if "count_rules" in body:
         value = body["count_rules"]
         if not isinstance(value, dict):
             return error("VALIDATION_ERROR", "count_rules must be an object.")
         if not all(
-            isinstance(key, str)
-            and key
-            and type(count) is int
-            and count >= CLEANUP_COUNT_FLOOR
+            isinstance(key, str) and key and type(count) is int and count >= CLEANUP_COUNT_FLOOR
             for key, count in value.items()
         ):
             return error("VALIDATION_ERROR", "count_rules values must be integers of at least 3.")
@@ -662,29 +788,41 @@ def patch_global_cleanup_policy() -> Any:
         if value is not None:
             if not isinstance(value, str):
                 return error("VALIDATION_ERROR", "schedule_id must be null or a schedule ID.")
-            schedule = container.store.reader().execute(
-                "SELECT 1 FROM schedules WHERE schedule_id = ? AND scope = 'global' "
-                "AND world_id IS NULL AND deleted_at IS NULL",
-                (value,),
-            ).fetchone()
+            schedule = (
+                container.store.reader()
+                .execute(
+                    "SELECT 1 FROM schedules WHERE schedule_id = ? AND scope = 'global' "
+                    "AND world_id IS NULL AND deleted_at IS NULL",
+                    (value,),
+                )
+                .fetchone()
+            )
             if schedule is None:
                 return error("NOT_FOUND", "Manager-wide cleanup schedule not found.", status=404)
         fields["schedule_id"] = value
 
-    policy = container.store.reader().execute(
-        "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
-        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
-    ).fetchone()
+    policy = (
+        container.store.reader()
+        .execute(
+            "SELECT * FROM cleanup_policies WHERE scope = 'global' AND world_id IS NULL "
+            "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+        )
+        .fetchone()
+    )
     if policy is None:
         if body["version"] != 0:
-            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+            return error(
+                "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409
+            )
         policy_id = f"cpol_{uuid.uuid4().hex[:16]}"
         defaults = {
             "scope": "global",
             "world_id": None,
             "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
-            "space_rule_pct": None,
+            "space_rule_pct": CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
             "count_rules": None,
+            "stale_session_threshold": CLEANUP_STALE_SESSION_DEFAULT,
+            "log_retention_days": None,
             "schedule_id": None,
         }
         defaults.update(fields)
@@ -692,7 +830,9 @@ def patch_global_cleanup_policy() -> Any:
     else:
         policy_id = policy["policy_id"]
         if policy["version"] != body["version"]:
-            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+            return error(
+                "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409
+            )
 
     try:
         updated, operation = container.configuration.update_versioned_with_operation(
@@ -706,7 +846,9 @@ def patch_global_cleanup_policy() -> Any:
             )
         )
     except ConfigurationConflictError:
-        return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+        return error(
+            "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409
+        )
     except (KeyError, ValueError) as exc:
         return error("VALIDATION_ERROR", str(exc), status=400)
 
@@ -737,25 +879,31 @@ def get_world_cleanup_policy(world_id: str) -> Any:
             "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
         ).fetchone()
     if policy is None:
-        return ok({
-            "cleanup_policy": {
-                "scope": "world",
-                "world_id": world_id,
-                "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
-                "space_rule_pct": None,
-                "count_rules": {},
-                "schedule_id": None,
-            },
-            "version": 0,
-            "inherited": True,
-        })
+        return ok(
+            {
+                "cleanup_policy": {
+                    "scope": "world",
+                    "world_id": world_id,
+                    "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
+                    "space_rule_pct": CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
+                    "count_rules": {},
+                    "stale_session_threshold": CLEANUP_STALE_SESSION_DEFAULT,
+                    "log_retention_days": None,
+                    "schedule_id": None,
+                },
+                "version": 0,
+                "inherited": True,
+            }
+        )
     serialized = _serialize_cleanup_policy(policy)
     inherited = policy["scope"] == "global"
-    return ok({
-        "cleanup_policy": serialized,
-        "version": serialized["version"] if not inherited else 0,
-        "inherited": inherited,
-    })
+    return ok(
+        {
+            "cleanup_policy": serialized,
+            "version": serialized["version"] if not inherited else 0,
+            "inherited": inherited,
+        }
+    )
 
 
 @backup_catalogs_bp.patch("/worlds/<world_id>/cleanup-policy")
@@ -764,7 +912,15 @@ def patch_world_cleanup_policy(world_id: str) -> Any:
     if _world(world_id) is None:
         return error("WORLD_NOT_FOUND", "World not found.")
     body = _body()
-    allowed = {"version", "age_rule_days", "space_rule_pct", "count_rules", "schedule_id"}
+    allowed = {
+        "version",
+        "age_rule_days",
+        "space_rule_pct",
+        "count_rules",
+        "stale_session_threshold",
+        "log_retention_days",
+        "schedule_id",
+    }
     if (
         body is None
         or type(body.get("version")) is not int
@@ -772,7 +928,9 @@ def patch_world_cleanup_policy(world_id: str) -> Any:
         or not set(body).difference({"version"})
         or set(body).difference(allowed)
     ):
-        return error("VALIDATION_ERROR", "A version and editable cleanup policy fields are required.")
+        return error(
+            "VALIDATION_ERROR", "A version and editable cleanup policy fields are required."
+        )
 
     fields: dict[str, Any] = {}
     if "age_rule_days" in body:
@@ -783,14 +941,30 @@ def patch_world_cleanup_policy(world_id: str) -> Any:
     if "space_rule_pct" in body:
         value = body["space_rule_pct"]
         if value is not None and (type(value) is not int or not 1 <= value <= 90):
-            return error("VALIDATION_ERROR", "space_rule_pct must be null or an integer from 1 to 90.")
+            return error(
+                "VALIDATION_ERROR", "space_rule_pct must be null or an integer from 1 to 90."
+            )
         fields["space_rule_pct"] = value
+    if "stale_session_threshold" in body:
+        value = body["stale_session_threshold"]
+        if type(value) is not int or value < 1:
+            return error("VALIDATION_ERROR", "stale_session_threshold must be a positive integer.")
+        fields["stale_session_threshold"] = value
+    if "log_retention_days" in body:
+        value = body["log_retention_days"]
+        if value is not None and (type(value) is not int or value < CLEANUP_AGE_FLOOR_DAYS):
+            return error(
+                "VALIDATION_ERROR", "log_retention_days must be null or an integer of at least 3."
+            )
+        fields["log_retention_days"] = value
     if "count_rules" in body:
         value = body["count_rules"]
         if not isinstance(value, dict):
             return error("VALIDATION_ERROR", "count_rules must be an object.")
-        if not all(isinstance(key, str) and key and type(count) is int and count >= CLEANUP_COUNT_FLOOR
-                   for key, count in value.items()):
+        if not all(
+            isinstance(key, str) and key and type(count) is int and count >= CLEANUP_COUNT_FLOOR
+            for key, count in value.items()
+        ):
             return error("VALIDATION_ERROR", "count_rules values must be integers of at least 3.")
         fields["count_rules"] = json.dumps(value, separators=(",", ":"))
     if "schedule_id" in body:
@@ -798,28 +972,40 @@ def patch_world_cleanup_policy(world_id: str) -> Any:
         if value is not None:
             if not isinstance(value, str):
                 return error("VALIDATION_ERROR", "schedule_id must be null or a schedule ID.")
-            schedule = container.store.reader().execute(
-                "SELECT 1 FROM schedules WHERE schedule_id = ? AND scope = 'world' "
-                "AND world_id = ? AND deleted_at IS NULL",
-                (value, world_id),
-            ).fetchone()
+            schedule = (
+                container.store.reader()
+                .execute(
+                    "SELECT 1 FROM schedules WHERE schedule_id = ? AND scope = 'world' "
+                    "AND world_id = ? AND deleted_at IS NULL",
+                    (value, world_id),
+                )
+                .fetchone()
+            )
             if schedule is None:
                 return error("NOT_FOUND", "World cleanup schedule not found.", status=404)
         fields["schedule_id"] = value
 
-    policy = container.store.reader().execute(
-        "SELECT * FROM cleanup_policies WHERE scope = 'world' AND world_id = ? "
-        "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
-        (world_id,),
-    ).fetchone()
+    policy = (
+        container.store.reader()
+        .execute(
+            "SELECT * FROM cleanup_policies WHERE scope = 'world' AND world_id = ? "
+            "AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
+            (world_id,),
+        )
+        .fetchone()
+    )
     if policy is None:
         if body["version"] != 0:
-            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+            return error(
+                "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409
+            )
         policy_id = f"cpol_{uuid.uuid4().hex[:16]}"
         defaults = {
             "age_rule_days": CLEANUP_AGE_FLOOR_DAYS,
-            "space_rule_pct": None,
+            "space_rule_pct": CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
             "count_rules": None,
+            "stale_session_threshold": CLEANUP_STALE_SESSION_DEFAULT,
+            "log_retention_days": None,
             "schedule_id": None,
         }
         defaults.update(fields)
@@ -827,7 +1013,9 @@ def patch_world_cleanup_policy(world_id: str) -> Any:
     else:
         policy_id = policy["policy_id"]
         if policy["version"] != body["version"]:
-            return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+            return error(
+                "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409
+            )
 
     try:
         updated, operation = container.configuration.update_versioned_with_operation(
@@ -841,14 +1029,20 @@ def patch_world_cleanup_policy(world_id: str) -> Any:
             )
         )
     except ConfigurationConflictError:
-        return error("CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409)
+        return error(
+            "CONFIG_VERSION_CONFLICT", "Cleanup policy changed; reload and retry.", status=409
+        )
     except (KeyError, ValueError) as exc:
         return error("VALIDATION_ERROR", str(exc), status=400)
 
     serialized = _serialize_cleanup_policy(updated)
     return ok(
-        {"cleanup_policy": serialized, "version": serialized["version"], "inherited": False,
-         "operation": operation},
+        {
+            "cleanup_policy": serialized,
+            "version": serialized["version"],
+            "inherited": False,
+            "operation": operation,
+        },
         meta={"op_id": operation["op_id"]},
     )
 
@@ -861,9 +1055,7 @@ def _validate_sync_config(config: Any, target_type: str) -> str:
     if not isinstance(config, dict):
         raise ValueError("config must be a JSON object.")
     name = config.get("name")
-    if name is not None and (
-        not isinstance(name, str) or not name.strip() or len(name) > 120
-    ):
+    if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > 120):
         raise ValueError("config.name must be a non-empty string of at most 120 characters.")
 
     def contains_secret_key(value: Any) -> bool:
@@ -873,8 +1065,14 @@ def _validate_sync_config(config: Any, target_type: str) -> str:
                 if normalized in _SYNC_SECRET_CONFIG_KEYS or any(
                     marker in normalized
                     for marker in (
-                        "password", "credential", "secret", "token", "private_key",
-                        "authorization", "api_key", "access_key",
+                        "password",
+                        "credential",
+                        "secret",
+                        "token",
+                        "private_key",
+                        "authorization",
+                        "api_key",
+                        "access_key",
                     )
                 ):
                     return True
@@ -899,11 +1097,7 @@ def _validate_sync_config(config: Any, target_type: str) -> str:
 def _valid_sync_target_scope(scope: Any, world_id: Any) -> bool:
     if scope == "global":
         return world_id is None
-    return (
-        scope == "world"
-        and isinstance(world_id, str)
-        and _world(world_id) is not None
-    )
+    return scope == "world" and isinstance(world_id, str) and _world(world_id) is not None
 
 
 def _start_sync_target_edit(
@@ -925,9 +1119,7 @@ def _start_sync_target_edit(
         initial_status=OperationStatus.QUEUED,
         allow_world_conflict=True,
     )
-    return _container().operations.transition(
-        operation["op_id"], OperationStatus.RUNNING
-    )
+    return _container().operations.transition(operation["op_id"], OperationStatus.RUNNING)
 
 
 def _config_update_sync_target(
@@ -945,10 +1137,14 @@ def _config_update_sync_target(
             )
         )
     except ConfigurationConflictError:
-        return None, None, error(
-            "CONFIG_VERSION_CONFLICT",
-            "Configuration changed; reload and retry.",
-            status=409,
+        return (
+            None,
+            None,
+            error(
+                "CONFIG_VERSION_CONFLICT",
+                "Configuration changed; reload and retry.",
+                status=409,
+            ),
         )
     except KeyError:
         return None, None, error("NOT_FOUND", "Sync target not found.", status=404)
@@ -961,7 +1157,11 @@ def _config_update_sync_target(
 def list_sync_records() -> Any:
     clauses: list[str] = []
     params: list[Any] = []
-    for key, column in (("status", "sr.status"), ("world_id", "b.world_id"), ("artifact_id", "sr.artifact_id")):
+    for key, column in (
+        ("status", "sr.status"),
+        ("world_id", "b.world_id"),
+        ("artifact_id", "sr.artifact_id"),
+    ):
         value = request.args.get(key)
         if value is not None:
             if key == "status" and value not in {"pending", "succeeded", "failed"}:
@@ -983,21 +1183,34 @@ def list_sync_records() -> Any:
 
 @backup_catalogs_bp.get("/backups/<artifact_id>/sync")
 def get_backup_sync(artifact_id: str) -> Any:
-    artifact = _container().store.reader().execute(
-        "SELECT artifact_id FROM backup_artifacts WHERE artifact_id = ?", (artifact_id,)
-    ).fetchone()
+    artifact = (
+        _container()
+        .store.reader()
+        .execute("SELECT artifact_id FROM backup_artifacts WHERE artifact_id = ?", (artifact_id,))
+        .fetchone()
+    )
     if artifact is None:
         return error("BACKUP_ARTIFACT_NOT_FOUND", "Backup artifact not found.")
-    row = _container().store.reader().execute(
-        "SELECT * FROM sync_records WHERE artifact_id = ? ORDER BY created_at DESC LIMIT 1",
-        (artifact_id,),
-    ).fetchone()
+    row = (
+        _container()
+        .store.reader()
+        .execute(
+            "SELECT * FROM sync_records WHERE artifact_id = ? ORDER BY created_at DESC LIMIT 1",
+            (artifact_id,),
+        )
+        .fetchone()
+    )
     if row is None:
         return ok({"sync": None, "attempts": []})
-    attempts = _container().store.reader().execute(
-        "SELECT * FROM sync_attempts WHERE sync_id = ? ORDER BY attempt_number",
-        (row["sync_id"],),
-    ).fetchall()
+    attempts = (
+        _container()
+        .store.reader()
+        .execute(
+            "SELECT * FROM sync_attempts WHERE sync_id = ? ORDER BY attempt_number",
+            (row["sync_id"],),
+        )
+        .fetchall()
+    )
     return ok(
         {
             "sync": _serialize_row(row),
@@ -1011,11 +1224,16 @@ def retry_sync() -> Any:
     body = _body()
     if body is None or set(body) != {"artifact_id"} or not isinstance(body["artifact_id"], str):
         return error("VALIDATION_ERROR", "artifact_id is required.")
-    artifact = _container().store.reader().execute(
-        "SELECT artifact_id, world_id FROM backup_artifacts "
-        "WHERE artifact_id = ? AND deleted_at IS NULL",
-        (body["artifact_id"],),
-    ).fetchone()
+    artifact = (
+        _container()
+        .store.reader()
+        .execute(
+            "SELECT artifact_id, world_id FROM backup_artifacts "
+            "WHERE artifact_id = ? AND deleted_at IS NULL",
+            (body["artifact_id"],),
+        )
+        .fetchone()
+    )
     if artifact is None:
         return error("BACKUP_ARTIFACT_NOT_FOUND", "Backup artifact not found.")
     target_id = _sync_target(artifact["world_id"])
@@ -1039,9 +1257,12 @@ def list_sync_targets() -> Any:
     if world_id is not None:
         query += " AND (scope = 'global' OR (scope = 'world' AND world_id = ?))"
         params.append(world_id)
-    rows = _container().store.reader().execute(
-        query + " ORDER BY scope, created_at DESC", params
-    ).fetchall()
+    rows = (
+        _container()
+        .store.reader()
+        .execute(query + " ORDER BY scope, created_at DESC", params)
+        .fetchall()
+    )
     targets = []
     for row in rows:
         target = _serialize_row(row)
@@ -1050,9 +1271,7 @@ def list_sync_targets() -> Any:
         except (TypeError, json.JSONDecodeError):
             target["config"] = None
         target["name"] = (
-            target["config"].get("name")
-            if isinstance(target["config"], dict)
-            else None
+            target["config"].get("name") if isinstance(target["config"], dict) else None
         ) or target["sync_target_id"]
         target["enabled"] = bool(target["enabled"])
         target["effective"] = target["sync_target_id"] == effective_target
@@ -1064,11 +1283,11 @@ def list_sync_targets() -> Any:
 @backup_catalogs_bp.post("/sync/targets")
 def create_sync_target() -> Any:
     body = _body()
-    allowed = {
-        "scope", "world_id", "target_type", "config", "credential", "enabled", "name"
-    }
+    allowed = {"scope", "world_id", "target_type", "config", "credential", "enabled", "name"}
     if body is None or set(body).difference(allowed):
-        return error("VALIDATION_ERROR", "A JSON object with supported sync-target fields is required.")
+        return error(
+            "VALIDATION_ERROR", "A JSON object with supported sync-target fields is required."
+        )
     scope = body.get("scope")
     world_id = body.get("world_id")
     target_type = body.get("target_type")
@@ -1083,9 +1302,7 @@ def create_sync_target() -> Any:
         or not isinstance(credential, str)
         or not credential.strip()
         or len(credential) > 8192
-        or (name is not None and (
-            not isinstance(name, str) or not name.strip() or len(name) > 120
-        ))
+        or (name is not None and (not isinstance(name, str) or not name.strip() or len(name) > 120))
     ):
         return error("VALIDATION_ERROR", "Sync target fields are invalid.")
     config = body.get("config")
@@ -1124,8 +1341,15 @@ def create_sync_target() -> Any:
             "config, secret_id, enabled, version, deleted_at, deleted_by, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)",
             (
-                target_id, scope, world_id, target_type, serialized_config,
-                secret_id, int(enabled), now, now,
+                target_id,
+                scope,
+                world_id,
+                target_type,
+                serialized_config,
+                secret_id,
+                int(enabled),
+                now,
+                now,
             ),
         )
         writer.commit()
@@ -1155,11 +1379,13 @@ def create_sync_target() -> Any:
             },
         )
         return error("SYNC_TARGET_CREATE_FAILED", "Sync target could not be created.", status=500)
-    row = _serialize_row(dict(
-        container.store.reader()
-        .execute("SELECT * FROM sync_targets WHERE sync_target_id = ?", (target_id,))
-        .fetchone()
-    ))
+    row = _serialize_row(
+        dict(
+            container.store.reader()
+            .execute("SELECT * FROM sync_targets WHERE sync_target_id = ?", (target_id,))
+            .fetchone()
+        )
+    )
     row["config"] = config
     row["enabled"] = bool(row["enabled"])
     row["name"] = config.get("name", target_id)
@@ -1173,7 +1399,16 @@ def create_sync_target() -> Any:
 @backup_catalogs_bp.patch("/sync/targets/<target_id>")
 def update_sync_target(target_id: str) -> Any:
     body = _body()
-    allowed = {"version", "scope", "world_id", "target_type", "config", "credential", "enabled", "name"}
+    allowed = {
+        "version",
+        "scope",
+        "world_id",
+        "target_type",
+        "config",
+        "credential",
+        "enabled",
+        "name",
+    }
     if (
         body is None
         or type(body.get("version")) is not int
@@ -1183,14 +1418,20 @@ def update_sync_target(target_id: str) -> Any:
     ):
         return error("VALIDATION_ERROR", "A version and editable sync-target fields are required.")
     container = _container()
-    current = container.store.reader().execute(
-        "SELECT * FROM sync_targets WHERE sync_target_id = ? AND deleted_at IS NULL",
-        (target_id,),
-    ).fetchone()
+    current = (
+        container.store.reader()
+        .execute(
+            "SELECT * FROM sync_targets WHERE sync_target_id = ? AND deleted_at IS NULL",
+            (target_id,),
+        )
+        .fetchone()
+    )
     if current is None:
         return error("NOT_FOUND", "Sync target not found.", status=404)
     if current["version"] != body["version"]:
-        return error("CONFIG_VERSION_CONFLICT", "Configuration changed; reload and retry.", status=409)
+        return error(
+            "CONFIG_VERSION_CONFLICT", "Configuration changed; reload and retry.", status=409
+        )
 
     fields: dict[str, Any] = {}
     scope = body.get("scope", current["scope"])
@@ -1238,12 +1479,11 @@ def update_sync_target(target_id: str) -> Any:
 
     credential = body.get("credential")
     if "credential" in body:
-        if (
-            not isinstance(credential, str)
-            or not credential.strip()
-            or len(credential) > 8192
-        ):
-            return error("VALIDATION_ERROR", "credential must be a non-empty string of at most 8192 characters.")
+        if not isinstance(credential, str) or not credential.strip() or len(credential) > 8192:
+            return error(
+                "VALIDATION_ERROR",
+                "credential must be a non-empty string of at most 8192 characters.",
+            )
         try:
             fields["secret_id"] = container.secrets.rotate(
                 current["secret_id"],
@@ -1252,12 +1492,14 @@ def update_sync_target(target_id: str) -> Any:
                 associated_entity_id=target_id,
             )
         except Exception:
-            return error("SYNC_TARGET_CREDENTIAL_FAILED", "Sync target credential could not be updated.", status=500)
+            return error(
+                "SYNC_TARGET_CREDENTIAL_FAILED",
+                "Sync target credential could not be updated.",
+                status=500,
+            )
     if not fields:
         return error("VALIDATION_ERROR", "At least one editable field is required.")
-    updated, operation, failure = _config_update_sync_target(
-        target_id, body["version"], fields
-    )
+    updated, operation, failure = _config_update_sync_target(target_id, body["version"], fields)
     if failure is not None:
         return failure
     updated = _serialize_row(updated)
@@ -1273,11 +1515,15 @@ def update_sync_target(target_id: str) -> Any:
 @backup_catalogs_bp.delete("/sync/targets/<target_id>")
 def delete_sync_target(target_id: str) -> Any:
     container = _container()
-    row = container.store.reader().execute(
-        "SELECT version, world_id FROM sync_targets "
-        "WHERE sync_target_id = ? AND deleted_at IS NULL",
-        (target_id,),
-    ).fetchone()
+    row = (
+        container.store.reader()
+        .execute(
+            "SELECT version, world_id FROM sync_targets "
+            "WHERE sync_target_id = ? AND deleted_at IS NULL",
+            (target_id,),
+        )
+        .fetchone()
+    )
     if row is None:
         return error("NOT_FOUND", "Sync target not found.", status=404)
     _, operation, failure = _config_update_sync_target(

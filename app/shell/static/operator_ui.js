@@ -11,6 +11,11 @@
   const notificationsButton = document.querySelector('[data-notifications]');
   const notificationPanel = document.querySelector('[data-notification-panel]');
   const unreadCountBadge = document.querySelector('[data-unread-count]');
+  const cleanupScopes = [
+    ['backups', 'Backups'],
+    ['stale_backups', 'Stale backups'],
+    ['logs', 'Rotated logs'],
+  ];
   let worlds = [];
   let worldId = '';
   let notifications = [];
@@ -19,7 +24,9 @@
   let statusMessage = '';
   let cleanupOperationId = '';
   let cleanupWorldId = '';
+  let cleanupScope = 'backups';
   let cleanupOperationStatus = '';
+  let cleanupPreviewSummary = '';
   let editingSyncTargetId = '';
   let auditFilters = {};
   let logTimer = null;
@@ -177,8 +184,11 @@
         },
         body: JSON.stringify({ password }),
       });
-      headers['X-CSRF-Token'] = cookie('csrf_token');
-      return request(url, options);
+      const retryHeaders = {
+        ...headers,
+        'X-CSRF-Token': cookie('csrf_token'),
+      };
+      return request(url, { ...options, headers: retryHeaders });
     }
   }
 
@@ -336,14 +346,15 @@
   }
 
   function initializeTheme() {
-    let theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    const root = document.documentElement;
+    let theme = root?.dataset?.theme === 'dark' ? 'dark' : 'light';
     try {
       const savedTheme = window.localStorage?.getItem('mcmanager-theme');
       if (savedTheme === 'light' || savedTheme === 'dark') theme = savedTheme;
     } catch (error) {
       console.warn('Unable to read the saved theme preference.', error);
     }
-    document.documentElement.dataset.theme = theme;
+    if (root?.dataset) root.dataset.theme = theme;
     if (themeToggle) themeToggle.checked = theme === 'dark';
   }
 
@@ -438,25 +449,29 @@
       try {
         const operation = await request(`/api/operations/${encodeURIComponent(cleanupOperationId)}`);
         cleanupOperationStatus = operation.data.operation.status;
+        const operationData = operation.data.operation.data_json;
+        cleanupPreviewSummary = operationData ? JSON.stringify(JSON.parse(operationData), null, 2) : '';
       } catch (_error) { cleanupOperationStatus = ''; }
     }
     root.innerHTML = message() +
       card('Manager-wide backup retention policy', `<form class="workflow-form" data-form="global-cleanup-policy">` +
         `${field('Minimum backup age (days)', 'age_rule_days', policy.age_rule_days, 'number', true)}` +
         `${field('Space threshold (%)', 'space_rule_pct', policy.space_rule_pct ?? '', 'number')}` +
+        `${field('Completed sessions before stale backup cleanup', 'stale_session_threshold', policy.stale_session_threshold ?? 7, 'number', true)}` +
+        `${field('Log retention days (blank = unlimited)', 'log_retention_days', policy.log_retention_days ?? '', 'number')}` +
         `<label>Per-category minimum retained counts (JSON)<textarea class="ui-text-input" name="count_rules" rows="3" required>${escapeHtml(JSON.stringify(policy.count_rules || {}, null, 2))}</textarea></label>` +
         `${selectField('Cleanup schedule', 'schedule_id', [['', 'No schedule'], ...cleanupSchedules.map((schedule) => [schedule.schedule_id, `${schedule.time_of_day} · ${schedule.schedule_id}`])], policy.schedule_id || '')}` +
         `<input type="hidden" name="version" value="${escapeHtml(policyResult.data.version)}">` +
-        `<p class="muted">The three-day age and three-backup count floors cannot be lowered. World-specific policies may override these defaults.</p>` +
+        `<p class="muted">Stale-backup cleanup is pressure-gated (90% default), retains three per category, waits three days after tombstoning, and never removes restore/sync-referenced artifacts. Rotated logs are retained forever unless a finite retention is set.</p>` +
         `<button class="ui-button ui-button-blue" type="submit">Save global policy</button></form>`) +
       card('Retention preview', `<form class="workflow-form" data-form="cleanup-preview">` +
-      `${selectField('Scope', 'scope', [['backups', 'Backups']])}` +
+      `${selectField('Scope', 'scope', cleanupScopes, cleanupScope)}` +
       `${selectField('World', 'world_id', worldChoices())}<button class="ui-button ui-button-blue" type="submit">Run dry preview</button></form>` +
-      `${unavailable('Stale-world and log cleanup are not supported. The cleanup service currently supports backups only.')}` +
       (cleanupOperationId ? `<p>Preview ${escapeHtml(cleanupOperationId)} · ${escapeHtml(cleanupOperationStatus || 'status unavailable')}</p>` +
+        `${cleanupPreviewSummary ? `<pre class="data-output">${escapeHtml(cleanupPreviewSummary)}</pre>` : ''}` +
         `<form class="workflow-form" data-form="cleanup-execute"><input type="hidden" name="dry_run_operation_id" value="${escapeHtml(cleanupOperationId)}">` +
         `<input type="hidden" name="world_id" value="${escapeHtml(cleanupWorldId)}">` +
-        `${selectField('Scope', 'scope', [['backups', 'Backups']])}<label class="check-control"><input type="checkbox" name="elevated_confirmation"> Confirm backup cleanup</label>` +
+        `<input type="hidden" name="scope" value="${escapeHtml(cleanupScope)}"><label class="check-control"><input type="checkbox" name="elevated_confirmation"> Confirm cleanup</label>` +
         `<button class="ui-button ui-button-red" type="submit"${cleanupOperationStatus !== 'completed' ? ' disabled' : ''}>Execute completed preview</button></form>` : '') +
       (runs.data.cleanup_runs || []).map((run) => `<div class="table-row"><span>${escapeHtml(run.operation_id || run.op_id)} · ${escapeHtml(run.status)}</span>` +
         `${button('Check operation', 'operation-refresh', run.operation_id || run.op_id)}</div>`).join('')) +
@@ -690,6 +705,8 @@
       try {
         const operation = await request(`/api/operations/${encodeURIComponent(cleanupOperationId)}`);
         cleanupOperationStatus = operation.data.operation.status;
+        const operationData = operation.data.operation.data_json;
+        cleanupPreviewSummary = operationData ? JSON.stringify(JSON.parse(operationData), null, 2) : '';
       } catch (_error) { cleanupOperationStatus = ''; }
     }
     root.innerHTML = message() + card('Backup retention', `<p>Effective world settings version ${escapeHtml(settings.data.version)}.</p>` +
@@ -698,16 +715,19 @@
         `<input type="hidden" name="version" value="${escapeHtml(policy.data.version)}">` +
         `${field('Age rule (days, minimum 3)', 'age_rule_days', String(policyData.age_rule_days ?? 3), 'number', true)}` +
         `${field('Space rule (%)', 'space_rule_pct', policyData.space_rule_pct == null ? '' : String(policyData.space_rule_pct), 'number')}` +
+        `${field('Completed sessions before stale backup cleanup', 'stale_session_threshold', String(policyData.stale_session_threshold ?? 7), 'number', true)}` +
+        `${field('Log retention days (blank = unlimited)', 'log_retention_days', policyData.log_retention_days == null ? '' : String(policyData.log_retention_days), 'number')}` +
         `${field('Count rules (JSON, minimum 3)', 'count_rules', countRules)}` +
         `${field('Schedule ID (optional)', 'schedule_id', policyData.schedule_id || '')}` +
         `<p class="muted">${policy.data.inherited ? 'Inherited from the global fallback; saving creates a world override.' : `World override version ${escapeHtml(policy.data.version)}.`}</p>` +
         `<button class="ui-button ui-button-blue" type="submit">Save cleanup policy</button></form>`) +
       `<p>Preview operation: ${escapeHtml(cleanupOperationId && cleanupWorldId === id ? cleanupOperationId : 'Not run')} · ${escapeHtml(cleanupOperationStatus)}</p>` +
-      `${button('Refresh preview', 'cleanup-world-preview', id, 'ui-button-blue')}` +
+      `${cleanupPreviewSummary && cleanupWorldId === id ? `<pre class="data-output">${escapeHtml(cleanupPreviewSummary)}</pre>` : ''}` +
+      `<form class="workflow-form" data-form="world-cleanup-preview">${selectField('Scope', 'scope', cleanupScopes, cleanupScope)}<button class="ui-button ui-button-blue" type="submit">Run dry preview</button></form>` +
       (cleanupOperationId && cleanupWorldId === id ? `<form class="workflow-form" data-form="world-cleanup-execute"><input type="hidden" name="dry_run_operation_id" value="${escapeHtml(cleanupOperationId)}">` +
-        `<label class="check-control"><input type="checkbox" name="elevated_confirmation"> Confirm backup cleanup</label>` +
+        `<input type="hidden" name="scope" value="${escapeHtml(cleanupScope)}"><label class="check-control"><input type="checkbox" name="elevated_confirmation"> Confirm cleanup</label>` +
         `<button class="ui-button ui-button-red" type="submit"${cleanupOperationStatus !== 'completed' ? ' disabled' : ''}>Execute preview</button></form>` : '') +
-      unavailable('Only backup cleanup is implemented. Stale-world and log cleanup scopes remain unsupported.'));
+      '<p class="muted">World directories and world records are never cleanup targets. Stale backups are tombstoned first and purged only after the grace period.</p>');
   }
 
   async function renderWorldSetup() {
@@ -896,13 +916,6 @@
         await mutate(`/api/worlds/${encodeURIComponent(worldId)}/restores`, 'POST', { artifact_id: id }); break;
       case 'backup-delete': await mutate(`/api/backups/${encoded}`, 'DELETE'); break;
       case 'restore-rollback': await mutate(`/api/worlds/${encodeURIComponent(worldId)}/restores/rollback`, 'POST', { restore_id: id }); break;
-      case 'cleanup-world-preview': {
-        const result = await request(`/api/worlds/${encoded}/cleanup-preview`);
-        cleanupOperationId = result.data.operation?.op_id || result.data.op_id || '';
-        cleanupWorldId = id;
-        cleanupOperationStatus = result.data.operation?.status || '';
-        break;
-      }
       case 'logs-refresh': await loadLogTail(id); statusMessage = 'Log tail refreshed.'; return;
       case 'file-open': history.pushState({ slug: 'files' }, '', `/pages/files?path=${encodeURIComponent(id)}`); return loadPage('files');
       case 'file-delete':
@@ -955,6 +968,8 @@
           version: Number(data.version),
           age_rule_days: Number(data.age_rule_days),
           space_rule_pct: data.space_rule_pct === '' ? null : Number(data.space_rule_pct),
+          stale_session_threshold: Number(data.stale_session_threshold),
+          log_retention_days: data.log_retention_days === '' ? null : Number(data.log_retention_days),
           count_rules: countRules,
           schedule_id: data.schedule_id || null,
         });
@@ -984,26 +999,39 @@
         break;
       }
       case 'cleanup-preview': {
-        if (data.scope !== 'backups') throw new Error('Only backup cleanup is supported by this API.');
         const result = await mutate('/api/cleanup/dry-run', 'POST', { scope: data.scope, world_id: data.world_id || null });
         cleanupOperationId = result.data.operation?.op_id || result.data.op_id || '';
         cleanupWorldId = data.world_id || '';
+        cleanupScope = data.scope;
+        cleanupPreviewSummary = '';
         cleanupOperationStatus = result.data.operation?.status || '';
         break;
       }
       case 'cleanup-execute':
         if (!form.querySelector('[name="elevated_confirmation"]')?.checked) throw new Error('Confirm cleanup before continuing.');
-        await mutate('/api/cleanup/execute', 'POST', { scope: 'backups', world_id: data.world_id || null,
+        await mutate('/api/cleanup/execute', 'POST', { scope: data.scope, world_id: data.world_id || null,
           dry_run_operation_id: data.dry_run_operation_id, elevated_confirmation: true });
         cleanupOperationId = '';
+        cleanupPreviewSummary = '';
         cleanupOperationStatus = '';
         break;
+      case 'world-cleanup-preview': {
+        const result = await request(`/api/worlds/${encodeURIComponent(id)}/cleanup-preview?scope=${encodeURIComponent(data.scope)}`);
+        cleanupOperationId = result.data.operation?.op_id || result.data.op_id || '';
+        cleanupWorldId = id;
+        cleanupScope = data.scope;
+        cleanupPreviewSummary = '';
+        cleanupOperationStatus = result.data.operation?.status || '';
+        break;
+      }
       case 'world-cleanup-policy': {
         const countRules = data.count_rules ? JSON.parse(data.count_rules) : {};
         await mutate(`/api/worlds/${id}/cleanup-policy`, 'PATCH', {
           version: Number(data.version),
           age_rule_days: Number(data.age_rule_days),
           space_rule_pct: data.space_rule_pct === '' ? null : Number(data.space_rule_pct),
+          stale_session_threshold: Number(data.stale_session_threshold),
+          log_retention_days: data.log_retention_days === '' ? null : Number(data.log_retention_days),
           count_rules: countRules,
           schedule_id: data.schedule_id || null,
         });
@@ -1040,8 +1068,10 @@
       }
       case 'world-cleanup-execute':
         if (!form.querySelector('[name="elevated_confirmation"]')?.checked) throw new Error('Confirm cleanup before continuing.');
-        await mutate('/api/cleanup/execute', 'POST', { scope: 'backups', world_id: worldId, dry_run_operation_id: data.dry_run_operation_id, elevated_confirmation: true });
+        await mutate('/api/cleanup/execute', 'POST', { scope: data.scope, world_id: worldId,
+          dry_run_operation_id: data.dry_run_operation_id, elevated_confirmation: true });
         cleanupOperationId = '';
+        cleanupPreviewSummary = '';
         cleanupOperationStatus = '';
         break;
       default: return;

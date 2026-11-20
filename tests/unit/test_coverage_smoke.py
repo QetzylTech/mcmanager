@@ -6,6 +6,7 @@ from pathlib import Path
 
 from flask import Flask
 
+import app.platform.paths as platform_paths
 from app.bootstrap import build_container
 from app.domain.value_objects import (
     ActorType,
@@ -19,13 +20,14 @@ from app.domain.value_objects import (
 from app.infrastructure.minecraft.capabilities import capabilities_for
 from app.infrastructure.minecraft.eula import accept, current_state, provision_eula_file
 from app.infrastructure.minecraft.gate import LaunchContext, build_launch_argv, validate_launch
-from app.infrastructure.minecraft.java_compatibility import detect_java, parse_java_major
+from app.infrastructure.minecraft.java_compatibility import parse_java_major
 from app.infrastructure.minecraft.ping import ping_protocol
-from app.infrastructure.minecraft.properties_schema import CORE_MANAGER_PROPERTIES, validate_properties
-from app.infrastructure.minecraft.rcon import RconClient, RconError
+from app.infrastructure.minecraft.properties_schema import (
+    CORE_MANAGER_PROPERTIES,
+    validate_properties,
+)
 from app.infrastructure.minecraft.readiness import build_state, evaluate, target_level_for
 from app.infrastructure.secrets import SqliteSecretsStore, provision_keyfile
-from app.infrastructure.sqlite.connection import SqliteStore
 from app.platform.paths import (
     default_config_path,
     default_data_dir,
@@ -35,19 +37,14 @@ from app.platform.paths import (
 )
 from app.ports.filesystem import DiskUsage
 from app.ports.secrets_store import SecretType
-from app.services.audit import AuditService, ActorSnapshot
-from app.services.backup import BackupService
-from app.services.cleanup import CleanupService
-from app.services.configuration import ConfigurationService, VersionedUpdate
+from app.services.audit import ActorSnapshot
+from app.services.configuration import VersionedUpdate
 from app.services.diagnostics import DiagnosticsService
-from app.services.notifications import NotificationInput, NotificationService
-from app.services.operations import OperationInput, OperationService
+from app.services.notifications import NotificationInput
+from app.services.operations import OperationInput
 from app.services.realtime import LogFanout, RealtimeHub
-from app.services.scheduler import SchedulerService
-from app.services.worlds import WorldsService
-from app.shell.routes import PAGE_BY_SLUG, PAGE_MODULES, shell_bp
+from app.shell.routes import shell_bp
 from app.web.api import register_api_blueprints
-from app.web.errors import ok
 
 
 class DummyClock:
@@ -132,6 +129,21 @@ def test_platform_and_bootstrap_smoke(tmp_path):
     assert len(container.worlds.list_worlds()) == 0
 
 
+def test_default_root_uses_platform_fallbacks(monkeypatch, tmp_path):
+    home = tmp_path / 'home'
+    monkeypatch.setattr(Path, 'home', lambda: home)
+
+    monkeypatch.setattr(platform_paths.sys, 'platform', 'linux')
+    monkeypatch.delenv('XDG_DATA_HOME', raising=False)
+    assert default_root() == home / '.local' / 'share' / 'mcmanager'
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg'))
+    assert default_root() == tmp_path / 'xdg' / 'mcmanager'
+
+    monkeypatch.setattr(platform_paths.sys, 'platform', 'win32')
+    monkeypatch.delenv('LOCALAPPDATA', raising=False)
+    assert default_root() == home / 'AppData' / 'Local' / 'mcmanager'
+
+
 def test_infra_helpers_and_gate_smoke(tmp_path):
     world = tmp_path / 'server'
     world.mkdir()
@@ -171,12 +183,17 @@ def test_infra_helpers_and_gate_smoke(tmp_path):
     assert parse_java_major('21.0.1+12-LTS') == 21
     assert capabilities_for(ServerType.VANILLA).save_coordination == 'rcon'
     assert target_level_for(ServerType.VANILLA) is not None
-    state = build_state(process_alive=True, port=25565, rcon_ready=True, host_is_minecraft=True, port_timeout_s=0.1)
-    assert evaluate(
-        server_type=ServerType.VANILLA,
-        caps=capabilities_for(ServerType.VANILLA),
-        state=state,
-    ) is not None
+    state = build_state(
+        process_alive=True, port=25565, rcon_ready=True, host_is_minecraft=True, port_timeout_s=0.1
+    )
+    assert (
+        evaluate(
+            server_type=ServerType.VANILLA,
+            caps=capabilities_for(ServerType.VANILLA),
+            state=state,
+        )
+        is not None
+    )
     assert ping_protocol('127.0.0.1', 1, timeout_s=0.01) in {True, False}
     assert validate_properties(
         properties={'server-port': 25565, 'max-players': 20},
@@ -198,7 +215,12 @@ def test_store_secrets_and_operation_smoke(tmp_path):
         plaintext='secret',
     )
     assert secrets.read(secret_id) == 'secret'
-    rotated = secrets.rotate(secret_id, new_plaintext='new-secret', associated_entity_type='user', associated_entity_id='u1')
+    rotated = secrets.rotate(
+        secret_id,
+        new_plaintext='new-secret',
+        associated_entity_type='user',
+        associated_entity_id='u1',
+    )
     assert secrets.read(rotated) == 'new-secret'
 
     _seed_world(container, 'w1')
@@ -250,7 +272,9 @@ def test_backup_cleanup_and_config_smoke(tmp_path, monkeypatch):
     )
     assert result.artifact_id.startswith('ba_')
     assert result.storage_path.endswith('.zip')
-    assert container.backups.validate_artifact(result.artifact_id)['artifact_id'] == result.artifact_id
+    assert (
+        container.backups.validate_artifact(result.artifact_id)['artifact_id'] == result.artifact_id
+    )
 
     candidates = container.cleanup.backup_candidates(older_than_days=3)
     if candidates:
@@ -271,7 +295,18 @@ def test_backup_cleanup_and_config_smoke(tmp_path, monkeypatch):
     }
     container.store.writer().execute(
         'INSERT INTO global_settings (settings_id, timezone, idle_countdown_seconds, minecraft_root_path, backup_root_path, log_root_path, offsite_sync_defaults, version, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (row['settings_id'], row['timezone'], row['idle_countdown_seconds'], row['minecraft_root_path'], row['backup_root_path'], row['log_root_path'], row['offsite_sync_defaults'], row['version'], row['updated_at'], row['updated_by']),
+        (
+            row['settings_id'],
+            row['timezone'],
+            row['idle_countdown_seconds'],
+            row['minecraft_root_path'],
+            row['backup_root_path'],
+            row['log_root_path'],
+            row['offsite_sync_defaults'],
+            row['version'],
+            row['updated_at'],
+            row['updated_by'],
+        ),
     )
     container.store.writer().commit()
     updated = container.configuration.update_versioned(
@@ -355,7 +390,21 @@ def test_runtime_world_and_diag_smoke(tmp_path):
     container.store.writer().execute(
         'INSERT INTO world_instances (world_id, display_name, template_id, server_type, mc_version, java_runtime_id, port, addressing_strategy, addressing_value, state, pre_backup_state, launch_args, metadata_version, deleted_at, deleted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)',
         (
-            row['world_id'], row['display_name'], row['template_id'], row['server_type'], row['mc_version'], row['java_runtime_id'], row['port'], row['addressing_strategy'], row['addressing_value'], row['state'], row['pre_backup_state'], row['launch_args'], row['metadata_version'], row['created_at'], row['updated_at'],
+            row['world_id'],
+            row['display_name'],
+            row['template_id'],
+            row['server_type'],
+            row['mc_version'],
+            row['java_runtime_id'],
+            row['port'],
+            row['addressing_strategy'],
+            row['addressing_value'],
+            row['state'],
+            row['pre_backup_state'],
+            row['launch_args'],
+            row['metadata_version'],
+            row['created_at'],
+            row['updated_at'],
         ),
     )
     container.store.writer().commit()
@@ -364,7 +413,11 @@ def test_runtime_world_and_diag_smoke(tmp_path):
     assert summary['world_id'] == 'w1'
     assert container.worlds.list_worlds()[0]['world_id'] == 'w1'
 
-    audit_id = container.audit.write(event_type='user_login_success', actor=ActorSnapshot(actor_type=ActorType.USER, user_id='u1', username='alice'), payload={'ok': True})
+    audit_id = container.audit.write(
+        event_type='user_login_success',
+        actor=ActorSnapshot(actor_type=ActorType.USER, user_id='u1', username='alice'),
+        payload={'ok': True},
+    )
     assert audit_id.startswith('au_')
     assert container.scheduler.tick() is not None
     assert DiagnosticsService(container).health()['status'] == 'ok'

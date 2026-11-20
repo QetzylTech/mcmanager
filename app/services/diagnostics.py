@@ -40,6 +40,7 @@ class DiagnosticsService:
 
     def diagnostics(self) -> dict[str, Any]:
         return {
+            'version': __version__,
             'scheduler': self._scheduler(),
             'sqlite_writer': self._sqlite_writer(),
             'process_adapter': self._process_adapter(),
@@ -109,20 +110,20 @@ class DiagnosticsService:
             'status': 'ok' if outcome.status == 'healthy' else 'down',
             'phase': outcome.status,
             'reattached_worlds': len(outcome.reattached_world_ids),
+            'reattached_world_ids': list(outcome.reattached_world_ids),
+            'last_attempt_at': outcome.last_attempt_at,
             **({'error': outcome.error} if outcome.error is not None else {}),
         }
 
     def _operation_backlog(self) -> dict[str, int]:
-        row = self.container.store.reader().execute(
-            """
+        row = self.container.store.reader().execute("""
             SELECT
                 COALESCE(SUM(CASE WHEN status = 'Queued' THEN 1 ELSE 0 END), 0) AS queued,
                 COALESCE(SUM(CASE WHEN status IN
                     ('Created', 'Queued', 'Validating', 'Running') THEN 1 ELSE 0 END), 0)
                     AS in_flight
             FROM operations
-            """
-        ).fetchone()
+            """).fetchone()
         return {
             'queued': int(row['queued']),
             'in_flight': int(row['in_flight']),

@@ -45,8 +45,7 @@ class SyncService:
     """Record sync jobs and their immutable retry timeline."""
 
     BACKOFF_DELAYS = tuple(
-        SYNC_BACKOFF_BASE_S * (2**index)
-        for index in range(SYNC_TRANSIENT_RETRIES - 1)
+        SYNC_BACKOFF_BASE_S * (2**index) for index in range(SYNC_TRANSIENT_RETRIES - 1)
     )
     DAILY_TRANSFER_CAP_BYTES = 50 * 1024**3
 
@@ -71,8 +70,10 @@ class SyncService:
         now = datetime.fromtimestamp(self._clock.now(), UTC)
         start = int(datetime.combine(now.date(), datetime_time.min, UTC).timestamp())
         end = start + 24 * 60 * 60
-        row = self._store.reader().execute(
-            """
+        row = (
+            self._store.reader()
+            .execute(
+                """
             SELECT COALESCE(SUM(backup_artifacts.size_bytes), 0) AS transferred
             FROM sync_attempts
             JOIN sync_records USING (sync_id)
@@ -81,8 +82,10 @@ class SyncService:
               AND sync_attempts.finished_at >= ?
               AND sync_attempts.finished_at < ?
             """,
-            (SyncOutcome.SUCCEEDED.value, start, end),
-        ).fetchone()
+                (SyncOutcome.SUCCEEDED.value, start, end),
+            )
+            .fetchone()
+        )
         return int(row['transferred'])
 
     def dispatch_sync(
@@ -95,14 +98,18 @@ class SyncService:
         """
         if self.get_bytes_transferred_today() >= self.DAILY_TRANSFER_CAP_BYTES:
             raise SyncError('SYNC_CAP_EXCEEDED')
-        artifact = self._store.reader().execute(
-            """
+        artifact = (
+            self._store.reader()
+            .execute(
+                """
             SELECT artifact_id, world_id, storage_path, size_bytes
             FROM backup_artifacts
             WHERE artifact_id = ? AND deleted_at IS NULL
             """,
-            (artifact_id,),
-        ).fetchone()
+                (artifact_id,),
+            )
+            .fetchone()
+        )
         if artifact is None:
             raise SyncError(f'BACKUP_NOT_FOUND: {artifact_id}')
         if (
@@ -110,11 +117,11 @@ class SyncService:
             > self.DAILY_TRANSFER_CAP_BYTES
         ):
             raise SyncError('SYNC_CAP_EXCEEDED')
-        target = self._resolve_target(target_id)
 
         transfer_size = int(artifact['size_bytes'])
         self._reserve_transfer(transfer_size)
         try:
+            target = self._resolve_target(target_id)
             now = int(self._clock.now())
             operation = self._operations.get(operation_id) if operation_id is not None else None
             if operation_id is not None and operation is None:
@@ -131,9 +138,7 @@ class SyncService:
                     allow_world_conflict=True,
                 )
             elif operation['status'] != OperationStatus.RUNNING.value:
-                operation = self._operations.transition(
-                    operation['op_id'], OperationStatus.RUNNING
-                )
+                operation = self._operations.transition(operation['op_id'], OperationStatus.RUNNING)
             sync_id = f'sy_{uuid.uuid4().hex[:16]}'
             connection = self._store.writer()
             connection.execute(
@@ -188,9 +193,7 @@ class SyncService:
                     outcome != SyncOutcome.FAILED_TRANSIENT
                     or attempt_number == SYNC_TRANSIENT_RETRIES
                 )
-                if terminal_attempt and not self._is_cancelled(
-                    operation['op_id'], cancel_event
-                ):
+                if terminal_attempt and not self._is_cancelled(operation['op_id'], cancel_event):
                     terminal_operation_status = (
                         OperationStatus.COMPLETED
                         if outcome == SyncOutcome.SUCCEEDED
@@ -202,22 +205,19 @@ class SyncService:
                             terminal_operation_status,
                             error_code=(
                                 None
-                                if terminal_operation_status
-                                == OperationStatus.COMPLETED
+                                if terminal_operation_status == OperationStatus.COMPLETED
                                 else 'SYNC_FAILED'
                             ),
                             message=(
                                 None
-                                if terminal_operation_status
-                                == OperationStatus.COMPLETED
+                                if terminal_operation_status == OperationStatus.COMPLETED
                                 else 'offsite upload exhausted transient retries'
                             ),
                             data={
                                 'sync_id': sync_id,
                                 'status': (
                                     SyncRecordStatus.SUCCEEDED.value
-                                    if terminal_operation_status
-                                    == OperationStatus.COMPLETED
+                                    if terminal_operation_status == OperationStatus.COMPLETED
                                     else SyncRecordStatus.FAILED.value
                                 ),
                             },
@@ -252,9 +252,7 @@ class SyncService:
                 else:
                     self._sleep(delay)
 
-            terminal_status = (
-                SyncRecordStatus.SUCCEEDED if succeeded else SyncRecordStatus.FAILED
-            )
+            terminal_status = SyncRecordStatus.SUCCEEDED if succeeded else SyncRecordStatus.FAILED
             finished_at = int(self._clock.now())
             connection = self._store.writer()
             connection.execute(
@@ -264,7 +262,10 @@ class SyncService:
             connection.commit()
 
             current_operation = self._operations.get(operation['op_id'])
-            if current_operation is not None and current_operation['status'] == OperationStatus.RUNNING.value:
+            if (
+                current_operation is not None
+                and current_operation['status'] == OperationStatus.RUNNING.value
+            ):
                 self._operations.transition(
                     operation['op_id'],
                     OperationStatus.FAILED,
@@ -299,14 +300,18 @@ class SyncService:
         return operation is None or operation['status'] == OperationStatus.CANCELLED.value
 
     def _resolve_target(self, target_id: str) -> dict[str, Any]:
-        row = self._store.reader().execute(
-            """
+        row = (
+            self._store.reader()
+            .execute(
+                """
             SELECT sync_target_id, enabled
             FROM sync_targets
             WHERE sync_target_id = ? AND deleted_at IS NULL
             """,
-            (target_id,),
-        ).fetchone()
+                (target_id,),
+            )
+            .fetchone()
+        )
         if row is not None:
             if not row['enabled']:
                 raise SyncError(f'SYNC_TARGET_DISABLED: {target_id}')
@@ -314,9 +319,11 @@ class SyncService:
 
         # A lightweight transport target is useful for configured worker
         # adapters in installations that have not yet exposed target CRUD.
-        secret = self._store.reader().execute(
-            'SELECT secret_id FROM secrets ORDER BY created_at LIMIT 1'
-        ).fetchone()
+        secret = (
+            self._store.reader()
+            .execute('SELECT secret_id FROM secrets ORDER BY created_at LIMIT 1')
+            .fetchone()
+        )
         if secret is None:
             raise SyncError(f'SYNC_TARGET_NOT_FOUND: {target_id}')
         connection = self._store.writer()

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.domain.tuning import SYNC_GLOBAL_CONCURRENCY_CAP
 from app.domain.value_objects import (
     ActorType,
     OperationStatus,
@@ -52,9 +53,7 @@ def _create_artifact(store, clock, tmp_path: Path):
         ),
     )
     connection.commit()
-    OperationService(store, clock).transition(
-        operation['op_id'], OperationStatus.COMPLETED
-    )
+    OperationService(store, clock).transition(operation['op_id'], OperationStatus.COMPLETED)
     return SimpleNamespace(
         artifact_id='sync_test_artifact',
         storage_path=str(local_archive),
@@ -70,9 +69,7 @@ def _fake_wait(clock, delays: list[float]):
     return wait
 
 
-def test_sync_retry_timeline_and_attempt_history_are_write_once(
-    store, clock, tmp_path
-):
+def test_sync_retry_timeline_and_attempt_history_are_write_once(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     started_at = int(clock.now())
     delays: list[float] = []
@@ -87,20 +84,22 @@ def test_sync_retry_timeline_and_attempt_history_are_write_once(
                 raise OSError('temporary NAS outage')
 
     transport = FlakyTransport()
-    service = SyncService(
-        store, transport, clock, sleeper=_fake_wait(clock, delays)
-    )
+    service = SyncService(store, transport, clock, sleeper=_fake_wait(clock, delays))
 
     sync_id = service.dispatch_sync(artifact.artifact_id, 'gate4-nas')
-    rows = store.reader().execute(
-        """
+    rows = (
+        store.reader()
+        .execute(
+            """
         SELECT attempt_id, attempt_number, started_at, finished_at, outcome
         FROM sync_attempts
         WHERE sync_id = ?
         ORDER BY attempt_number
         """,
-        (sync_id,),
-    ).fetchall()
+            (sync_id,),
+        )
+        .fetchall()
+    )
 
     assert delays == [30, 60]
     assert transport.call_times == [
@@ -121,21 +120,24 @@ def test_sync_retry_timeline_and_attempt_history_are_write_once(
             'UPDATE sync_attempts SET error_message = ? WHERE attempt_id = ?',
             ('rewritten', rows[0]['attempt_id']),
         )
-    assert [
-        tuple(row)
-        for row in store.reader().execute(
-            """
+    assert (
+        [
+            tuple(row)
+            for row in store.reader()
+            .execute(
+                """
             SELECT attempt_id, attempt_number, started_at, finished_at, outcome
             FROM sync_attempts WHERE sync_id = ? ORDER BY attempt_number
             """,
-            (sync_id,),
-        ).fetchall()
-    ] == before
+                (sync_id,),
+            )
+            .fetchall()
+        ]
+        == before
+    )
 
 
-def test_daily_transfer_cap_stops_sync_without_touching_local_artifact(
-    store, clock, tmp_path
-):
+def test_daily_transfer_cap_stops_sync_without_touching_local_artifact(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     transport_calls: list[Path] = []
     service = SyncService(
@@ -178,6 +180,7 @@ def test_global_sync_concurrency_cap_rejects_third_in_flight_transfer(
     )
     service.get_bytes_transferred_today = lambda: 0
 
+    assert SYNC_GLOBAL_CONCURRENCY_CAP == 2
     service._reserve_transfer(1)
     service._reserve_transfer(1)
     with pytest.raises(SyncError, match='SYNC_CONCURRENCY_CAP'):
@@ -187,9 +190,7 @@ def test_global_sync_concurrency_cap_rejects_third_in_flight_transfer(
     service._release_transfer(1)
 
 
-def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(
-    store, clock, tmp_path
-):
+def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     transfer_started = threading.Event()
     release_transfer = threading.Event()
@@ -202,9 +203,7 @@ def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(
             if not release_transfer.wait(timeout=5):
                 raise AssertionError('test did not release the active transfer')
 
-    service = SyncService(
-        store, BlockingTransport(), clock, sleeper=_fake_wait(clock, [])
-    )
+    service = SyncService(store, BlockingTransport(), clock, sleeper=_fake_wait(clock, []))
     service.DAILY_TRANSFER_CAP_BYTES = artifact.size_bytes
     errors: list[BaseException] = []
 
@@ -230,15 +229,17 @@ def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(
     assert service.get_bytes_transferred_today() == artifact.size_bytes
 
 
-def test_transport_failure_does_not_invalidate_local_backup(
-    store, clock, tmp_path
-):
+def test_transport_failure_does_not_invalidate_local_backup(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     original_bytes = Path(artifact.storage_path).read_bytes()
-    original_checksum = store.reader().execute(
-        'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
-        (artifact.artifact_id,),
-    ).fetchone()['checksum']
+    original_checksum = (
+        store.reader()
+        .execute(
+            'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
+            (artifact.artifact_id,),
+        )
+        .fetchone()['checksum']
+    )
     delays: list[float] = []
 
     class FailingTransport:
@@ -251,21 +252,30 @@ def test_transport_failure_does_not_invalidate_local_backup(
 
     assert delays == [30, 60]
     assert Path(artifact.storage_path).read_bytes() == original_bytes
-    assert store.reader().execute(
-        'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
-        (artifact.artifact_id,),
-    ).fetchone()['checksum'] == original_checksum
-    assert store.reader().execute(
-        'SELECT status FROM sync_records WHERE sync_id = ?', (sync_id,)
-    ).fetchone()['status'] == 'failed'
-    assert store.reader().execute(
-        'SELECT COUNT(*) AS n FROM sync_attempts WHERE sync_id = ?', (sync_id,)
-    ).fetchone()['n'] == 3
+    assert (
+        store.reader()
+        .execute(
+            'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
+            (artifact.artifact_id,),
+        )
+        .fetchone()['checksum']
+        == original_checksum
+    )
+    assert (
+        store.reader()
+        .execute('SELECT status FROM sync_records WHERE sync_id = ?', (sync_id,))
+        .fetchone()['status']
+        == 'failed'
+    )
+    assert (
+        store.reader()
+        .execute('SELECT COUNT(*) AS n FROM sync_attempts WHERE sync_id = ?', (sync_id,))
+        .fetchone()['n']
+        == 3
+    )
 
 
-def test_permanent_transport_failure_is_recorded_without_retry(
-    store, clock, tmp_path
-):
+def test_permanent_transport_failure_is_recorded_without_retry(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     delays: list[float] = []
     calls: list[Path] = []
@@ -279,23 +289,28 @@ def test_permanent_transport_failure_is_recorded_without_retry(
         store, MisconfiguredTransport(), clock, sleeper=_fake_wait(clock, delays)
     ).dispatch_sync(artifact.artifact_id, 'gate4-nas')
 
-    attempts = store.reader().execute(
-        'SELECT attempt_number, outcome FROM sync_attempts WHERE sync_id = ?',
-        (sync_id,),
-    ).fetchall()
+    attempts = (
+        store.reader()
+        .execute(
+            'SELECT attempt_number, outcome FROM sync_attempts WHERE sync_id = ?',
+            (sync_id,),
+        )
+        .fetchall()
+    )
     assert calls == [Path(artifact.storage_path)]
     assert delays == []
     assert [(row['attempt_number'], row['outcome']) for row in attempts] == [
         (1, 'failed_permanent')
     ]
-    assert store.reader().execute(
-        'SELECT status FROM sync_records WHERE sync_id = ?', (sync_id,)
-    ).fetchone()['status'] == 'failed'
+    assert (
+        store.reader()
+        .execute('SELECT status FROM sync_records WHERE sync_id = ?', (sync_id,))
+        .fetchone()['status']
+        == 'failed'
+    )
 
 
-def test_mounted_nas_copies_artifact_basename_under_target_root(
-    store, clock, tmp_path
-):
+def test_mounted_nas_copies_artifact_basename_under_target_root(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     target_root = tmp_path / 'mounted' / 'nas-share'
     connection = store.writer()
@@ -321,14 +336,10 @@ def test_mounted_nas_copies_artifact_basename_under_target_root(
     copied = target_root / Path(artifact.storage_path).name
     assert copied.is_file()
     assert copied.read_bytes() == Path(artifact.storage_path).read_bytes()
-    assert sorted(path.name for path in target_root.iterdir()) == [
-        Path(artifact.storage_path).name
-    ]
+    assert sorted(path.name for path in target_root.iterdir()) == [Path(artifact.storage_path).name]
 
 
-def test_running_sync_cancellation_stops_transfer_and_retry(
-    store, clock, tmp_path
-):
+def test_running_sync_cancellation_stops_transfer_and_retry(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     operations = OperationService(store, clock)
     sync_operation = operations.create(
@@ -379,28 +390,39 @@ def test_running_sync_cancellation_stops_transfer_and_retry(
     assert cancelled['status'] == OperationStatus.CANCELLED.value
     assert len(sync_ids) == 1
     sync_id = sync_ids[0]
-    record = store.reader().execute(
-        'SELECT status, finished_at FROM sync_records WHERE sync_id = ?',
-        (sync_id,),
-    ).fetchone()
+    record = (
+        store.reader()
+        .execute(
+            'SELECT status, finished_at FROM sync_records WHERE sync_id = ?',
+            (sync_id,),
+        )
+        .fetchone()
+    )
     assert record['status'] == SyncRecordStatus.FAILED.value
     assert record['finished_at'] is not None
-    attempts = store.reader().execute(
-        'SELECT attempt_number, outcome FROM sync_attempts WHERE sync_id = ?',
-        (sync_id,),
-    ).fetchall()
+    attempts = (
+        store.reader()
+        .execute(
+            'SELECT attempt_number, outcome FROM sync_attempts WHERE sync_id = ?',
+            (sync_id,),
+        )
+        .fetchall()
+    )
     assert [(row['attempt_number'], row['outcome']) for row in attempts] == [
         (1, SyncOutcome.FAILED_TRANSIENT.value)
     ]
-    assert store.reader().execute(
-        'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
-        (sync_operation['op_id'],),
-    ).fetchone()[0] == 1
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
+            (sync_operation['op_id'],),
+        )
+        .fetchone()[0]
+        == 1
+    )
 
 
-def test_mounted_nas_cancellation_removes_partial_upload(
-    store, clock, tmp_path, monkeypatch
-):
+def test_mounted_nas_cancellation_removes_partial_upload(store, clock, tmp_path, monkeypatch):
     artifact = _create_artifact(store, clock, tmp_path)
     source_path = Path(artifact.storage_path)
     source_path.write_bytes(b'a' * (2 * 1024 * 1024))
@@ -451,9 +473,7 @@ def test_mounted_nas_cancellation_removes_partial_upload(
     monkeypatch.setattr(Path, 'open', open_with_cancellation)
 
     with pytest.raises(SyncTransportCancelled):
-        NasSyncTransport(store).upload_file(
-            'cancelled-mounted-nas', source_path, cancel_event
-        )
+        NasSyncTransport(store).upload_file('cancelled-mounted-nas', source_path, cancel_event)
 
     assert not (target_root / source_path.name).exists()
     assert list(target_root.iterdir()) == []

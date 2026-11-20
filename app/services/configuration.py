@@ -6,7 +6,11 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from app.domain.tuning import CLEANUP_AGE_FLOOR_DAYS
+from app.domain.tuning import (
+    CLEANUP_AGE_FLOOR_DAYS,
+    CLEANUP_STALE_SESSION_DEFAULT,
+    CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
+)
 from app.domain.value_objects import (
     ActorType,
     ConfigEditEntity,
@@ -93,9 +97,11 @@ class ConfigurationService:
 
     def resolve_global(self) -> dict[str, Any]:
         """Return the manager-wide settings baseline, including its version."""
-        row = self._store.reader().execute(
-            "SELECT * FROM global_settings ORDER BY settings_id LIMIT 1"
-        ).fetchone()
+        row = (
+            self._store.reader()
+            .execute("SELECT * FROM global_settings ORDER BY settings_id LIMIT 1")
+            .fetchone()
+        )
         if row is None:
             raise KeyError("global_settings")
         settings = dict(row)
@@ -106,17 +112,17 @@ class ConfigurationService:
 
     def resolve_world(self, world_id: str) -> dict[str, Any] | None:
         """Return a world's stored overrides, decoding JSON-valued settings."""
-        row = self._store.reader().execute(
-            "SELECT * FROM world_settings WHERE world_id = ?", (world_id,)
-        ).fetchone()
+        row = (
+            self._store.reader()
+            .execute("SELECT * FROM world_settings WHERE world_id = ?", (world_id,))
+            .fetchone()
+        )
         if row is None:
             return None
 
         settings = dict(row)
         if settings["offsite_sync_override"] is not None:
-            settings["offsite_sync_override"] = json.loads(
-                settings["offsite_sync_override"]
-            )
+            settings["offsite_sync_override"] = json.loads(settings["offsite_sync_override"])
         return settings
 
     def update_versioned(self, update: VersionedUpdate) -> dict[str, Any]:
@@ -136,8 +142,7 @@ class ConfigurationService:
             raise ValueError('cannot update identity or version columns directly')
 
         table_columns = {
-            row['name']
-            for row in self._store.reader().execute(f'PRAGMA table_info({table})')
+            row['name'] for row in self._store.reader().execute(f'PRAGMA table_info({table})')
         }
         unknown = set(update.fields).difference(table_columns)
         if unknown:
@@ -166,8 +171,7 @@ class ConfigurationService:
 
         world_id = (
             update.row_id
-            if update.entity
-            in (ConfigEditEntity.WORLD_SETTINGS, ConfigEditEntity.WORLD_INSTANCES)
+            if update.entity in (ConfigEditEntity.WORLD_SETTINGS, ConfigEditEntity.WORLD_INSTANCES)
             else None
         )
         if update.entity is ConfigEditEntity.CLEANUP_POLICIES:
@@ -232,8 +236,14 @@ class ConfigurationService:
                         'scope': scope,
                         'world_id': policy_world_id,
                         'age_rule_days': fields.pop('age_rule_days', CLEANUP_AGE_FLOOR_DAYS),
-                        'space_rule_pct': fields.pop('space_rule_pct', None),
+                        'space_rule_pct': fields.pop(
+                            'space_rule_pct', CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT
+                        ),
                         'count_rules': fields.pop('count_rules', None),
+                        'stale_session_threshold': fields.pop(
+                            'stale_session_threshold', CLEANUP_STALE_SESSION_DEFAULT
+                        ),
+                        'log_retention_days': fields.pop('log_retention_days', None),
                         'schedule_id': fields.pop('schedule_id', None),
                         'version': 1,
                         'last_changed_at': now,

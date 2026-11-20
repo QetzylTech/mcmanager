@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import app.services.realtime as realtime
+import app.web.streams.routes as stream_routes
 from app.platform.process.tailing import DurableSessionLog
 from app.services.realtime import RealtimeHub
 from app.web.streams.routes import streams_bp
@@ -12,11 +15,11 @@ def _log_stream_app(tmp_path):
     world_id = 'world-1'
     session_id = 'session-1'
     log_root = tmp_path / 'logs'
-    durable = DurableSessionLog(
-        str(log_root / world_id / world_id / f'{session_id}.log')
-    )
+    durable = DurableSessionLog(str(log_root / world_id / world_id / f'{session_id}.log'))
 
     class Store:
+        sessions = [session_id]
+
         def reader(self):
             return self
 
@@ -24,7 +27,7 @@ def _log_stream_app(tmp_path):
             return self
 
         def fetchall(self):
-            return [{'session_id': session_id}]
+            return [{'session_id': item} for item in self.sessions]
 
         def fetchone(self):
             return {'role_id': 'admin'}
@@ -115,9 +118,7 @@ def test_world_log_stream_replays_backlog_after_cursor_without_queue_overflow(
     try:
         snapshot = next(iter(initial.response)).decode()
         cursor = next(
-            line.removeprefix('id: ')
-            for line in snapshot.splitlines()
-            if line.startswith('id: ')
+            line.removeprefix('id: ') for line in snapshot.splitlines() if line.startswith('id: ')
         )
     finally:
         initial.close()
@@ -159,5 +160,74 @@ def test_world_log_stream_reports_unavailable_cursor_then_resnapshots(tmp_path):
         assert '"reason":"cursor_unavailable"' in gap
         assert 'retained line' in snapshot
         assert 'event: log.line' in snapshot
+    finally:
+        response.close()
+
+
+def test_world_log_stream_replay_continues_line_numbers_after_cursor(tmp_path):
+    app, durable, world_id, _session_id = _log_stream_app(tmp_path)
+    durable.write('stdout', 'first')
+    durable.write('stdout', 'second')
+    client = app.test_client()
+    initial = client.get(f'/stream/worlds/{world_id}/logs', buffered=False)
+    try:
+        snapshot = next(iter(initial.response)).decode()
+        cursor = next(
+            line.removeprefix('id: ') for line in snapshot.splitlines() if line.startswith('id: ')
+        )
+    finally:
+        initial.close()
+
+    durable.write('stdout', 'third')
+    replay = client.get(
+        f'/stream/worlds/{world_id}/logs',
+        headers={'Last-Event-ID': cursor},
+        buffered=False,
+    )
+    frames = iter(replay.response)
+    try:
+        assert b'event: log.replay' in next(frames)
+        line = next(frames).decode()
+        assert '"line":"third"' in line
+        assert '"line_no":3' in line
+    finally:
+        replay.close()
+
+
+def test_world_log_stream_truncation_keeps_line_number_across_sessions(tmp_path, monkeypatch):
+    app, first_log, world_id, _session_id = _log_stream_app(tmp_path)
+    first_log.write('stdout', 'one')
+    first_log.write('stdout', 'two')
+    container = app.extensions['mcmanager_container']
+    container.store.sessions.append('session-2')
+    second_log = DurableSessionLog(str(tmp_path / 'logs' / world_id / world_id / 'session-2.log'))
+    second_log.write('stdout', 'a longer old record')
+    cursor = f'session-2:{Path(second_log.path).stat().st_size}'
+
+    original_paths = stream_routes._log_session_paths
+    calls = 0
+
+    def truncate_after_cursor_validation(container, requested_world_id):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            Path(second_log.path).write_bytes(b'')
+            second_log.write('stdout', 'fresh')
+        return original_paths(container, requested_world_id)
+
+    monkeypatch.setattr(stream_routes, '_log_session_paths', truncate_after_cursor_validation)
+    response = app.test_client().get(
+        f'/stream/worlds/{world_id}/logs',
+        headers={'Last-Event-ID': cursor},
+        buffered=False,
+    )
+    frames = iter(response.response)
+    try:
+        gap = next(frames).decode()
+        line = next(frames).decode()
+        assert 'event: log.gap' in gap
+        assert '"reason":"durable_log_truncated"' in gap
+        assert '"line":"fresh"' in line
+        assert '"line_no":3' in line
     finally:
         response.close()

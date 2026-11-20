@@ -189,7 +189,9 @@ def test_missed_runs_notifications_and_audit_routes(catalog_app):
         )
     )
     assert (
-        client.post(f"/api/notifications/{dismissed_unread_id}/dismiss", headers=headers).status_code
+        client.post(
+            f"/api/notifications/{dismissed_unread_id}/dismiss", headers=headers
+        ).status_code
         == 201
     )
     visible_notification_id = container.notifications.publish(
@@ -224,7 +226,14 @@ def test_admin_catalog_endpoints_enforce_superadmin_and_csrf(catalog_app):
     assert client.get("/api/roles").status_code == 200
     assert client.get("/api/users").status_code == 200
     assert client.get("/api/setup").status_code == 200
-    assert client.get("/api/manager").status_code == 200
+    manager = client.get("/api/manager")
+    assert manager.status_code == 200
+    assert set(manager.json["data"]) >= {
+        "deployed_version",
+        "setup_completed",
+        "state",
+        "updated_at",
+    }
 
     role = client.post(
         "/api/roles",
@@ -251,9 +260,7 @@ def test_admin_catalog_endpoints_enforce_superadmin_and_csrf(catalog_app):
     assert client.get("/api/java-runtimes").status_code == 200
 
 
-def test_manager_backup_is_durable_and_uses_a_consistent_database_snapshot(
-    catalog_app, tmp_path
-):
+def test_manager_backup_is_durable_and_uses_a_consistent_database_snapshot(catalog_app, tmp_path):
     client, headers = _admin_client(catalog_app)
     container = catalog_app.extensions["mcmanager_container"]
     backup_root = Path(container.store.path).with_suffix(".backups")
@@ -276,17 +283,22 @@ def test_manager_backup_is_durable_and_uses_a_consistent_database_snapshot(
         assert operation is not None
         assert operation["status"] == "Completed", operation["message"]
         result = json.loads(operation["data_json"])
-        artifact = container.store.reader().execute(
-            "SELECT * FROM backup_artifacts WHERE artifact_id = ?",
-            (result["artifact_id"],),
-        ).fetchone()
+        artifact = (
+            container.store.reader()
+            .execute(
+                "SELECT * FROM backup_artifacts WHERE artifact_id = ?",
+                (result["artifact_id"],),
+            )
+            .fetchone()
+        )
         assert artifact["world_id"] is None
         assert artifact["category"] == "manager_config"
         assert artifact["operation_id"] == operation_id
         assert Path(artifact["storage_path"]).is_file()
-        assert hashlib.sha256(Path(artifact["storage_path"]).read_bytes()).hexdigest() == artifact[
-            "checksum"
-        ]
+        assert (
+            hashlib.sha256(Path(artifact["storage_path"]).read_bytes()).hexdigest()
+            == artifact["checksum"]
+        )
 
         with zipfile.ZipFile(artifact["storage_path"]) as archive:
             assert archive.namelist() == ["manager.sqlite3"]
@@ -299,10 +311,14 @@ def test_manager_backup_is_durable_and_uses_a_consistent_database_snapshot(
         finally:
             snapshot.close()
 
-        audit = container.store.reader().execute(
-            "SELECT count(*) FROM audit_records WHERE operation_id = ?",
-            (operation_id,),
-        ).fetchone()[0]
+        audit = (
+            container.store.reader()
+            .execute(
+                "SELECT count(*) FROM audit_records WHERE operation_id = ?",
+                (operation_id,),
+            )
+            .fetchone()[0]
+        )
         assert audit == 1
         assert client.post("/api/manager/restart", headers=headers).status_code == 403
     finally:
@@ -312,12 +328,16 @@ def test_manager_backup_is_durable_and_uses_a_consistent_database_snapshot(
 def test_last_superadmin_cannot_be_disabled_or_deleted(catalog_app):
     client, headers = _admin_client(catalog_app)
     container = catalog_app.extensions["mcmanager_container"]
-    row = container.store.reader().execute(
-        "SELECT u.user_id FROM users u "
-        "JOIN role_assignments ra ON ra.user_id = u.user_id "
-        "JOIN roles r ON r.role_id = ra.role_id "
-        "WHERE r.name = 'Superadmin' AND u.deleted_at IS NULL LIMIT 1"
-    ).fetchone()
+    row = (
+        container.store.reader()
+        .execute(
+            "SELECT u.user_id FROM users u "
+            "JOIN role_assignments ra ON ra.user_id = u.user_id "
+            "JOIN roles r ON r.role_id = ra.role_id "
+            "WHERE r.name = 'Superadmin' AND u.deleted_at IS NULL LIMIT 1"
+        )
+        .fetchone()
+    )
     user_id = row["user_id"]
 
     disabled = client.patch(
@@ -331,9 +351,11 @@ def test_last_superadmin_cannot_be_disabled_or_deleted(catalog_app):
     assert disabled.json["error"]["code"] == "FORBIDDEN_LAST_SUPERADMIN"
     assert deleted.status_code == 409
     assert deleted.json["error"]["code"] == "FORBIDDEN_LAST_SUPERADMIN"
-    remaining = container.store.reader().execute(
-        "SELECT status, deleted_at FROM users WHERE user_id = ?", (user_id,)
-    ).fetchone()
+    remaining = (
+        container.store.reader()
+        .execute("SELECT status, deleted_at FROM users WHERE user_id = ?", (user_id,))
+        .fetchone()
+    )
     assert remaining["status"] == "active"
     assert remaining["deleted_at"] is None
 
@@ -415,11 +437,16 @@ def test_sync_target_crud_validates_versions_and_keeps_credentials_private(catal
 
     rotated = client.patch(
         f"/api/sync/targets/{target_id}",
-        json={"version": disabled.json["data"]["sync_target"]["version"], "credential": "rotated-secret"},
+        json={
+            "version": disabled.json["data"]["sync_target"]["version"],
+            "credential": "rotated-secret",
+        },
         headers=headers,
     )
     assert rotated.status_code == 200
-    assert container.secrets.read(rotated.json["data"]["sync_target"]["secret_id"]) == "rotated-secret"
+    assert (
+        container.secrets.read(rotated.json["data"]["sync_target"]["secret_id"]) == "rotated-secret"
+    )
 
     rejected = client.post(
         "/api/sync/targets",
@@ -437,10 +464,14 @@ def test_sync_target_crud_validates_versions_and_keeps_credentials_private(catal
     deleted = client.delete(f"/api/sync/targets/{target_id}", headers=headers)
     assert deleted.status_code == 200
     assert client.get("/api/sync/targets").json["data"]["sync_targets"] == []
-    row = container.store.reader().execute(
-        "SELECT enabled, deleted_at FROM sync_targets WHERE sync_target_id = ?",
-        (target_id,),
-    ).fetchone()
+    row = (
+        container.store.reader()
+        .execute(
+            "SELECT enabled, deleted_at FROM sync_targets WHERE sync_target_id = ?",
+            (target_id,),
+        )
+        .fetchone()
+    )
     assert row["enabled"] == 0
     assert row["deleted_at"] is not None
 
@@ -482,6 +513,10 @@ def test_non_superadmin_can_use_personal_notifications_but_not_admin_catalogs(ca
         == 200
     )
     assert client.get("/api/users").status_code == 403
+    for path in ("/api/pages", "/api/pages/home"):
+        response = client.get(path)
+        assert response.status_code == 403
+        assert response.json["error"]["code"] == "AUTH_FORBIDDEN"
 
 
 def test_first_run_setup_accepts_matching_pre_authentication_csrf(catalog_app):

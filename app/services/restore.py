@@ -71,9 +71,11 @@ class RestoreService:
         was_running: bool,
         rollback_of_restore_id: str | None = None,
     ) -> RestoreResult:
-        world = self._store.reader().execute(
-            'SELECT state FROM world_instances WHERE world_id = ?', (world_id,)
-        ).fetchone()
+        world = (
+            self._store.reader()
+            .execute('SELECT state FROM world_instances WHERE world_id = ?', (world_id,))
+            .fetchone()
+        )
         if world is None:
             raise RestorePreconditionError(
                 'WORLD_NOT_FOUND', f'world not found: {world_id}', status_code=404
@@ -119,7 +121,10 @@ class RestoreService:
                 op_type=OperationType.RESTORE,
                 actor_type=ActorType.SYSTEM,
                 world_id=world_id,
-                data={'rollback_of_restore_id': restore_id, 'source_artifact_id': pre_backup.artifact_id},
+                data={
+                    'rollback_of_restore_id': restore_id,
+                    'source_artifact_id': pre_backup.artifact_id,
+                },
                 compensates_operation_id=operation_id,
             ),
             allow_world_conflict=True,
@@ -159,7 +164,9 @@ class RestoreService:
             return False
 
     def _switch_world(self, world_dir: Path, staging_dir: Path) -> None:
-        archive_dir = world_dir.with_name(f'{world_dir.name}.restore-archive-{uuid.uuid4().hex[:8]}')
+        archive_dir = world_dir.with_name(
+            f'{world_dir.name}.restore-archive-{uuid.uuid4().hex[:8]}'
+        )
         archived_original = world_dir.exists()
         if archived_original:
             shutil.move(str(world_dir), str(archive_dir))
@@ -173,6 +180,17 @@ class RestoreService:
                     shutil.rmtree(world_dir)
                 shutil.move(str(archive_dir), str(world_dir))
             raise
+        if archived_original and archive_dir.exists():
+            try:
+                if archive_dir.is_symlink() or archive_dir.is_file():
+                    archive_dir.unlink()
+                else:
+                    shutil.rmtree(str(archive_dir))
+            except OSError:
+                # The replacement is published and the pre-restore backup remains
+                # the recovery source; do not turn a successful switch into an
+                # unexplained failure because archive cleanup is unavailable.
+                pass
 
     def _record_history(
         self,
@@ -215,7 +233,10 @@ class RestoreService:
 
     def _update_restore_outcome(self, restore_id: str, outcome: str) -> None:
         connection = self._store.writer()
-        connection.execute('UPDATE restore_history SET outcome = ?, finished_at = ? WHERE restore_id = ?', (outcome, int(self._clock.now()), restore_id))
+        connection.execute(
+            'UPDATE restore_history SET outcome = ?, finished_at = ? WHERE restore_id = ?',
+            (outcome, int(self._clock.now()), restore_id),
+        )
         connection.commit()
 
     def _set_world_state(self, world_id: str, state: WorldState) -> None:

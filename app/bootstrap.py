@@ -134,25 +134,29 @@ def build_container(
         realtime,
         PsutilHostMetrics(Path(database_path).resolve().parent),
     )
-    operations = OperationService(
-        store, clock, audit, realtime, notifications=notifications
-    )
+    operations = OperationService(store, clock, audit, realtime, notifications=notifications)
     scheduler = SchedulerService(store, clock, operations, notifications)
     logs = LogFanout(realtime)
     save_coordinator = RconSaveCoordinator(store, secrets, rcon_factory=RconClient)
     backup_engine = NativeBackupEngine()
+    filesystem = LocalFilesystem()
+    configuration = ConfigurationService(store, clock, operations)
     backups = BackupService(
         store,
         clock,
         save_coordinator,
         backup_engine,
-        LocalFilesystem(),
+        filesystem,
     )
-    cleanup = CleanupService(store, clock)
-    configuration = ConfigurationService(store, clock, operations)
-    server_properties = ServerPropertiesService(
-        store, clock, configuration, operations
+    cleanup = CleanupService(
+        store,
+        clock,
+        operations,
+        configuration,
+        filesystem,
+        audit,
     )
+    server_properties = ServerPropertiesService(store, clock, configuration, operations)
     manager_lifecycle = ManagerLifecycleService(
         store, clock, operations, configuration, backup_engine
     )

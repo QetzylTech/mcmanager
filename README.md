@@ -21,8 +21,11 @@ portability.
 
 ## Work tracking
 
-The WBS and realignment Kanban board, including task dependencies and
-acceptance evidence, is maintained in [docs/WORKBOARD.md](docs/WORKBOARD.md).
+Use [docs/WORKBOARD.md](docs/WORKBOARD.md) as the current implementation,
+verification, and release tracker; it is the source of truth for work status.
+Use [Audits/](Audits/) for current audit findings, realignment records, and
+supporting verification evidence. Older audit snapshots are retained under
+[`old doc/`](old%20doc/) and must not be presented as current evidence.
 
 ## Development
 

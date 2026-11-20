@@ -109,12 +109,12 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 ### Cleanup
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/cleanup/policy` | A | Manager-wide backup cleanup policy; when unset, returns safe defaults with `version=0` |
-| PATCH | `/api/cleanup/policy` | A S | Versioned ConfigEdit; `{version, age_rule_days?, space_rule_pct?, count_rules?, schedule_id?}`; version `0` creates the global default policy |
-| POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_worlds\|logs, world_id?, policy_version?}` → affected-candidate summary in `data` once Validating |
-| POST | `/api/cleanup/execute` | A S | O Cleanup `wet=true`; requires dry-run preview (`scope`, `dry_run_operation_id`); blast-radius cap enforced |
+| GET | `/api/cleanup/policy` | A | Manager-wide policy; defaults: age 3 days, 90% storage trigger, 7 sessions, 3-day tombstone grace, unlimited log retention; unset policy returns `version=0` |
+| PATCH | `/api/cleanup/policy` | A S | Versioned ConfigEdit; `{version, age_rule_days?, space_rule_pct?, count_rules?, stale_session_threshold?, log_retention_days?, schedule_id?}`; version `0` creates the global default policy |
+| POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_backups\|logs, world_id?, policy_version?}` → target IDs, stale-backup tombstone/purge groups, and storage-pressure status in `data` |
+| POST | `/api/cleanup/execute` | A S | O Cleanup `wet=true`; requires matching completed dry-run (`scope`, `world_id`, `dry_run_operation_id`); exact plan revalidated; blast-radius cap enforced |
 | GET | `/api/cleanup/runs` | A | cleanup history with summaries in `data_json` |
-| GET | `/api/worlds/{world_id}/cleanup-preview` | A | scoped dry-run shorthand |
+| GET | `/api/worlds/{world_id}/cleanup-preview` | A | scoped dry-run shorthand; supports `backups`, `stale_backups`, and `logs` |
 
 ### Sync
 | Method | Path | Access | Notes |
@@ -227,9 +227,9 @@ Documentation and manager-log reads are authenticated and administrator-only. Do
 ### System
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/health` | public | `{status:"ok", version, db:"ok"}` — no sensitive data |
+| GET | `/api/health` | public | Canonical success envelope with `data={status, version, db}` — no sensitive data |
 | GET | `/api/system/stats` | any | CPU/RAM/storage/worlds; cached; `meta.freshness` |
-| GET | `/api/diagnostics` | A | manager diagnostics distinct from world health (ARCHITECTURE §16 ruling 12): scheduler last-tick + next-tick, SQLite writer busy/wedge status, process-adapter last-poll health, foreign_key_check status, reconciliation report, operation backlog/queue depth, last successful checkpoint |
+| GET | `/api/diagnostics` | A | Canonical success envelope; manager diagnostics distinct from world health (ARCHITECTURE §16 ruling 12), including service `version`, scheduler last-tick + next-tick, SQLite writer busy/wedge status, process-adapter last-poll health, foreign_key_check status, reconciliation phase/status, reattached world IDs/count and last-attempt timestamp, operation backlog/queue depth, and last successful checkpoint |
 
 ### Additional application routes
 
@@ -295,7 +295,7 @@ All require valid session cookie. CSRF not applicable (GET, read-only).
 - Clients = 0 AND all worlds off → no emission (`null` cadence). Any world on OR any client connected → 15s cached snapshot refresh. ≥1 connected client → 1Hz stream cadence (log lines as emitted).
 - **Broadcast set** (canonical payload fields; SSE/JSON push-only, no polling; projected across `world.metrics`, `system.stats`, `snapshot`, `notifications`):
   - Host: RAM, CPU/core, CPU frequency, storage %.
-  - World: MC status, RCON player list, tick time, auto-stop timer, backup status, last backup, next backup, backups folder, backup count, stale-worlds count.
+  - World: MC status, RCON player list, tick time, auto-stop timer, backup status, last backup, next backup, backups folder, backup count, stale-backup candidate count.
   - Jobs/policy: cleanup last run, cleanup rule version, schedule version, rule last changed by, next run, missed-run count.
   - Logs: console, backup, panel activity, panel error (live via `log.line`; history via Files & Logs channels).
 

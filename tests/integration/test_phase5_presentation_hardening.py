@@ -97,10 +97,18 @@ def test_health_monitors_scheduler_sqlite_writer_and_process_adapter(
         response = app.test_client().get("/api/health")
         payload = response.get_json()
         assert response.status_code == 200
+        assert payload["ok"] is True
+        assert payload["meta"] == {}
         assert payload["data"] == {"status": "ok", "db": "ok", "version": "0.1.0"}
 
         client, _headers = _authenticated_admin_client(app)
-        diagnostics = client.get("/api/diagnostics").get_json()["data"]
+        diagnostics_response = client.get("/api/diagnostics")
+        diagnostics_payload = diagnostics_response.get_json()
+        assert diagnostics_response.status_code == 200
+        assert diagnostics_payload["ok"] is True
+        assert diagnostics_payload["meta"] == {}
+        diagnostics = diagnostics_payload["data"]
+        assert diagnostics["version"] == "0.1.0"
         assert diagnostics["scheduler"]["status"] == "ok"
         assert diagnostics["scheduler"]["tick_interval_seconds"] == 30
         assert diagnostics["sqlite_writer"]["status"] == "ok"
@@ -110,6 +118,9 @@ def test_health_monitors_scheduler_sqlite_writer_and_process_adapter(
         assert diagnostics["operation_backlog"] == {"queued": 0, "in_flight": 0}
         assert diagnostics["reconciliation"]["status"] == "ok"
         assert diagnostics["reconciliation"]["phase"] == "healthy"
+        assert diagnostics["reconciliation"]["reattached_worlds"] == 0
+        assert diagnostics["reconciliation"]["reattached_world_ids"] == []
+        assert isinstance(diagnostics["reconciliation"]["last_attempt_at"], int)
     finally:
         next(app_iter, None)
 
@@ -136,12 +147,13 @@ def test_health_reports_reconciliation_failure(tmp_path, migrations_dir, clock, 
         response = client.get("/api/diagnostics")
         payload = response.get_json()
         assert response.status_code == 200
-        assert payload["data"]["reconciliation"] == {
-            "status": "down",
-            "phase": "failed",
-            "reattached_worlds": 0,
-            "error": "process probe failed",
-        }
+        reconciliation = payload["data"]["reconciliation"]
+        assert reconciliation["status"] == "down"
+        assert reconciliation["phase"] == "failed"
+        assert reconciliation["reattached_worlds"] == 0
+        assert reconciliation["reattached_world_ids"] == []
+        assert isinstance(reconciliation["last_attempt_at"], int)
+        assert reconciliation["error"] == "process probe failed"
     finally:
         next(app_iter, None)
 
@@ -188,6 +200,10 @@ def test_sse_endpoints_emit_nonblank_snapshots(tmp_path, migrations_dir, clock):
     app = next(app_iter)
     client, _headers = _authenticated_admin_client(app)
     try:
+        missing_world = client.get("/stream/restore_logs")
+        assert missing_world.status_code == 400
+        assert missing_world.json["error"]["code"] == "VALIDATION_ERROR"
+
         for path, event_name in (
             ("/stream/events", "event: snapshot"),
             ("/stream/worlds/world_1/events", "event: snapshot.world"),

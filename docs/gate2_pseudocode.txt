@@ -22,8 +22,9 @@ Operations; AuthenticationService uses Argon2id hashes held in the encrypted
 secrets store and hashed session tokens. The API maps the implemented version
 conflict to the current error handling; Document 10's canonical codes remain
 authoritative (for example CONFIG_VERSION_CONFLICT and AUTH_STEP_UP_REQUIRED),
-not spellings invented by this sketch. Focused Gate 2 verification is recorded
-in docs/WORKBOARD.md; it does not certify the full product.
+not spellings invented by this sketch. Current implementation status is in
+docs/STATUS.md; historical workboard evidence is under old doc/ and is not
+an acceptance record.
 
 Everything below is the superseded historical pseudocode, not a second schema
 or competing API contract. Follow Documents 6–10 and the app/ implementation.

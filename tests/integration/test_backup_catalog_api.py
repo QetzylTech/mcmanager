@@ -182,6 +182,47 @@ def test_backup_catalog_auth_shapes_and_durable_operation(backup_api_app, monkey
     assert listing.json["meta"]["pagination"]["total"] == 1
 
 
+def test_scheduled_backup_queues_a_durable_cap_cleanup(backup_api_app, monkeypatch):
+    app, _tmp_path = backup_api_app
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(
+        container.backups,
+        "create_world_backup",
+        lambda **_kwargs: BackupResult("scheduled_artifact", "unused.zip", "a" * 64, 15, 0),
+    )
+    backup_operation = container.operations.create(
+        OperationInput(
+            op_type=OperationType.BACKUP,
+            actor_type=ActorType.SYSTEM,
+            world_id="api_world",
+            data={"category": "scheduled"},
+        )
+    )
+
+    container.catalog_operations.dispatch_queued_operations()
+
+    cleanup_row = (
+        container.store.reader()
+        .execute(
+            """
+        SELECT op_id, status, data_json FROM operations
+        WHERE op_type = 'Cleanup' AND idempotency_key = ?
+        """,
+            (f"scheduled-backup-cap:{backup_operation['op_id']}",),
+        )
+        .fetchone()
+    )
+    assert cleanup_row is not None
+    assert cleanup_row['status'] == OperationStatus.QUEUED.value
+    assert json.loads(cleanup_row['data_json'])['action'] == 'enforce_scheduled_backup_cap'
+
+    container.catalog_operations.dispatch_queued_operations()
+
+    assert (
+        container.operations.get(cleanup_row['op_id'])['status'] == OperationStatus.COMPLETED.value
+    )
+
+
 def test_restore_rollback_uses_pre_restore_artifact_and_step_up(backup_api_app, monkeypatch):
     app, tmp_path = backup_api_app
     client, headers = _admin_client(app)
@@ -274,11 +315,15 @@ def test_restore_rollback_uses_pre_restore_artifact_and_step_up(backup_api_app, 
     assert payload["artifact_id"] == "rollback_source"
     assert payload["rollback_of_restore_id"] == "api_restore"
     container.catalog_operations.dispatch_queued_operations()
-    result = container.store.reader().execute(
-        "SELECT restore_id, rollback_of_restore_id, source_artifact_id, outcome "
-        "FROM restore_history WHERE operation_id = ?",
-        (op_id,),
-    ).fetchone()
+    result = (
+        container.store.reader()
+        .execute(
+            "SELECT restore_id, rollback_of_restore_id, source_artifact_id, outcome "
+            "FROM restore_history WHERE operation_id = ?",
+            (op_id,),
+        )
+        .fetchone()
+    )
     assert result["rollback_of_restore_id"] == "api_restore"
     assert result["source_artifact_id"] == "rollback_source"
     assert result["outcome"] == "success"
@@ -299,11 +344,11 @@ def test_cleanup_preview_execute_and_sync_attempt_catalog(backup_api_app, monkey
 
     unsupported = client.post(
         "/api/cleanup/dry-run",
-        json={"scope": "logs"},
+        json={"scope": "stale_worlds"},
         headers=headers,
     )
-    assert unsupported.status_code == 501
-    assert unsupported.json["error"]["code"] == "CLEANUP_SCOPE_UNSUPPORTED"
+    assert unsupported.status_code == 400
+    assert unsupported.json["error"]["code"] == "VALIDATION_ERROR"
 
     preview = client.post(
         "/api/cleanup/dry-run",
@@ -353,9 +398,11 @@ def test_cleanup_preview_execute_and_sync_attempt_catalog(backup_api_app, monkey
     assert unresolved.status_code == 409
     assert unresolved.json["error"]["code"] == "SYNC_TARGET_UNRESOLVED"
 
-    secret_id = container.store.reader().execute(
-        "SELECT secret_id FROM secrets ORDER BY created_at LIMIT 1"
-    ).fetchone()["secret_id"]
+    secret_id = (
+        container.store.reader()
+        .execute("SELECT secret_id FROM secrets ORDER BY created_at LIMIT 1")
+        .fetchone()["secret_id"]
+    )
     target_path = tmp_path / "nas"
     now = int(container.clock.now())
     container.store.writer().execute(
@@ -380,20 +427,84 @@ def test_cleanup_preview_execute_and_sync_attempt_catalog(backup_api_app, monkey
     sync = client.get("/api/backups/cleanup_4/sync")
     assert sync.status_code == 200
     assert sync.json["data"]["sync"]["status"] == "succeeded"
-    assert [attempt["outcome"] for attempt in sync.json["data"]["attempts"]] == [
-        "succeeded"
-    ]
+    assert [attempt["outcome"] for attempt in sync.json["data"]["attempts"]] == ["succeeded"]
     records = client.get("/api/sync/records?status=succeeded")
     assert records.status_code == 200
     assert records.json["data"]["sync_records"][0]["artifact_id"] == "cleanup_4"
 
 
-def test_backup_delete_enqueues_idempotent_cleanup_and_audits(
-    backup_api_app, monkeypatch
-):
+def test_stale_backup_and_log_cleanup_scopes_preview_and_execute(backup_api_app, monkeypatch):
+    app, _tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    for scope in ("stale_backups", "logs"):
+        preview = admin.post(
+            "/api/cleanup/dry-run",
+            json={"scope": scope, "world_id": "api_world"},
+            headers={**headers, "Idempotency-Key": f"{scope}-preview"},
+        )
+        assert preview.status_code == 202
+        preview_id = preview.json["meta"]["op_id"]
+        container.catalog_operations.dispatch_queued_operations()
+        preview_operation = container.operations.get(preview_id)
+        assert preview_operation["status"] == "Completed"
+        preview_data = json.loads(preview_operation["data_json"])
+        assert preview_data["scope"] == scope
+
+        execute = admin.post(
+            "/api/cleanup/execute",
+            json={
+                "scope": scope,
+                "world_id": "api_world",
+                "dry_run_operation_id": preview_id,
+            },
+            headers={**headers, "Idempotency-Key": f"{scope}-execute"},
+        )
+        assert execute.status_code == 202
+        container.catalog_operations.dispatch_queued_operations()
+        assert container.operations.get(execute.json["meta"]["op_id"])["status"] == "Completed"
+
+
+def test_cleanup_policy_api_round_trips_new_retention_settings(backup_api_app, monkeypatch):
+    app, _tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    defaults = admin.get("/api/cleanup/policy")
+    assert defaults.status_code == 200
+    assert defaults.json["data"]["cleanup_policy"]["stale_session_threshold"] == 7
+    assert defaults.json["data"]["cleanup_policy"]["log_retention_days"] is None
+
+    updated = admin.patch(
+        "/api/cleanup/policy",
+        json={
+            "version": 0,
+            "space_rule_pct": 85,
+            "stale_session_threshold": 8,
+            "log_retention_days": 30,
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    policy = updated.json["data"]["cleanup_policy"]
+    assert policy["space_rule_pct"] == 85
+    assert policy["stale_session_threshold"] == 8
+    assert policy["log_retention_days"] == 30
+    assert container.cleanup.cleanup_policy(None)["stale_session_threshold"] == 8
+
+
+def test_backup_delete_enqueues_idempotent_cleanup_and_audits(backup_api_app, monkeypatch):
     app, tmp_path = backup_api_app
     admin, headers = _admin_client(app)
     container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(
+        container.cleanup,
+        "_backup_root",
+        lambda _world_id: tmp_path / "backups",
+    )
     monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
     artifact = _seed_artifact(app, tmp_path / "backups", "retained_one")
     from app.services.auth import StepUpRequiredError
@@ -403,9 +514,7 @@ def test_backup_delete_enqueues_idempotent_cleanup_and_audits(
         "require_step_up",
         lambda _session: (_ for _ in ()).throw(StepUpRequiredError("step-up required")),
     )
-    step_up_denied = admin.delete(
-        "/api/backups/retained_one?force=true", headers=headers
-    )
+    step_up_denied = admin.delete("/api/backups/retained_one?force=true", headers=headers)
     assert step_up_denied.status_code == 403
     assert step_up_denied.json["error"]["code"] == "STEP_UP_REQUIRED"
     monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
@@ -435,18 +544,29 @@ def test_backup_delete_enqueues_idempotent_cleanup_and_audits(
         "deleted": True,
     }
     assert not artifact.exists()
-    artifact_row = container.store.reader().execute(
-        "SELECT deleted_at, deleted_by FROM backup_artifacts WHERE artifact_id = ?",
-        ("retained_one",),
-    ).fetchone()
+    artifact_row = (
+        container.store.reader()
+        .execute(
+            "SELECT deleted_at, deleted_by FROM backup_artifacts WHERE artifact_id = ?",
+            ("retained_one",),
+        )
+        .fetchone()
+    )
     assert artifact_row["deleted_at"] is not None
-    assert artifact_row["deleted_by"] == container.auth.validate_session(
-        admin.get_cookie("mcmanager_session").value, ip="127.0.0.1"
-    ).user_id
-    audit_count = container.store.reader().execute(
-        "SELECT count(*) FROM audit_records WHERE operation_id = ?",
-        (operation_id,),
-    ).fetchone()[0]
+    assert (
+        artifact_row["deleted_by"]
+        == container.auth.validate_session(
+            admin.get_cookie("mcmanager_session").value, ip="127.0.0.1"
+        ).user_id
+    )
+    audit_count = (
+        container.store.reader()
+        .execute(
+            "SELECT count(*) FROM audit_records WHERE operation_id = ?",
+            (operation_id,),
+        )
+        .fetchone()[0]
+    )
     assert audit_count == 1
     completed_replay = admin.delete("/api/backups/retained_one", headers=delete_headers)
     assert completed_replay.status_code == 200

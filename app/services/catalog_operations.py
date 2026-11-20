@@ -6,14 +6,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.domain.value_objects import OperationStatus, OperationType, TriggerType
+from app.domain.value_objects import (
+    ActorType,
+    OperationStatus,
+    OperationType,
+    TriggerType,
+)
 from app.ports.clock import Clock
 from app.ports.persistence import PersistencePort
 from app.services.backup import BackupIntegrityError, BackupService
 from app.services.cleanup import CleanupService, RetentionError
 from app.services.configuration import ConfigurationService
 from app.services.manager_lifecycle import ManagerLifecycleService
-from app.services.operations import OperationService
+from app.services.operations import OperationInput, OperationService
 from app.services.restore import RestorePreconditionError, RestoreService
 from app.services.sync import SyncError, SyncService
 
@@ -54,9 +59,7 @@ class CatalogOperationDispatcher:
         self, operation_types: tuple[OperationType, ...] | None = None
     ) -> list[str]:
         dispatched: list[str] = []
-        for operation in self._operations.list_queued(
-            operation_types or self._OPERATION_TYPES
-        ):
+        for operation in self._operations.list_queued(operation_types or self._OPERATION_TYPES):
             claimed = self._operations.claim_queued(operation["op_id"])
             if claimed is None:
                 continue
@@ -77,27 +80,60 @@ class CatalogOperationDispatcher:
                         error_code=self._error_code(claimed, exc),
                         message=str(exc),
                     )
+            else:
+                current = self._operations.get(claimed["op_id"])
+                if current is not None and current["status"] == OperationStatus.COMPLETED.value:
+                    self._enqueue_scheduled_backup_cap(claimed)
         return dispatched
+
+    def _enqueue_scheduled_backup_cap(self, operation: dict[str, Any]) -> None:
+        if operation['op_type'] != OperationType.BACKUP.value:
+            return
+        try:
+            data = json.loads(operation.get('data_json') or '{}')
+        except (TypeError, json.JSONDecodeError):
+            data = {}
+        if data.get('category') != TriggerType.SCHEDULED.value:
+            return
+        world_id = operation.get('world_id')
+        if not isinstance(world_id, str):
+            raise ValueError('scheduled backup requires a world')
+        self._operations.create(
+            OperationInput(
+                op_type=OperationType.CLEANUP,
+                actor_type=ActorType.SYSTEM,
+                world_id=world_id,
+                idempotency_key=f"scheduled-backup-cap:{operation['op_id']}",
+                data={
+                    'action': 'enforce_scheduled_backup_cap',
+                    'source_backup_operation_id': operation['op_id'],
+                },
+            ),
+            initial_status=OperationStatus.QUEUED,
+            allow_world_conflict=True,
+        )
 
     def resolve_sync_target(self, world_id: str | None) -> str | None:
         if world_id is not None:
-            row = self._store.reader().execute(
-                """
+            row = (
+                self._store.reader()
+                .execute(
+                    """
                 SELECT sync_target_id FROM sync_targets
                 WHERE scope = 'world' AND world_id = ? AND enabled = 1 AND deleted_at IS NULL
                 ORDER BY created_at DESC LIMIT 1
                 """,
-                (world_id,),
-            ).fetchone()
+                    (world_id,),
+                )
+                .fetchone()
+            )
             if row is not None:
                 return str(row["sync_target_id"])
-        row = self._store.reader().execute(
-            """
+        row = self._store.reader().execute("""
             SELECT sync_target_id FROM sync_targets
             WHERE scope = 'global' AND world_id IS NULL AND enabled = 1 AND deleted_at IS NULL
             ORDER BY created_at DESC LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
         return str(row["sync_target_id"]) if row is not None else None
 
     @staticmethod
@@ -119,9 +155,7 @@ class CatalogOperationDispatcher:
         op_type = OperationType(operation["op_type"])
         if op_type is OperationType.BACKUP:
             if operation["world_id"] is None and data.get("scope") == "manager":
-                return self._manager_lifecycle.execute_backup(
-                    operation_id=operation["op_id"]
-                )
+                return self._manager_lifecycle.execute_backup(operation_id=operation["op_id"])
             world = self._world(operation["world_id"])
             result = self._backups.create_world_backup(
                 world_id=world["world_id"],
@@ -158,6 +192,11 @@ class CatalogOperationDispatcher:
                 "rollback_operation_id": result.rollback_operation_id,
             }
         if op_type is OperationType.CLEANUP:
+            if data.get('action') == 'enforce_scheduled_backup_cap':
+                return self._cleanup.enforce_scheduled_backup_cap(
+                    operation_id=operation['op_id'],
+                    world_id=operation['world_id'],
+                )
             if data.get("action") == "delete_artifact":
                 artifact_id = data["artifact_id"]
                 self._cleanup.delete_backup_artifact(
@@ -166,6 +205,12 @@ class CatalogOperationDispatcher:
                     force=bool(data.get("force")),
                 )
                 return {"artifact_id": artifact_id, "deleted": True}
+            if isinstance(data.get("schedule_id"), str):
+                return self._cleanup.run_scheduled_cleanup(
+                    operation_id=operation["op_id"],
+                    world_id=operation["world_id"],
+                    schedule_id=data["schedule_id"],
+                )
             return self._cleanup.evaluate_and_execute_cleanup(
                 op_id=operation["op_id"],
                 world_id=operation["world_id"],
@@ -192,10 +237,14 @@ class CatalogOperationDispatcher:
     def _world(self, world_id: str | None) -> dict[str, Any]:
         if world_id is None:
             raise ValueError("WORLD_NOT_FOUND")
-        row = self._store.reader().execute(
-            "SELECT * FROM world_instances WHERE world_id = ? AND deleted_at IS NULL",
-            (world_id,),
-        ).fetchone()
+        row = (
+            self._store.reader()
+            .execute(
+                "SELECT * FROM world_instances WHERE world_id = ? AND deleted_at IS NULL",
+                (world_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             raise ValueError("WORLD_NOT_FOUND")
         return dict(row)
@@ -206,9 +255,7 @@ class CatalogOperationDispatcher:
             if candidate.is_absolute():
                 return candidate
         settings = self._configuration.resolve_effective(world["world_id"])
-        return Path(str(settings["minecraft_root_path"] or "worlds")) / str(
-            world["display_name"]
-        )
+        return Path(str(settings["minecraft_root_path"] or "worlds")) / str(world["display_name"])
 
     def _backup_directory(self, world_id: str) -> Path:
         settings = self._configuration.resolve_effective(world_id)
@@ -225,10 +272,20 @@ class CatalogOperationDispatcher:
                 return "BACKUP_ARTIFACT_NOT_FOUND"
             if "checksum" in message.lower():
                 return "BACKUP_INVALID_CHECKSUM"
-            return "RESTORE_ARTIFACT_INVALID" if op_type == OperationType.RESTORE.value else "BACKUP_FAILED"
+            return (
+                "RESTORE_ARTIFACT_INVALID"
+                if op_type == OperationType.RESTORE.value
+                else "BACKUP_FAILED"
+            )
         if isinstance(exc, RetentionError):
             if "BACKUP_RETENTION_GUARD" in message:
                 return "BACKUP_RETENTION_GUARD"
+            if "BACKUP_PATH_UNSAFE" in message:
+                return "BACKUP_PATH_UNSAFE"
+            if "LOG_PATH_UNSAFE" in message:
+                return "CLEANUP_PATH_UNSAFE"
+            if "CLEANUP_STORAGE_USAGE_INVALID" in message:
+                return "CLEANUP_STORAGE_USAGE_INVALID"
             if "BLAST_RADIUS" in message:
                 return "CLEANUP_BLAST_RADIUS"
             if "PREVIEW" in message or "STALE" in message:

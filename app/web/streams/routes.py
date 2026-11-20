@@ -9,20 +9,21 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, current_app, g, request, stream_with_context
+from flask import Blueprint, Response, current_app, request, stream_with_context
 
 from app.domain.tuning import LOG_LINE_BUFFER_LINES
 from app.platform.process.tailing import read_durable_log
 from app.services.auth import SessionError
 from app.services.realtime import RealtimeHub
+from app.web.errors import error
 from app.web.middleware import _ADMIN_ROLES, _has_permission, _permission_requirement
 
 streams_bp = Blueprint("streams", __name__, url_prefix="/stream")
 
 
-def _snapshot_frame(event_name: str, payload: dict[str, Any]) -> str:
+def _snapshot_frame(event_name: str, payload: dict[str, Any], event_id: int = 0) -> str:
     encoded = json.dumps(payload, separators=(",", ":"))
-    return f"id: 0\nevent: {event_name}\ndata: {encoded}\nretry: 3000\n\n"
+    return f"id: {event_id}\nevent: {event_name}\ndata: {encoded}\nretry: 3000\n\n"
 
 
 def _log_frame(event_name: str, payload: dict[str, Any], cursor: str | None = None) -> str:
@@ -32,24 +33,25 @@ def _log_frame(event_name: str, payload: dict[str, Any], cursor: str | None = No
 
 
 def _log_session_paths(container: Any, world_id: str) -> list[tuple[str, Path]]:
-    sessions = container.store.reader().execute(
-        """
+    sessions = (
+        container.store.reader()
+        .execute(
+            """
         SELECT session_id
         FROM runtime_sessions
         WHERE world_id = ?
         ORDER BY started_at, session_id
         """,
-        (world_id,),
-    ).fetchall()
+            (world_id,),
+        )
+        .fetchall()
+    )
     try:
         root = container.configuration.resolve_effective(world_id)["log_root_path"]
     except KeyError:
         root = "logs"
     log_dir = Path(str(root or "logs")) / world_id / world_id
-    return [
-        (str(row["session_id"]), log_dir / f"{row['session_id']}.log")
-        for row in sessions
-    ]
+    return [(str(row["session_id"]), log_dir / f"{row['session_id']}.log") for row in sessions]
 
 
 def _log_cursor_index(paths: list[tuple[str, Path]], cursor: str) -> tuple[int, int] | None:
@@ -115,12 +117,21 @@ def _subscribe(
     auth_check: Callable[[], bool],
     on_close: Callable[[], None] | None = None,
 ) -> Response:
-    subscriber = hub.subscribe(stream, last_event_id=_last_event_id())
+    last_event_id = _last_event_id()
+    if last_event_id is not None:
+        buffered_events = hub.replay(stream, last_event_id=None)
+        latest_event_id = buffered_events[-1].sequence if buffered_events else 0
+        last_event_id = min(last_event_id, latest_event_id)
+    subscriber = hub.subscribe(stream, last_event_id=last_event_id)
     snapshot = snapshot_payload()
 
     def generate() -> Iterator[str]:
         try:
-            yield _snapshot_frame(snapshot_event, snapshot)
+            yield _snapshot_frame(
+                snapshot_event,
+                snapshot,
+                event_id=last_event_id if last_event_id is not None else 0,
+            )
             yield from subscriber.frames(auth_check=auth_check)
         finally:
             hub.unsubscribe(stream, subscriber)
@@ -158,74 +169,39 @@ def _session_check(container: Any, token: str, ip: str) -> Callable[[], bool]:
 
 
 def _manager_snapshot(container: Any) -> dict[str, Any]:
-    worlds = [
-        dict(row)
-        for row in container.store.reader()
-        .execute(
-            """
+    worlds = [dict(row) for row in container.store.reader().execute("""
             SELECT world_id, display_name, server_type, mc_version, state, updated_at
             FROM world_instances
             WHERE deleted_at IS NULL
             ORDER BY display_name, world_id
-            """
-        )
-        .fetchall()
-    ]
-    operations = [
-        dict(row)
-        for row in container.store.reader()
-        .execute(
-            """
+            """).fetchall()]
+    operations = [dict(row) for row in container.store.reader().execute("""
             SELECT op_id, op_type, world_id, status, checkpoint, error_code,
                    message, created_at, updated_at
             FROM operations
             ORDER BY created_at DESC, op_id DESC
-            """
-        )
-        .fetchall()
-    ]
-    backups = [
-        dict(row)
-        for row in container.store.reader()
-        .execute(
-            """
+            """).fetchall()]
+    backups = [dict(row) for row in container.store.reader().execute("""
             SELECT artifact_id, world_id, category, size_bytes, suspect,
                    operation_id, created_at
             FROM backup_artifacts
             WHERE deleted_at IS NULL
             ORDER BY created_at DESC, artifact_id DESC
-            """
-        )
-        .fetchall()
-    ]
-    schedules = [
-        dict(row)
-        for row in container.store.reader()
-        .execute(
-            """
+            """).fetchall()]
+    schedules = [dict(row) for row in container.store.reader().execute("""
             SELECT schedule_id, scope, world_id, schedule_type, enabled, version,
                    last_changed_at
             FROM schedules
             WHERE deleted_at IS NULL
             ORDER BY schedule_id
-            """
-        )
-        .fetchall()
-    ]
-    notifications = [
-        dict(row)
-        for row in container.store.reader()
-        .execute(
-            """
+            """).fetchall()]
+    notifications = [dict(row) for row in container.store.reader().execute("""
             SELECT notification_id, category, severity, message,
                    related_operation_id, related_world_id, requires_action,
                    action_taken, created_at
             FROM notifications
             ORDER BY created_at DESC, notification_id DESC
-            """
-        )
-        .fetchall()
-    ]
+            """).fetchall()]
     freshness = int(container.clock.now())
     return {
         "manager": {
@@ -239,22 +215,25 @@ def _manager_snapshot(container: Any) -> dict[str, Any]:
         "cached_live": {
             "metrics": None,
             "world_states": [
-                {"world_id": world["world_id"], "state": world["state"]}
-                for world in worlds
+                {"world_id": world["world_id"], "state": world["state"]} for world in worlds
             ],
         },
     }
 
 
 def _world_snapshot(container: Any, world_id: str) -> dict[str, Any]:
-    row = container.store.reader().execute(
-        """
+    row = (
+        container.store.reader()
+        .execute(
+            """
         SELECT world_id, display_name, server_type, mc_version, state, updated_at
         FROM world_instances
         WHERE world_id = ? AND deleted_at IS NULL
         """,
-        (world_id,),
-    ).fetchone()
+            (world_id,),
+        )
+        .fetchone()
+    )
     return {
         "world_id": world_id,
         "world": dict(row) if row is not None else None,
@@ -278,12 +257,16 @@ def _auth_check_for_request(container: Any) -> Callable[[], bool]:
             return False
         if requirement is None:
             return True
-        admin = container.store.reader().execute(
-            "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
-            "WHERE ra.user_id = ? AND ra.deleted_at IS NULL AND r.deleted_at IS NULL "
-            "AND r.name IN (?, ?) LIMIT 1",
-            (user_id, *_ADMIN_ROLES),
-        ).fetchone()
+        admin = (
+            container.store.reader()
+            .execute(
+                "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
+                "WHERE ra.user_id = ? AND ra.deleted_at IS NULL AND r.deleted_at IS NULL "
+                "AND r.name IN (?, ?) LIMIT 1",
+                (user_id, *_ADMIN_ROLES),
+            )
+            .fetchone()
+        )
         return admin is not None or _has_permission(
             container,
             user_id=user_id,
@@ -322,9 +305,7 @@ def world_events(world_id: str) -> Response:
 def world_logs(world_id: str) -> Response:
     container = current_app.extensions["mcmanager_container"]
     auth_check = _auth_check_for_request(container)
-    requested_cursor = request.headers.get("Last-Event-ID", "") or request.args.get(
-        "after", ""
-    )
+    requested_cursor = request.headers.get("Last-Event-ID", "") or request.args.get("after", "")
 
     def generate() -> Iterator[str]:
         paths = _log_session_paths(container, world_id)
@@ -345,6 +326,9 @@ def world_logs(world_id: str) -> Response:
             )
             cursor = None
             replaying = False
+
+        if replaying and cursor_position is not None:
+            line_no = _count_log_records(paths, *cursor_position)
 
         if not replaying:
             snapshot: deque[dict[str, Any]] = deque(maxlen=LOG_LINE_BUFFER_LINES)
@@ -371,7 +355,7 @@ def world_logs(world_id: str) -> Response:
                         break
             cursor = snapshot[-1]["cursor"] if snapshot else None
             if snapshot:
-                last_session, _, last_offset = cursor.rpartition(":")
+                last_session, _, last_offset = snapshot[-1]["cursor"].rpartition(":")
                 try:
                     cursor_position = next(
                         (index, int(last_offset))
@@ -439,12 +423,18 @@ def world_logs(world_id: str) -> Response:
                         )
                         cursor = None
                         replaying = False
-                        line_no = 0
+                        if path_index:
+                            previous_path = paths[path_index - 1][1]
+                            try:
+                                previous_end = previous_path.stat().st_size
+                            except OSError:
+                                previous_end = 0
+                            line_no = _count_log_records(paths, path_index - 1, previous_end)
+                        else:
+                            line_no = 0
                         start_offset = 0
 
-                records, next_offset = read_durable_log(
-                    path, start_offset, limit=256
-                )
+                records, next_offset = read_durable_log(path, start_offset, limit=256)
                 if records and replaying and not replay_notice_sent:
                     yield _log_frame(
                         "log.replay",
@@ -492,9 +482,11 @@ def world_logs(world_id: str) -> Response:
 
 
 @streams_bp.get("/restore_logs")
-def restore_logs() -> Response:
+def restore_logs() -> Response | tuple[Response, int]:
     container = current_app.extensions["mcmanager_container"]
     world_id = request.args.get("world_id")
+    if not world_id:
+        return error("VALIDATION_ERROR", "world_id query parameter is required.")
     return _subscribe(
         container.realtime,
         f"restore:{world_id}:logs",

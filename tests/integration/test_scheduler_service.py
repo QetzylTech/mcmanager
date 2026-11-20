@@ -45,7 +45,9 @@ def _insert_schedule(
 
 
 def test_tick_interval_is_exactly_thirty_seconds(store, clock) -> None:
-    assert SchedulerService(store, clock, OperationService(store, clock)).tick_interval_seconds == 30
+    assert (
+        SchedulerService(store, clock, OperationService(store, clock)).tick_interval_seconds == 30
+    )
 
 
 def test_fresh_due_schedule_dispatches_once_when_scope_is_clear(store, clock) -> None:
@@ -59,9 +61,12 @@ def test_fresh_due_schedule_dispatches_once_when_scope_is_clear(store, clock) ->
 
     assert (first.due, first.dispatched, first.missed) == (1, 1, 0)
     assert (second.dispatched, second.missed) == (0, 0)
-    assert store.reader().execute(
-        "SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'"
-    ).fetchone()[0] == 1
+    operation = (
+        store.reader()
+        .execute("SELECT data_json FROM operations WHERE idempotency_key LIKE 'schedule:%'")
+        .fetchone()
+    )
+    assert json.loads(operation['data_json'])['category'] == 'scheduled'
 
 
 def test_scheduled_backup_can_run_alongside_runtime_operation(store, clock) -> None:
@@ -81,9 +86,12 @@ def test_scheduled_backup_can_run_alongside_runtime_operation(store, clock) -> N
     result = scheduler.tick()
 
     assert (result.dispatched, result.missed) == (1, 0)
-    assert store.reader().execute(
-        "SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'"
-    ).fetchone()[0] == 1
+    assert (
+        store.reader()
+        .execute("SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'")
+        .fetchone()[0]
+        == 1
+    )
 
 
 def test_conflicting_due_run_is_durable_and_not_replayed(store, clock) -> None:
@@ -107,19 +115,30 @@ def test_conflicting_due_run_is_durable_and_not_replayed(store, clock) -> None:
 
     assert (first.dispatched, first.missed) == (0, 1)
     assert (second.dispatched, second.missed) == (0, 0)
-    assert store.reader().execute(
-        "SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'"
-    ).fetchone()[0] == 0
-    missed = store.reader().execute(
-        'SELECT resolution FROM missed_run_records WHERE schedule_id = ?',
-        ('scheduler_contract',),
-    ).fetchall()
+    assert (
+        store.reader()
+        .execute("SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'")
+        .fetchone()[0]
+        == 0
+    )
+    missed = (
+        store.reader()
+        .execute(
+            'SELECT resolution FROM missed_run_records WHERE schedule_id = ?',
+            ('scheduler_contract',),
+        )
+        .fetchall()
+    )
     assert [row['resolution'] for row in missed] == ['pending']
-    notification_rows = store.reader().execute(
-        'SELECT category, severity, message, requires_action, related_world_id '
-        'FROM notifications WHERE category = ?',
-        (CATEGORY_SCHEDULER,),
-    ).fetchall()
+    notification_rows = (
+        store.reader()
+        .execute(
+            'SELECT category, severity, message, requires_action, related_world_id '
+            'FROM notifications WHERE category = ?',
+            (CATEGORY_SCHEDULER,),
+        )
+        .fetchall()
+    )
     assert len(notification_rows) == 1
     assert notification_rows[0]['category'] == CATEGORY_SCHEDULER
     assert notification_rows[0]['severity'] == 'normal'
@@ -160,6 +179,9 @@ def test_schedule_disabled_or_deleted_before_dispatch_is_skipped(
     result = scheduler.tick()
 
     assert (result.due, result.dispatched, result.missed) == (1, 0, 0)
-    assert store.reader().execute(
-        "SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'"
-    ).fetchone()[0] == 0
+    assert (
+        store.reader()
+        .execute("SELECT COUNT(*) FROM operations WHERE idempotency_key LIKE 'schedule:%'")
+        .fetchone()[0]
+        == 0
+    )

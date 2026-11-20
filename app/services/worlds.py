@@ -140,9 +140,7 @@ class WorldsService:
         actor_user_id: str | None,
         idempotency_key: str,
     ) -> tuple[dict[str, Any], bool]:
-        existing = self._operations.get_by_idempotency_key(
-            OperationType.START, idempotency_key
-        )
+        existing = self._operations.get_by_idempotency_key(OperationType.START, idempotency_key)
         if existing is not None:
             return existing, True
         world = self._world(world_id)
@@ -176,9 +174,7 @@ class WorldsService:
         actor_user_id: str | None,
         idempotency_key: str,
     ) -> tuple[dict[str, Any], bool]:
-        existing = self._operations.get_by_idempotency_key(
-            OperationType.STOP, idempotency_key
-        )
+        existing = self._operations.get_by_idempotency_key(OperationType.STOP, idempotency_key)
         if existing is not None:
             return existing, True
         self._world(world_id)
@@ -200,9 +196,7 @@ class WorldsService:
         actor_user_id: str | None,
         idempotency_key: str,
     ) -> tuple[dict[str, Any], bool]:
-        existing = self._operations.get_by_idempotency_key(
-            OperationType.KILL, idempotency_key
-        )
+        existing = self._operations.get_by_idempotency_key(OperationType.KILL, idempotency_key)
         if existing is not None:
             return existing, True
         self._world(world_id)
@@ -509,9 +503,7 @@ class WorldsService:
             )
             raise
 
-    def _validate_launch(
-        self, world: dict[str, Any], context: LaunchContext
-    ) -> GateResult:
+    def _validate_launch(self, world: dict[str, Any], context: LaunchContext) -> GateResult:
         """Require both the live EULA file and audited acceptance."""
         eula_state = self._minecraft.detect_eula(context.world_dir)
         if eula_state is not EulaState.ACCEPTED:
@@ -521,11 +513,15 @@ class WorldsService:
                 detail="eula.txt not accepted",
                 eula_state=eula_state,
             )
-        audited = self._store.reader().execute(
-            "SELECT 1 FROM audit_records "
-            "WHERE world_id = ? AND event_type = 'world_eula_accepted' LIMIT 1",
-            (world["world_id"],),
-        ).fetchone()
+        audited = (
+            self._store.reader()
+            .execute(
+                "SELECT 1 FROM audit_records "
+                "WHERE world_id = ? AND event_type = 'world_eula_accepted' LIMIT 1",
+                (world["world_id"],),
+            )
+            .fetchone()
+        )
         if audited is None:
             return GateResult(
                 passed=False,
@@ -661,9 +657,7 @@ class WorldsService:
             try:
                 op_type = OperationType(claimed['op_type'])
                 if world_id is None:
-                    raise WorldLifecycleError(
-                        f'{op_type.value} operation is missing a world id'
-                    )
+                    raise WorldLifecycleError(f'{op_type.value} operation is missing a world id')
                 actor_type = ActorType(claimed['actor_type'])
                 actor_user_id = claimed['actor_user_id']
                 if op_type is OperationType.START:
@@ -725,8 +719,7 @@ class WorldsService:
                 data=data,
             ),
             initial_status=OperationStatus.QUEUED,
-            allow_world_conflict=op_type
-            in (OperationType.CONFIG_EDIT, OperationType.DELETE_WORLD),
+            allow_world_conflict=op_type in (OperationType.CONFIG_EDIT, OperationType.DELETE_WORLD),
         )
 
     def dispatch_queued_world_mutations(self) -> list[str]:
@@ -735,21 +728,25 @@ class WorldsService:
             return []
         dispatched: list[str] = []
         try:
-            rows = self._store.reader().execute(
-                """
+            rows = (
+                self._store.reader()
+                .execute(
+                    """
                 SELECT * FROM operations
                 WHERE op_type IN (?, ?, ?)
                   AND status IN (?, ?)
                 ORDER BY created_at ASC, op_id ASC
                 """,
-                (
-                    OperationType.CREATE_WORLD.value,
-                    OperationType.DELETE_WORLD.value,
-                    OperationType.CONFIG_EDIT.value,
-                    OperationStatus.QUEUED.value,
-                    OperationStatus.RUNNING.value,
-                ),
-            ).fetchall()
+                    (
+                        OperationType.CREATE_WORLD.value,
+                        OperationType.DELETE_WORLD.value,
+                        OperationType.CONFIG_EDIT.value,
+                        OperationStatus.QUEUED.value,
+                        OperationStatus.RUNNING.value,
+                    ),
+                )
+                .fetchall()
+            )
             for record in rows:
                 operation = dict(record)
                 try:
@@ -802,9 +799,7 @@ class WorldsService:
                             "Could not terminalize world mutation %s",
                             operation["op_id"],
                         )
-                    _logger.exception(
-                        "Queued world mutation failed: %s", operation["op_id"]
-                    )
+                    _logger.exception("Queued world mutation failed: %s", operation["op_id"])
         finally:
             _world_mutation_dispatch_lock.release()
         return dispatched
@@ -907,9 +902,8 @@ class WorldsService:
             ).fetchone()
             if world is None:
                 raise WorldNotFoundError(world_id)
-            if (
-                world["metadata_version"] == expected_version + 1
-                and all(world[key] == value for key, value in after.items())
+            if world["metadata_version"] == expected_version + 1 and all(
+                world[key] == value for key, value in after.items()
             ):
                 connection.commit()
                 return {
@@ -923,9 +917,7 @@ class WorldsService:
             if world["state"] != WorldState.OFF.value:
                 raise WorldConflictError("Runtime configuration requires an off world.")
             assignments = [f"{column} = ?" for column in after]
-            assignments.extend(
-                ("metadata_version = metadata_version + 1", "updated_at = ?")
-            )
+            assignments.extend(("metadata_version = metadata_version + 1", "updated_at = ?"))
             values = [*after.values(), now, world_id, expected_version]
             cursor = connection.execute(
                 f"UPDATE world_instances SET {', '.join(assignments)} "
@@ -960,18 +952,14 @@ class WorldsService:
                     continue
                 cursor = cursor / component
                 if cursor.is_symlink():
-                    raise WorldLifecycleError(
-                        "FileEdit paths cannot traverse symbolic links."
-                    )
+                    raise WorldLifecycleError("FileEdit paths cannot traverse symbolic links.")
         source = (root / source_relative).resolve()
         target = (root / target_relative).resolve()
         try:
             source.relative_to(root)
             target.relative_to(root)
         except ValueError as exc:
-            raise WorldLifecycleError(
-                "FileEdit path escapes the world directory."
-            ) from exc
+            raise WorldLifecycleError("FileEdit path escapes the world directory.") from exc
         if source == root or target == root:
             raise WorldLifecycleError("FileEdit cannot operate on the world root.")
         if not source.exists() and target.exists() and data["action"] != "copy":
@@ -1016,25 +1004,16 @@ class WorldsService:
         if not source.is_dir() or not target.is_dir():
             return False
         source_files = sorted(
-            (path.relative_to(source), path)
-            for path in source.rglob("*")
-            if path.is_file()
+            (path.relative_to(source), path) for path in source.rglob("*") if path.is_file()
         )
         target_files = sorted(
-            (path.relative_to(target), path)
-            for path in target.rglob("*")
-            if path.is_file()
+            (path.relative_to(target), path) for path in target.rglob("*") if path.is_file()
         )
-        return (
-            [relative for relative, _ in source_files]
-            == [relative for relative, _ in target_files]
-            and all(
-                left.stat().st_size == right.stat().st_size
-                and left.read_bytes() == right.read_bytes()
-                for (_, left), (_, right) in zip(
-                    source_files, target_files, strict=True
-                )
-            )
+        return [relative for relative, _ in source_files] == [
+            relative for relative, _ in target_files
+        ] and all(
+            left.stat().st_size == right.stat().st_size and left.read_bytes() == right.read_bytes()
+            for (_, left), (_, right) in zip(source_files, target_files, strict=True)
         )
 
     # ------------------------------------------------------- supervisor / boot
@@ -1062,15 +1041,19 @@ class WorldsService:
 
     def supervisor_interval_seconds(self) -> float:
         """Return the locked supervisor cadence for active vs. idle runtimes."""
-        row = self._store.reader().execute(
-            """
+        row = (
+            self._store.reader()
+            .execute(
+                """
             SELECT 1
             FROM world_instances
             WHERE deleted_at IS NULL AND state IN (?, ?, ?)
             LIMIT 1
             """,
-            (WorldState.STARTING.value, WorldState.RUNNING.value, WorldState.STOPPING.value),
-        ).fetchone()
+                (WorldState.STARTING.value, WorldState.RUNNING.value, WorldState.STOPPING.value),
+            )
+            .fetchone()
+        )
         return SUPERVISOR_POLL_RUNNING_S if row is not None else SUPERVISOR_POLL_IDLE_S
 
     def reconcile(self) -> list[str]:
@@ -1135,15 +1118,19 @@ class WorldsService:
             OperationStatus.VALIDATING.value,
             OperationStatus.RUNNING.value,
         )
-        row = self._store.reader().execute(
-            f"""
+        row = (
+            self._store.reader()
+            .execute(
+                f"""
             SELECT * FROM operations
             WHERE world_id = ? AND op_type = ? AND status IN ({','.join('?' for _ in statuses)})
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (world_id, OperationType.START.value, *statuses),
-        ).fetchone()
+                (world_id, OperationType.START.value, *statuses),
+            )
+            .fetchone()
+        )
         return dict(row) if row is not None else None
 
     def _incomplete_starts_without_sessions(self) -> list[dict[str, Any]]:
@@ -1151,8 +1138,10 @@ class WorldsService:
             OperationStatus.VALIDATING.value,
             OperationStatus.RUNNING.value,
         )
-        rows = self._store.reader().execute(
-            f"""
+        rows = (
+            self._store.reader()
+            .execute(
+                f"""
             SELECT o.* FROM operations AS o
             LEFT JOIN runtime_sessions AS rs
               ON rs.world_id = o.world_id AND rs.ended_at IS NULL
@@ -1161,8 +1150,10 @@ class WorldsService:
               AND rs.session_id IS NULL
             ORDER BY o.created_at ASC
             """,
-            (OperationType.START.value, *statuses),
-        ).fetchall()
+                (OperationType.START.value, *statuses),
+            )
+            .fetchall()
+        )
         return [dict(row) for row in rows]
 
     def _fail_interrupted_start(self, operation: dict[str, Any], world_id: str) -> None:
@@ -1174,9 +1165,7 @@ class WorldsService:
         elif state is WorldState.QUEUED:
             self._set_world_state(world_id, WorldState.OFF)
         elif state not in (WorldState.OFF, WorldState.ERROR, WorldState.CRASHED):
-            raise WorldLifecycleError(
-                f"cannot reconcile interrupted Start from {state.value}"
-            )
+            raise WorldLifecycleError(f"cannot reconcile interrupted Start from {state.value}")
         self._operations.transition(
             operation['op_id'],
             OperationStatus.FAILED,
@@ -1317,9 +1306,9 @@ class WorldsService:
 
     def _log_root(self, world_id: str) -> Path:
         try:
-            root = ConfigurationService(self._store, self._clock).resolve_effective(
-                world_id
-            )['log_root_path']
+            root = ConfigurationService(self._store, self._clock).resolve_effective(world_id)[
+                'log_root_path'
+            ]
         except KeyError:
             root = 'logs'
         return Path(str(root or 'logs'))
@@ -1380,9 +1369,7 @@ class WorldsService:
         props_path = world_dir / "server.properties"
         props: dict[str, str] = {}
         if props_path.exists():
-            props = parse_properties(
-                props_path.read_text(encoding="utf-8", errors="replace")
-            )
+            props = parse_properties(props_path.read_text(encoding="utf-8", errors="replace"))
         props["enable-rcon"] = "true"
         props["rcon.port"] = str(rcon_port)
         props["rcon.password"] = password
@@ -1518,7 +1505,17 @@ class WorldsService:
     def _open_sessions(self) -> list[dict[str, Any]]:
         rows = (
             self._store.reader()
-            .execute("SELECT * FROM runtime_sessions WHERE ended_at IS NULL")
+            .execute(
+                """
+                SELECT rs.*
+                FROM runtime_sessions AS rs
+                JOIN world_instances AS w ON w.world_id = rs.world_id
+                WHERE rs.ended_at IS NULL
+                  AND w.deleted_at IS NULL
+                  AND w.state != ?
+                """,
+                (WorldState.EULA_REQUIRED.value,),
+            )
             .fetchall()
         )
         return [dict(row) for row in rows]
@@ -1568,9 +1565,11 @@ class WorldsService:
                 """,
                 (
                     transitioned.state.value,
-                    transitioned.pre_backup_state.value
-                    if transitioned.pre_backup_state is not None
-                    else None,
+                    (
+                        transitioned.pre_backup_state.value
+                        if transitioned.pre_backup_state is not None
+                        else None
+                    ),
                     int(self._clock.now()),
                     world_id,
                 ),

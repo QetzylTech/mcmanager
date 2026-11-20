@@ -15,6 +15,7 @@ from app.domain.value_objects import (
     MissedRunResolution,
     OperationStatus,
     OperationType,
+    TriggerType,
 )
 from app.ports.clock import Clock
 from app.ports.persistence import PersistencePort
@@ -123,7 +124,15 @@ class SchedulerService:
                         actor_type=ActorType.SYSTEM,
                         world_id=current['world_id'],
                         idempotency_key=f"schedule:{current['schedule_id']}:{expected}",
-                        data={'schedule_id': current['schedule_id'], 'expected_run_at': expected},
+                        data={
+                            'schedule_id': current['schedule_id'],
+                            'expected_run_at': expected,
+                            **(
+                                {'category': TriggerType.SCHEDULED.value}
+                                if op_type is OperationType.BACKUP
+                                else {}
+                            ),
+                        },
                     ),
                     initial_status=self._queued_status(),
                 )
@@ -133,14 +142,12 @@ class SchedulerService:
         return SchedulerTickResult(due=due, dispatched=dispatched, missed=missed)
 
     def _enabled_schedules(self) -> list[dict[str, Any]]:
-        rows = self._store.reader().execute(
-            """
+        rows = self._store.reader().execute("""
             SELECT *
             FROM schedules
             WHERE enabled = 1 AND deleted_at IS NULL
             ORDER BY created_at ASC
-            """
-        ).fetchall()
+            """).fetchall()
         return [dict(row) for row in rows]
 
     def _expected_run_at(self, schedule: dict[str, Any], now: int) -> int | None:
@@ -158,7 +165,9 @@ class SchedulerService:
         if kind in ('daily', 'weekly', 'monthly'):
             target_hour, target_minute = self._parse_time_of_day(schedule['time_of_day'])
             now_dt = datetime.fromtimestamp(now, tz=UTC)
-            candidate = now_dt.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+            candidate = now_dt.replace(
+                hour=target_hour, minute=target_minute, second=0, microsecond=0
+            )
             if int(candidate.timestamp()) > now:
                 candidate = candidate - timedelta(days=1)
             expected = int(candidate.timestamp())
@@ -221,32 +230,44 @@ class SchedulerService:
         return 1
 
     def _schedule_for_dispatch(self, schedule_id: str) -> dict[str, Any] | None:
-        row = self._store.reader().execute(
-            """
+        row = (
+            self._store.reader()
+            .execute(
+                """
             SELECT * FROM schedules
             WHERE schedule_id = ? AND enabled = 1 AND deleted_at IS NULL
             """,
-            (schedule_id,),
-        ).fetchone()
+                (schedule_id,),
+            )
+            .fetchone()
+        )
         return dict(row) if row is not None else None
 
     def _has_run_operation(self, schedule_id: str, expected: int) -> bool:
-        row = self._store.reader().execute(
-            'SELECT 1 FROM operations WHERE idempotency_key = ? LIMIT 1',
-            (f'schedule:{schedule_id}:{expected}',),
-        ).fetchone()
+        row = (
+            self._store.reader()
+            .execute(
+                'SELECT 1 FROM operations WHERE idempotency_key = ? LIMIT 1',
+                (f'schedule:{schedule_id}:{expected}',),
+            )
+            .fetchone()
+        )
         return row is not None
 
     def _has_recorded(self, schedule_id: str, expected: int) -> bool:
-        row = self._store.reader().execute(
-            """
+        row = (
+            self._store.reader()
+            .execute(
+                """
             SELECT 1
             FROM missed_run_records
             WHERE schedule_id = ? AND expected_run_at = ?
             LIMIT 1
             """,
-            (schedule_id, expected),
-        ).fetchone()
+                (schedule_id, expected),
+            )
+            .fetchone()
+        )
         return row is not None
 
     def _has_schedule_conflict(self, world_id: str | None) -> bool:
@@ -255,8 +276,10 @@ class SchedulerService:
         if world_id is not None:
             params.append(world_id)
         params.extend((*_CONFLICTING_SCHEDULE_OPERATION_TYPES, *_IN_FLIGHT_STATUSES))
-        row = self._store.reader().execute(
-            f"""
+        row = (
+            self._store.reader()
+            .execute(
+                f"""
             SELECT 1
             FROM operations
             WHERE {scope_clause}
@@ -264,8 +287,10 @@ class SchedulerService:
               AND status IN ({','.join('?' for _ in _IN_FLIGHT_STATUSES)})
             LIMIT 1
             """,
-            params,
-        ).fetchone()
+                params,
+            )
+            .fetchone()
+        )
         return row is not None
 
     def _operation_type_for(self, schedule_type: str) -> OperationType | None:

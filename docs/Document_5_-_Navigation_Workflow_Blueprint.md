@@ -34,7 +34,7 @@ World-scoped pages reflect the selected world. Manager-scoped pages must not dep
 
 **User Management** — device list (IP + name); user list (last accessed, access/action history); blacklist/whitelist; Client Rulesets; user passwords/usernames; privileges (**Client/Admin/Superadmin**). Superadmin-only: grant individual `permissions` to a Client/Admin without full promotion (Doc 6 delegation invariant).
 
-**Maintenance & Retention** (global defaults; per-world overrides unless local exists) — backup retention; stale-world cleanup (from restores); restore-artifact cleanup; old-log cleanup; manual stale-file cleanup dry/wet; scheduled cleanup; missed-job handling.
+**Maintenance & Retention** (global defaults; per-world overrides unless local exists) — backup retention; policy-gated stale-backup tombstoning and delayed purge; expired rotated-log cleanup; preview/wet cleanup; scheduled cleanup; missed-job handling. World directories and world records are never cleanup candidates.
 
 **Instructions & Documentation** — dev notes + server manual; admin manual. Shipped runtime content is curated Markdown under `app/docs/`, exposed through an authenticated listing/read API. Root `docs/` remains a repository planning/documentation set and is not a runtime source. Until a trusted Markdown renderer exists, the read contract returns Markdown source (not HTML); clients must display it as text and must not execute embedded HTML. A future shared-style renderer (Doc 4) may provide an auto-generated clickable side ToC per page; in-file ToC is suppressed in desktop mode (avoid duplication). Page contract only — no interactive rendering logic.
 

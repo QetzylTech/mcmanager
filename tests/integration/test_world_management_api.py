@@ -23,9 +23,7 @@ from tests.integration._gate3_support import seed_world
 
 @pytest.fixture
 def world_api_app(migrations_dir, clock, monkeypatch):
-    monkeypatch.setattr(
-        bootstrap, "WorldsService", partial(WorldsService, minecraft=object())
-    )
+    monkeypatch.setattr(bootstrap, "WorldsService", partial(WorldsService, minecraft=object()))
     run_id = uuid4().hex
     test_dir = Path(__file__).resolve().parent
     database_path = test_dir / f".world-api-{run_id}.db"
@@ -86,6 +84,91 @@ def _elevate(app, client):
         (int(container.clock.now()), session.session_id_hash),
     )
     connection.commit()
+
+
+def _server_properties_client(app, world_id: str):
+    client, csrf = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    seed_world(container.store, world_id=world_id)
+    world_dir = app.extensions["world_api_test_root"] / f"{world_id}-properties"
+    world_dir.mkdir(parents=True)
+    (world_dir / "server.properties").write_text("max-players=12\n", encoding="utf-8")
+    container.store.writer().execute(
+        """
+        UPDATE world_instances
+        SET addressing_strategy = 'path', addressing_value = ?
+        WHERE world_id = ?
+        """,
+        (str(world_dir), world_id),
+    )
+    container.store.writer().commit()
+    return client, {"X-CSRF-Token": csrf}, world_dir
+
+
+def test_server_properties_api_updates_versions_and_replays_idempotently(world_api_app):
+    client, headers, world_dir = _server_properties_client(world_api_app, "server-properties-world")
+    path = "/api/worlds/server-properties-world/server-properties"
+
+    before = client.get(path)
+    assert before.status_code == 200
+    assert before.json["data"]["properties"] == {"max-players": "12"}
+    assert before.json["data"]["version"] == 0
+
+    update_headers = {**headers, "Idempotency-Key": "server-properties-edit"}
+    update = client.post(
+        path,
+        json={"version": 0, "properties": {"max-players": 24}},
+        headers=update_headers,
+    )
+    assert update.status_code == 200
+    assert update.json["data"]["properties"]["max-players"] == "24"
+    assert update.json["data"]["version"] == 1
+    assert update.json["data"]["operation"]["status"] == "Completed"
+    assert update.json["meta"]["idempotency_key"] == "server-properties-edit"
+    assert (world_dir / "server.properties").read_text(encoding="utf-8") == ("max-players=24\n")
+
+    replay = client.post(
+        path,
+        json={"version": 0, "properties": {"max-players": 30}},
+        headers=update_headers,
+    )
+    assert replay.status_code == 200
+    assert replay.json["data"]["operation"]["op_id"] == update.json["meta"]["op_id"]
+    assert replay.json["data"]["properties"]["max-players"] == "24"
+    assert (world_dir / "server.properties").read_text(encoding="utf-8") == ("max-players=24\n")
+
+    stale = client.post(
+        path,
+        json={"version": 0, "properties": {"max-players": 30}},
+        headers={**headers, "Idempotency-Key": "stale-server-properties-edit"},
+    )
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+
+@pytest.mark.parametrize(
+    ("properties", "expected_code"),
+    [
+        ({"server-port": 25566}, "VALIDATION_ERROR"),
+        ({"unknown-property": "value"}, "CONFIG_INVALID_KEY"),
+        ({"max-players": "many"}, "CONFIG_INVALID_VALUE"),
+        ({}, "VALIDATION_ERROR"),
+    ],
+)
+def test_server_properties_api_rejects_managed_or_invalid_edits(
+    world_api_app, properties, expected_code
+):
+    client, headers, _world_dir = _server_properties_client(
+        world_api_app, "invalid-server-properties-world"
+    )
+    response = client.post(
+        "/api/worlds/invalid-server-properties-world/server-properties",
+        json={"version": 0, "properties": properties},
+        headers={**headers, "Idempotency-Key": "invalid-server-properties-edit"},
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"]["code"] == expected_code
 
 
 def _add_regular_user(container):
@@ -160,10 +243,14 @@ def test_admin_can_cancel_allowed_operation_once(
     assert payload["ok"] is True
     assert payload["meta"]["op_id"] == operation["op_id"]
     assert payload["data"]["operation"]["status"] == OperationStatus.CANCELLED.value
-    audit_count = container.store.reader().execute(
-        "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-        (operation["op_id"],),
-    ).fetchone()[0]
+    audit_count = (
+        container.store.reader()
+        .execute(
+            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+            (operation["op_id"],),
+        )
+        .fetchone()[0]
+    )
     assert audit_count == 1
 
     repeated = client.post(path, headers=headers)
@@ -171,10 +258,15 @@ def test_admin_can_cancel_allowed_operation_once(
     assert repeated.status_code == 409
     assert repeated.get_json()["error"]["code"] == "OP_NOT_CANCELLABLE"
     assert container.operations.get(operation["op_id"])["status"] == OperationStatus.CANCELLED.value
-    assert container.store.reader().execute(
-        "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-        (operation["op_id"],),
-    ).fetchone()[0] == 1
+    assert (
+        container.store.reader()
+        .execute(
+            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+            (operation["op_id"],),
+        )
+        .fetchone()[0]
+        == 1
+    )
 
 
 @pytest.mark.parametrize(
@@ -203,10 +295,15 @@ def test_cancel_rejects_disallowed_type_or_status(
     assert response.status_code == 409
     assert response.get_json()["error"]["code"] == "OP_NOT_CANCELLABLE"
     assert container.operations.get(operation["op_id"])["status"] == status.value
-    assert container.store.reader().execute(
-        "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
-        (operation["op_id"],),
-    ).fetchone()[0] == 0
+    assert (
+        container.store.reader()
+        .execute(
+            "SELECT COUNT(*) FROM audit_records WHERE operation_id = ?",
+            (operation["op_id"],),
+        )
+        .fetchone()[0]
+        == 0
+    )
 
 
 def test_cancel_requires_authentication_and_admin_role(world_api_app):
@@ -437,9 +534,12 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     container.worlds.dispatch_queued_operations()
     runtime_operation = container.operations.get(runtime_op_id)
     assert runtime_operation["status"] == "Completed"
-    assert client.get(f"/api/worlds/{created_world_id}/runtime-config").get_json()[
-        "data"
-    ]["runtime_config"]["port"] == 25568
+    assert (
+        client.get(f"/api/worlds/{created_world_id}/runtime-config").get_json()["data"][
+            "runtime_config"
+        ]["port"]
+        == 25568
+    )
 
     made_directory = client.post(
         "/api/worlds/world-api/files/mkdir",
@@ -449,16 +549,17 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     assert made_directory.status_code == 201
     uploaded = client.post(
         "/api/worlds/world-api/files",
-        data={"path": "config/server.properties", "file": (io.BytesIO(b"motd=test\n"), "upload.txt")},
+        data={
+            "path": "config/server.properties",
+            "file": (io.BytesIO(b"motd=test\n"), "upload.txt"),
+        },
         headers=headers,
     )
     assert uploaded.status_code == 201
     listing = client.get("/api/worlds/world-api/files?path=config")
     assert listing.status_code == 200
     assert listing.get_json()["data"]["files"][0]["name"] == "server.properties"
-    download = client.get(
-        "/api/worlds/world-api/files/download?path=config/server.properties"
-    )
+    download = client.get("/api/worlds/world-api/files/download?path=config/server.properties")
     assert download.status_code == 200
     assert download.data == b"motd=test\n"
     download.close()
@@ -535,9 +636,7 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     )
     assert deleted_file.status_code == 200
 
-    preview = client.post(
-        "/api/worlds/world-api/delete-preview", headers=headers
-    )
+    preview = client.post("/api/worlds/world-api/delete-preview", headers=headers)
     assert preview.status_code == 200
     container.store.writer().execute(
         "UPDATE client_sessions SET step_up_confirmed_at = ? WHERE session_id = ?",
@@ -573,12 +672,17 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
         )
         assert delete_replay.status_code == 200
         assert delete_replay.get_json()["data"]["operation"]["op_id"] == delete_op_id
-        assert container.store.reader().execute(
-            "SELECT deleted_at FROM world_instances WHERE world_id = 'world-api'"
-        ).fetchone()["deleted_at"] is None
+        assert (
+            container.store.reader()
+            .execute("SELECT deleted_at FROM world_instances WHERE world_id = 'world-api'")
+            .fetchone()["deleted_at"]
+            is None
+        )
     container.worlds.dispatch_queued_operations()
-    row = container.store.reader().execute(
-        "SELECT deleted_at FROM world_instances WHERE world_id = 'world-api'"
-    ).fetchone()
+    row = (
+        container.store.reader()
+        .execute("SELECT deleted_at FROM world_instances WHERE world_id = 'world-api'")
+        .fetchone()
+    )
     assert row["deleted_at"] is not None
     assert container.operations.get(delete_op_id)["status"] == "Completed"

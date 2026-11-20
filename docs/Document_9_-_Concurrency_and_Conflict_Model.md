@@ -18,7 +18,7 @@ Four lock classes. None are literal DB row locks — SQLite's own locking is a m
 - While tripped: Start and Backup blocked for *every* world — the one world-agnostic lock, because disk space is a shared host resource. Cleanup is *triggered* by the condition, never blocked by it; emergency stop always allowed.
 
 **1.3 Cleanup scope lock (per-scope, blocking, single-flight)**
-- Scope: `backups` or `stale_worlds` (or a world's cleanup if world-scoped). A second Cleanup against the same scope while one runs = queued single-flight (§6) — waits and auto-dispatches when the in-flight reaches terminal. One Cleanup per scope at a time; does not reject additional requests.
+- Scope: `backups`, `stale_backups`, or `logs` (or a world's cleanup if world-scoped). A second Cleanup against the same scope while one runs = queued single-flight (§6) — waits and auto-dispatches when the in-flight reaches terminal. One Cleanup per scope at a time; does not reject additional requests. Stale-backup tombstoning additionally skips any world with in-flight Backup, Cleanup, Restore, or Sync work; purge protects restore/sync-referenced artifacts and honors the grace period.
 
 **1.4 Config version lock (per-row, optimistic, non-blocking)**
 - Scope: one row in any multi-editor-reachable config table. **Not** a blocking lock — nobody waits. Detects simultaneous edits and rejects instead of silently overwriting. Full treatment §4.

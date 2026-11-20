@@ -123,8 +123,7 @@ Objective: Build the relational database core, 3-tier settings engine, Argon2id
 security module, and optimism-locked domain entities.
 
 WP 2.1: Relational Schema & SQLite Engine
-  - File Scope: app/infrastructure/sqlite/ (migrations, connection.py,
-    connection.py)
+  - File Scope: app/migrations/ and app/infrastructure/sqlite/connection.py
   - Deliverables: 28-table SQLite DDL with ON DELETE RESTRICT constraints; migration
     runner; single-writer WAL pool with PRAGMA busy_timeout = 5000.
   - Acceptance Criteria: PRAGMA foreign_key_check passes clean on startup; zero 
@@ -216,9 +215,9 @@ WP 4.3: Retention Sweeper & Physical Deletion Floor
 
 WP 4.4: Offsite Sync Engine
   - File Scope: app/services/sync.py
-  - Deliverables: Async offsite sync worker; exponential backoff retries 
-    (three total attempts; waits 30s / 60s); global concurrency and daily transfer
-    caps; sync_attempts timeline.
+  - Deliverables: Async offsite sync worker; transient-failure retries with
+    three total attempts and waits of 30s then 60s (no third wait); global
+    two-transfer concurrency and daily transfer caps; sync_attempts timeline.
   - Acceptance Criteria: Failed network syncs retry according to backoff policy 
     without blocking local backup completion; daily cap halts further syncs when hit.
 
@@ -231,7 +230,9 @@ hub, and desktop-grade persistent UI shell.
 WP 5.1: HTTP API Routes & Security Middleware
   - File Scope: app/web/api/, app/web/middleware.py
   - Deliverables: RESTful Flask blueprints (/api/worlds, /api/operations, 
-    /api/backups, /api/settings); CSRF validator; security headers middleware.
+    /api/backups, /api/settings); authenticated documentation API serving
+    curated runtime content from app/docs/ (repository docs/ is planning
+    material, not runtime content); CSRF validator; security headers middleware.
   - Acceptance Criteria: Invalid CSRF returns 403 CSRF_INVALID; route handlers 
     contain zero domain logic (thin delegation to services).
 

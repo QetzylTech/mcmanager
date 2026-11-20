@@ -20,9 +20,11 @@ _EXPECTED_TABLE_COUNT = 28
 
 
 def test_fresh_migration_creates_28_tables(store: SqliteStore) -> None:
-    rows = store.reader().execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
+    rows = (
+        store.reader()
+        .execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .fetchall()
+    )
     assert len(rows) == _EXPECTED_TABLE_COUNT
 
 
@@ -32,9 +34,11 @@ def test_foreign_key_check_passes_after_migration(store: SqliteStore) -> None:
 
 
 def test_all_migrated_foreign_keys_restrict_deletes(store: SqliteStore) -> None:
-    tables = store.reader().execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    ).fetchall()
+    tables = (
+        store.reader()
+        .execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .fetchall()
+    )
     foreign_keys = [
         (table['name'], key['table'], key['on_delete'].upper())
         for table in tables
@@ -71,13 +75,13 @@ def test_migrations_are_idempotent(store: SqliteStore, migrations_dir) -> None:
     """Re-running the runner must not re-apply or fail."""
     run_migrations(store, migrations_dir)
     versions = store.reader().execute('SELECT version FROM schema_migrations').fetchall()
-    assert [row['version'] for row in versions] == [1, 2, 3, 4]
+    assert [row['version'] for row in versions] == [1, 2, 3, 4, 5]
 
 
 def test_failed_migration_rolls_back_ddl_and_version_record(
     store: SqliteStore, tmp_path: Path
 ) -> None:
-    migration = tmp_path / '005_failed_change.sql'
+    migration = tmp_path / '006_failed_change.sql'
     migration.write_text(
         'CREATE TABLE rollback_probe (value TEXT);'
         "INSERT INTO rollback_probe VALUES ('uncommitted');"
@@ -85,17 +89,19 @@ def test_failed_migration_rolls_back_ddl_and_version_record(
         encoding='utf-8',
     )
 
-    with pytest.raises(PersistenceError, match='migration 5'):
+    with pytest.raises(PersistenceError, match='migration 6'):
         run_migrations(store, tmp_path)
 
-    table = store.reader().execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='rollback_probe'"
-    ).fetchone()
-    versions = store.reader().execute(
-        'SELECT version FROM schema_migrations ORDER BY version'
-    ).fetchall()
+    table = (
+        store.reader()
+        .execute("SELECT name FROM sqlite_master WHERE type='table' AND name='rollback_probe'")
+        .fetchone()
+    )
+    versions = (
+        store.reader().execute('SELECT version FROM schema_migrations ORDER BY version').fetchall()
+    )
     assert table is None
-    assert [row['version'] for row in versions] == [1, 2, 3, 4]
+    assert [row['version'] for row in versions] == [1, 2, 3, 4, 5]
 
 
 def test_sqlite_operational_pragmas_are_applied_per_connection(store: SqliteStore) -> None:
@@ -125,9 +131,7 @@ def test_reader_remains_available_during_writer_transaction(store: SqliteStore) 
     assert [row['value'] for row in rows] == ['committed']
 
 
-def test_busy_writer_waits_for_lock_then_succeeds(
-    store: SqliteStore, database_path: str
-) -> None:
+def test_busy_writer_waits_for_lock_then_succeeds(store: SqliteStore, database_path: str) -> None:
     writer = store.writer()
     writer.execute('CREATE TABLE busy_probe (value TEXT)')
     writer.commit()
@@ -188,9 +192,11 @@ def test_parallel_writers_do_not_leak_database_locked_errors(
 
 
 def test_audit_records_triggers_exist(store: SqliteStore) -> None:
-    triggers = store.reader().execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='audit_records'"
-    ).fetchall()
+    triggers = (
+        store.reader()
+        .execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='audit_records'")
+        .fetchall()
+    )
     names = {row['name'] for row in triggers}
     assert 'trg_audit_records_no_update' in names
     assert 'trg_audit_records_no_delete' in names
@@ -221,3 +227,27 @@ def test_invalid_fk_insert_rejected(store: SqliteStore) -> None:
             ') VALUES (?, ?, ?, ?, 0, 1, 1)',
             ('u_bad', 'ghost', 'sec_nonexistent', 'active'),
         )
+
+
+def test_migrations_002_through_004_add_documented_fields(store: SqliteStore) -> None:
+    runtime_columns = {
+        row['name']: row for row in store.reader().execute('PRAGMA table_info(runtime_sessions)')
+    }
+    java_columns = {
+        row['name']: row for row in store.reader().execute('PRAGMA table_info(java_runtimes)')
+    }
+    properties_columns = {
+        row['name']: row
+        for row in store.reader().execute('PRAGMA table_info(server_properties_versions)')
+    }
+
+    assert runtime_columns['rcon_port']['type'] == 'INTEGER'
+    assert runtime_columns['rcon_port']['notnull'] == 0
+    assert java_columns['version']['type'] == 'INTEGER'
+    assert java_columns['version']['notnull'] == 1
+    assert java_columns['version']['dflt_value'] == '1'
+    assert properties_columns['world_id']['pk'] == 1
+    assert properties_columns['version']['notnull'] == 1
+    assert properties_columns['version']['dflt_value'] == '1'
+    assert properties_columns['updated_at']['notnull'] == 1
+    assert properties_columns['updated_by']['notnull'] == 1

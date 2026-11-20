@@ -76,9 +76,12 @@ def test_progress_is_cached_and_published_without_operation_writes(store, clock)
         assert events[3].data['status'] == OperationStatus.VALIDATING.value
 
     operations.transition(op_id, OperationStatus.RUNNING)
-    assert store.reader().execute(
-        'SELECT status FROM operations WHERE op_id = ?', (op_id,)
-    ).fetchone()['status'] == OperationStatus.RUNNING.value
+    assert (
+        store.reader()
+        .execute('SELECT status FROM operations WHERE op_id = ?', (op_id,))
+        .fetchone()['status']
+        == OperationStatus.RUNNING.value
+    )
 
 
 def test_idempotency_replay_returns_original_operation_without_extra_rows(store, clock) -> None:
@@ -100,10 +103,15 @@ def test_idempotency_replay_returns_original_operation_without_extra_rows(store,
     )
 
     assert replay['op_id'] == first['op_id']
-    assert store.reader().execute(
-        'SELECT COUNT(*) FROM operations WHERE idempotency_key = ?',
-        ('same-backup-trigger',),
-    ).fetchone()[0] == 1
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) FROM operations WHERE idempotency_key = ?',
+            ('same-backup-trigger',),
+        )
+        .fetchone()[0]
+        == 1
+    )
 
 
 def test_queued_operation_can_be_claimed_only_once(store, clock) -> None:
@@ -177,9 +185,7 @@ def test_doc9_world_conflict_policy(store, clock, requested, active, expected) -
     world_id = seed_world(store)
     operations = OperationService(store, clock)
     active_status = (
-        OperationStatus.QUEUED
-        if active is OperationType.DELETE_WORLD
-        else OperationStatus.RUNNING
+        OperationStatus.QUEUED if active is OperationType.DELETE_WORLD else OperationStatus.RUNNING
     )
     active_row = _create(
         operations,
@@ -208,10 +214,14 @@ def test_doc9_world_conflict_policy(store, clock, requested, active, expected) -
         assert result['op_id'] != active_row['op_id']
         assert result['status'] == OperationStatus.QUEUED.value
     elif expected == 'preempt':
-        cancelled = store.reader().execute(
-            'SELECT status, error_code FROM operations WHERE op_id = ?',
-            (active_row['op_id'],),
-        ).fetchone()
+        cancelled = (
+            store.reader()
+            .execute(
+                'SELECT status, error_code FROM operations WHERE op_id = ?',
+                (active_row['op_id'],),
+            )
+            .fetchone()
+        )
         assert cancelled['status'] == OperationStatus.CANCELLED.value
         assert cancelled['error_code'] == 'superseded_by_kill'
         assert result['status'] == OperationStatus.QUEUED.value
@@ -236,15 +246,20 @@ def test_restore_preempts_queued_delete_and_audits_cancelled_operation_once(stor
         status=OperationStatus.QUEUED,
     )
 
-    row = store.reader().execute(
-        'SELECT status, error_code FROM operations WHERE op_id = ?', (delete['op_id'],)
-    ).fetchone()
+    row = (
+        store.reader()
+        .execute('SELECT status, error_code FROM operations WHERE op_id = ?', (delete['op_id'],))
+        .fetchone()
+    )
     assert row['status'] == OperationStatus.CANCELLED.value
     assert row['error_code'] == 'superseded_by_restore'
     assert restore['status'] == OperationStatus.QUEUED.value
-    assert store.reader().execute(
-        'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?', (delete['op_id'],)
-    ).fetchone()[0] == 1
+    assert (
+        store.reader()
+        .execute('SELECT COUNT(*) FROM audit_records WHERE operation_id = ?', (delete['op_id'],))
+        .fetchone()[0]
+        == 1
+    )
 
 
 @pytest.mark.parametrize('terminal', list(OperationStatus)[-4:])
@@ -260,17 +275,27 @@ def test_terminal_transition_audits_once_and_intermediate_transition_does_not(
         status=OperationStatus.CREATED,
     )
     operations.transition(operation['op_id'], OperationStatus.VALIDATING)
-    assert store.reader().execute(
-        'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
-        (operation['op_id'],),
-    ).fetchone()[0] == 0
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
+            (operation['op_id'],),
+        )
+        .fetchone()[0]
+        == 0
+    )
 
     operations.transition(operation['op_id'], terminal)
 
-    assert store.reader().execute(
-        'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
-        (operation['op_id'],),
-    ).fetchone()[0] == 1
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) FROM audit_records WHERE operation_id = ?',
+            (operation['op_id'],),
+        )
+        .fetchone()[0]
+        == 1
+    )
 
 
 def test_sync_is_independent_but_queued_single_flight_per_artifact(store, clock) -> None:
@@ -323,19 +348,23 @@ def test_cleanup_is_queued_per_scope_including_manager_scoped_runs(store, clock)
         operations,
         OperationType.CLEANUP,
         world_id=None,
-        data={'scope': 'stale_worlds'},
+        data={'scope': 'stale_backups'},
     )
 
     assert duplicate_scope['op_id'] != running['op_id']
     assert duplicate_scope['status'] == OperationStatus.QUEUED.value
     assert independent_scope['status'] == OperationStatus.RUNNING.value
-    rows = store.reader().execute(
-        'SELECT op_id, status, data_json FROM operations WHERE op_type = ?',
-        (OperationType.CLEANUP.value,),
-    ).fetchall()
+    rows = (
+        store.reader()
+        .execute(
+            'SELECT op_id, status, data_json FROM operations WHERE op_type = ?',
+            (OperationType.CLEANUP.value,),
+        )
+        .fetchall()
+    )
     assert len(rows) == 3
     assert [json.loads(row['data_json'])['scope'] for row in rows] == [
         'backups',
         'backups',
-        'stale_worlds',
+        'stale_backups',
     ]

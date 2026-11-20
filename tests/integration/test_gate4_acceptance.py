@@ -167,10 +167,14 @@ def test_backup_artifact_is_atomic_zip_with_verified_sha256(store, clock, tmp_pa
     with zipfile.ZipFile(artifact) as archive:
         assert archive.testzip() is None
         assert archive.namelist() == ['level.dat']
-    row = store.reader().execute(
-        'SELECT storage_path, checksum, suspect FROM backup_artifacts WHERE artifact_id = ?',
-        (result.artifact_id,),
-    ).fetchone()
+    row = (
+        store.reader()
+        .execute(
+            'SELECT storage_path, checksum, suspect FROM backup_artifacts WHERE artifact_id = ?',
+            (result.artifact_id,),
+        )
+        .fetchone()
+    )
     assert dict(row) == {
         'storage_path': str(artifact),
         'checksum': result.checksum,
@@ -211,10 +215,15 @@ def test_backup_checksum_failure_cleans_published_and_staged_files(
 
     assert not list(backup_dir.glob('*.part'))
     assert not list(backup_dir.glob('*.zip'))
-    assert store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
-        (operation['op_id'],),
-    ).fetchone()['n'] == 0
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
+            (operation['op_id'],),
+        )
+        .fetchone()['n']
+        == 0
+    )
 
 
 def test_running_backup_always_sends_save_on_after_compression_failure(
@@ -245,10 +254,15 @@ def test_running_backup_always_sends_save_on_after_compression_failure(
 
     assert coordinator.calls == ['save-off', 'save-all', 'save-on']
     assert not list(backup_dir.glob('*.part'))
-    assert store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
-        (operation['op_id'],),
-    ).fetchone()['n'] == 0
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
+            (operation['op_id'],),
+        )
+        .fetchone()['n']
+        == 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -298,9 +312,7 @@ def test_backup_storage_guard_uses_contextual_reserve_not_flat_percentage(
     assert disk_usage_calls, 'backup must consult available storage before capture'
 
 
-def test_running_backup_rejects_stale_level_dat_mtime_and_restores_save_on(
-    store, clock, tmp_path
-):
+def test_running_backup_rejects_stale_level_dat_mtime_and_restores_save_on(store, clock, tmp_path):
     world_id = _seed_world(store)
     operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
     world_dir = tmp_path / 'world'
@@ -324,10 +336,15 @@ def test_running_backup_rejects_stale_level_dat_mtime_and_restores_save_on(
 
     assert coordinator.calls == ['save-off', 'save-all', 'save-on']
     assert not list(backup_dir.glob('*.zip'))
-    assert store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
-        (operation['op_id'],),
-    ).fetchone()['n'] == 0
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
+            (operation['op_id'],),
+        )
+        .fetchone()['n']
+        == 0
+    )
 
 
 def test_restore_requires_world_off_before_prebackup_or_any_restore_side_effect(
@@ -337,13 +354,11 @@ def test_restore_requires_world_off_before_prebackup_or_any_restore_side_effect(
     source_dir = tmp_path / 'source'
     source_dir.mkdir()
     (source_dir / 'level.dat').write_bytes(b'replacement')
-    artifact_id = _seed_source_artifact(
-        store, clock, world_id, source_dir, tmp_path / 'backups'
-    )
+    artifact_id = _seed_source_artifact(store, clock, world_id, source_dir, tmp_path / 'backups')
     restore_operation = _create_operation(store, clock, world_id, OperationType.RESTORE)
-    before_artifacts = store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts'
-    ).fetchone()['n']
+    before_artifacts = (
+        store.reader().execute('SELECT COUNT(*) AS n FROM backup_artifacts').fetchone()['n']
+    )
     restore = RestoreService(
         store, clock, OperationService(store, clock), _backup_service(store, clock)
     )
@@ -360,12 +375,11 @@ def test_restore_requires_world_off_before_prebackup_or_any_restore_side_effect(
             was_running=False,
         )
 
-    assert store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts'
-    ).fetchone()['n'] == before_artifacts
-    assert store.reader().execute(
-        'SELECT COUNT(*) AS n FROM restore_history'
-    ).fetchone()['n'] == 0
+    assert (
+        store.reader().execute('SELECT COUNT(*) AS n FROM backup_artifacts').fetchone()['n']
+        == before_artifacts
+    )
+    assert store.reader().execute('SELECT COUNT(*) AS n FROM restore_history').fetchone()['n'] == 0
 
 
 def test_restore_always_registers_mandatory_pre_restore_artifact(store, clock, tmp_path):
@@ -393,22 +407,29 @@ def test_restore_always_registers_mandatory_pre_restore_artifact(store, clock, t
         was_running=False,
     )
 
-    history = store.reader().execute(
-        'SELECT pre_restore_artifact_id, outcome FROM restore_history WHERE restore_id = ?',
-        (result.restore_id,),
-    ).fetchone()
-    pre_restore = store.reader().execute(
-        'SELECT category FROM backup_artifacts WHERE artifact_id = ?',
-        (history['pre_restore_artifact_id'],),
-    ).fetchone()
+    history = (
+        store.reader()
+        .execute(
+            'SELECT pre_restore_artifact_id, outcome FROM restore_history WHERE restore_id = ?',
+            (result.restore_id,),
+        )
+        .fetchone()
+    )
+    pre_restore = (
+        store.reader()
+        .execute(
+            'SELECT category FROM backup_artifacts WHERE artifact_id = ?',
+            (history['pre_restore_artifact_id'],),
+        )
+        .fetchone()
+    )
     assert history['outcome'] == 'success'
     assert pre_restore['category'] == TriggerType.PRE_RESTORE.value
     assert (world_dir / 'level.dat').read_bytes() == b'replacement'
+    assert not list(tmp_path.glob('world.restore-archive-*'))
 
 
-def test_failed_restore_verification_rolls_back_and_marks_source_suspect(
-    store, clock, tmp_path
-):
+def test_failed_restore_verification_rolls_back_and_marks_source_suspect(store, clock, tmp_path):
     world_id = _seed_world(store)
     world_dir = tmp_path / 'world'
     world_dir.mkdir()
@@ -441,9 +462,11 @@ def test_failed_restore_verification_rolls_back_and_marks_source_suspect(
         was_running=True,
     )
 
-    source = store.reader().execute(
-        'SELECT suspect FROM backup_artifacts WHERE artifact_id = ?', (artifact_id,)
-    ).fetchone()
+    source = (
+        store.reader()
+        .execute('SELECT suspect FROM backup_artifacts WHERE artifact_id = ?', (artifact_id,))
+        .fetchone()
+    )
     assert result.outcome == 'reverted'
     assert (world_dir / 'level.dat').read_bytes() == b'original'
     assert source['suspect'] == 1
@@ -461,19 +484,15 @@ def test_cleanup_rejects_age_and_keep_values_below_safety_floors(store, clock):
     assert CLEANUP_BLAST_RADIUS_CAP == 500
 
 
-def test_cleanup_dry_run_is_an_operation_preview_without_deleting_artifacts(
-    store, clock, tmp_path
-):
+def test_cleanup_dry_run_is_an_operation_preview_without_deleting_artifacts(store, clock, tmp_path):
     evaluator = getattr(CleanupService, 'evaluate_and_execute_cleanup', None)
-    assert callable(evaluator), (
-        'Gate 4 requires dry-run and wet cleanup to be represented by Operations'
-    )
+    assert callable(
+        evaluator
+    ), 'Gate 4 requires dry-run and wet cleanup to be represented by Operations'
 
     world_id = _seed_world(store)
     backup_operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
-    OperationService(store, clock).transition(
-        backup_operation['op_id'], OperationStatus.COMPLETED
-    )
+    OperationService(store, clock).transition(backup_operation['op_id'], OperationStatus.COMPLETED)
     connection = store.writer()
     paths = []
     for index in range(4):
@@ -509,10 +528,14 @@ def test_cleanup_dry_run_is_an_operation_preview_without_deleting_artifacts(
 
     assert response['mode'] == 'dry_run'
     assert response['target_count'] == 1
-    cleanup_row = store.reader().execute(
-        'SELECT op_type, status FROM operations WHERE op_id = ?',
-        (cleanup_operation['op_id'],),
-    ).fetchone()
+    cleanup_row = (
+        store.reader()
+        .execute(
+            'SELECT op_type, status FROM operations WHERE op_id = ?',
+            (cleanup_operation['op_id'],),
+        )
+        .fetchone()
+    )
     assert cleanup_row['op_type'] == OperationType.CLEANUP.value
     assert cleanup_row['status'] == OperationStatus.COMPLETED.value
     assert all(path.is_file() for path in paths)
@@ -520,15 +543,13 @@ def test_cleanup_dry_run_is_an_operation_preview_without_deleting_artifacts(
 
 def test_cleanup_wet_run_follows_preview_and_records_operation_result(store, clock, tmp_path):
     evaluator = getattr(CleanupService, 'evaluate_and_execute_cleanup', None)
-    assert callable(evaluator), (
-        'Gate 4 requires dry-run and wet cleanup to be represented by Operations'
-    )
+    assert callable(
+        evaluator
+    ), 'Gate 4 requires dry-run and wet cleanup to be represented by Operations'
 
     world_id = _seed_world(store)
     backup_operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
-    OperationService(store, clock).transition(
-        backup_operation['op_id'], OperationStatus.COMPLETED
-    )
+    OperationService(store, clock).transition(backup_operation['op_id'], OperationStatus.COMPLETED)
     connection = store.writer()
     paths = []
     for index in range(4):
@@ -578,14 +599,23 @@ def test_cleanup_wet_run_follows_preview_and_records_operation_result(store, clo
     assert result['mode'] == 'wet_run'
     assert result['deleted_count'] == 1
     assert not paths[0].exists()
-    assert store.reader().execute(
-        'SELECT deleted_at FROM backup_artifacts WHERE artifact_id = ?',
-        ('gate4_wet_run_0',),
-    ).fetchone()['deleted_at'] is not None
-    operations = store.reader().execute(
-        'SELECT op_type, status FROM operations WHERE op_id IN (?, ?)',
-        (preview_op['op_id'], cleanup_op['op_id']),
-    ).fetchall()
+    assert (
+        store.reader()
+        .execute(
+            'SELECT deleted_at FROM backup_artifacts WHERE artifact_id = ?',
+            ('gate4_wet_run_0',),
+        )
+        .fetchone()['deleted_at']
+        is not None
+    )
+    operations = (
+        store.reader()
+        .execute(
+            'SELECT op_type, status FROM operations WHERE op_id IN (?, ?)',
+            (preview_op['op_id'], cleanup_op['op_id']),
+        )
+        .fetchall()
+    )
     assert len(operations) == 2
     assert all(row['op_type'] == OperationType.CLEANUP.value for row in operations)
     assert all(row['status'] == OperationStatus.COMPLETED.value for row in operations)
@@ -593,9 +623,9 @@ def test_cleanup_wet_run_follows_preview_and_records_operation_result(store, clo
 
 def test_cleanup_wet_execution_enforces_blast_radius_before_deletion(store, clock, tmp_path):
     evaluator = getattr(CleanupService, 'evaluate_and_execute_cleanup', None)
-    assert callable(evaluator), (
-        'Gate 4 requires wet cleanup to enforce a bounded candidate blast radius'
-    )
+    assert callable(
+        evaluator
+    ), 'Gate 4 requires wet cleanup to enforce a bounded candidate blast radius'
     world_id = _seed_world(store)
     backup_operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
     now = int(clock.now()) - 10 * 24 * 60 * 60
@@ -619,13 +649,13 @@ def test_cleanup_wet_execution_enforces_blast_radius_before_deletion(store, cloc
             ),
         )
     connection.commit()
-    OperationService(store, clock).transition(
-        backup_operation['op_id'], OperationStatus.COMPLETED
-    )
+    OperationService(store, clock).transition(backup_operation['op_id'], OperationStatus.COMPLETED)
     cleanup_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
-    before = store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts WHERE deleted_at IS NULL'
-    ).fetchone()['n']
+    before = (
+        store.reader()
+        .execute('SELECT COUNT(*) AS n FROM backup_artifacts WHERE deleted_at IS NULL')
+        .fetchone()['n']
+    )
 
     with pytest.raises(Exception, match='CLEANUP_BLAST_RADIUS'):
         evaluator(
@@ -636,9 +666,11 @@ def test_cleanup_wet_execution_enforces_blast_radius_before_deletion(store, cloc
             elevated_confirmation=False,
         )
 
-    after = store.reader().execute(
-        'SELECT COUNT(*) AS n FROM backup_artifacts WHERE deleted_at IS NULL'
-    ).fetchone()['n']
+    after = (
+        store.reader()
+        .execute('SELECT COUNT(*) AS n FROM backup_artifacts WHERE deleted_at IS NULL')
+        .fetchone()['n']
+    )
     assert after == before
 
 
@@ -692,14 +724,21 @@ def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_loca
     )
 
     assert Path(result.storage_path).is_file()
-    assert store.reader().execute(
-        'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
-        (result.artifact_id,),
-    ).fetchone()['checksum'] == result.checksum
+    assert (
+        store.reader()
+        .execute(
+            'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
+            (result.artifact_id,),
+        )
+        .fetchone()['checksum']
+        == result.checksum
+    )
     sync.dispatch_sync(result.artifact_id, 'gate4-nas')
     assert sleeps == [30, 60]
-    timeline = store.reader().execute(
-        """
+    timeline = (
+        store.reader()
+        .execute(
+            """
         SELECT attempt_number, started_at, finished_at, outcome
         FROM sync_attempts
         WHERE sync_id = (
@@ -708,19 +747,24 @@ def test_sync_failure_records_attempt_timeline_and_backoff_without_blocking_loca
         )
         ORDER BY attempt_number
         """,
-        (result.artifact_id,),
-    ).fetchall()
-    assert [row['attempt_number'] for row in timeline] == list(
-        range(1, len(timeline) + 1)
+            (result.artifact_id,),
+        )
+        .fetchall()
     )
+    assert [row['attempt_number'] for row in timeline] == list(range(1, len(timeline) + 1))
     assert timeline
     assert len(timeline) == 3
     assert all(row['started_at'] <= row['finished_at'] for row in timeline)
     assert all(row['outcome'] == 'failed_transient' for row in timeline)
-    assert store.reader().execute(
-        'SELECT status FROM sync_records WHERE artifact_id = ?',
-        (result.artifact_id,),
-    ).fetchone()['status'] == 'failed'
+    assert (
+        store.reader()
+        .execute(
+            'SELECT status FROM sync_records WHERE artifact_id = ?',
+            (result.artifact_id,),
+        )
+        .fetchone()['status']
+        == 'failed'
+    )
 
 
 def test_sync_daily_cap_rejects_dispatch_without_touching_local_artifact(
@@ -754,10 +798,15 @@ def test_sync_daily_cap_rejects_dispatch_without_touching_local_artifact(
     with pytest.raises(Exception, match='SYNC_CAP_EXCEEDED'):
         service.dispatch_sync(result.artifact_id, 'gate4-nas')
     assert Path(result.storage_path).is_file()
-    assert store.reader().execute(
-        'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
-        (result.artifact_id,),
-    ).fetchone()['checksum'] == result.checksum
+    assert (
+        store.reader()
+        .execute(
+            'SELECT checksum FROM backup_artifacts WHERE artifact_id = ?',
+            (result.artifact_id,),
+        )
+        .fetchone()['checksum']
+        == result.checksum
+    )
 
 
 def test_container_wires_runtime_as_restore_restart_probe(container):

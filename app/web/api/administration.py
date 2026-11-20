@@ -56,7 +56,14 @@ def get_manager():
         .fetchone()
     )
     if row is None:
-        return ok({"deployed_version": "unknown", "setup_completed": False, "state": "setup"})
+        return ok(
+            {
+                "deployed_version": "unknown",
+                "setup_completed": False,
+                "state": "setup",
+                "updated_at": None,
+            }
+        )
     return ok(
         {
             "deployed_version": row["deployed_version"],

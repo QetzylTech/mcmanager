@@ -59,23 +59,16 @@ def _requires_step_up() -> bool:
         or path.endswith("/eula/accept")
         or path.endswith("/runtime-config")
         or path.endswith("/cleanup-policy")
+        or path == "/api/supervisor/tick"
         or path == "/api/cleanup/policy"
         or path == "/api/cleanup/execute"
-        or (
-            method == "DELETE"
-            and path.startswith("/api/backups/")
-            and path.count("/") == 3
-        )
+        or (method == "DELETE" and path.startswith("/api/backups/") and path.count("/") == 3)
         or (
             method == "POST"
             and path.startswith("/api/worlds/")
             and (path.endswith("/restores") or path.endswith("/restores/rollback"))
         )
-        or (
-            method == "DELETE"
-            and path.startswith("/api/worlds/")
-            and len(segments) == 3
-        )
+        or (method == "DELETE" and path.startswith("/api/worlds/") and len(segments) == 3)
         or (
             method == "DELETE"
             and path.startswith("/api/worlds/")
@@ -92,8 +85,8 @@ def _requires_step_up() -> bool:
         or (
             method == "PATCH"
             and path.startswith("/api/users/")
-            and isinstance(request.get_json(silent=True), dict)
-            and "username" in request.get_json(silent=True)
+            and isinstance(payload := request.get_json(silent=True), dict)
+            and "username" in payload
         )
     )
 
@@ -103,14 +96,10 @@ def _requires_admin() -> bool:
     method: str = request.method
     segments = path.strip("/").split("/")
     protected_world_files = (
-        path.startswith("/api/worlds/")
-        and len(segments) >= 4
-        and segments[3] == "files"
+        path.startswith("/api/worlds/") and len(segments) >= 4 and segments[3] == "files"
     )
     protected_world_logs = (
-        path.startswith("/api/worlds/")
-        and len(segments) >= 5
-        and segments[3] == "logs"
+        path.startswith("/api/worlds/") and len(segments) >= 5 and segments[3] == "logs"
     )
     admin_catalog_reads = method == "GET" and path in {
         "/api/backups",
@@ -121,6 +110,8 @@ def _requires_admin() -> bool:
     return (
         path == "/api/documentation"
         or path.startswith("/api/documentation/")
+        or path == "/api/pages"
+        or path.startswith("/api/pages/")
         or path == "/api/manager/logs"
         or path.startswith("/api/manager/logs/")
         or path == "/api/diagnostics"
@@ -148,11 +139,7 @@ def _requires_admin() -> bool:
         or path == "/api/cleanup/dry-run"
         or path == "/api/cleanup/execute"
         or path == "/api/sync/retry"
-        or (
-            method == "DELETE"
-            and path.startswith("/api/backups/")
-            and path.count("/") == 3
-        )
+        or (method == "DELETE" and path.startswith("/api/backups/") and path.count("/") == 3)
         or (
             method in _STATE_CHANGING_METHODS
             and (
@@ -161,7 +148,8 @@ def _requires_admin() -> bool:
                 or path.startswith("/api/templates")
                 or path.startswith("/api/java-runtimes")
                 or path.startswith("/api/sync/targets")
-                or path in {
+                or path
+                in {
                     "/api/manager/backup",
                     "/api/manager/restore",
                     "/api/manager/restart",
@@ -179,13 +167,14 @@ def _requires_admin() -> bool:
 def _requires_superadmin() -> bool:
     path: str = request.path
     return (
-        path == "/api/setup" and request.method == "POST"
-    ) or path.startswith(("/api/users", "/api/roles", "/api/permissions", "/api/devices")) or (
-        path in {"/api/manager/update", "/api/manager/rollback"}
-    ) or (
-        request.method == "DELETE"
-        and path.startswith("/api/backups/")
-        and request.args.get("force", "").lower() in {"true", "1"}
+        (path == "/api/setup" and request.method == "POST")
+        or path.startswith(("/api/users", "/api/roles", "/api/permissions", "/api/devices"))
+        or (path in {"/api/manager/update", "/api/manager/rollback"})
+        or (
+            request.method == "DELETE"
+            and path.startswith("/api/backups/")
+            and request.args.get("force", "").lower() in {"true", "1"}
+        )
     )
 
 
@@ -199,10 +188,14 @@ def _permission_requirement(container: Any) -> tuple[str, str | None] | None:
     def related_world(table: str, column: str, value: str | None) -> str | None:
         if not isinstance(value, str) or not value:
             return None
-        row = container.store.reader().execute(
-            f"SELECT world_id FROM {table} WHERE {column} = ?",
-            (value,),
-        ).fetchone()
+        row = (
+            container.store.reader()
+            .execute(
+                f"SELECT world_id FROM {table} WHERE {column} = ?",
+                (value,),
+            )
+            .fetchone()
+        )
         return row["world_id"] if row is not None else None
 
     if path == "/api/worlds":
@@ -379,17 +372,23 @@ def _has_permission(
     action_category: str,
     world_id: str | None,
 ) -> bool:
-    scope_clause = "p.world_id IS NULL" if world_id is None else "(p.world_id IS NULL OR p.world_id = ?)"
-    row = container.store.reader().execute(
-        "SELECT 1 FROM permissions p "
-        "WHERE p.deleted_at IS NULL AND p.action_category = ? AND "
-        + scope_clause
-        + " AND (p.user_id = ? OR EXISTS ("
-        "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
-        "WHERE ra.user_id = ? AND ra.role_id = p.role_id "
-        "AND ra.deleted_at IS NULL AND r.deleted_at IS NULL)) LIMIT 1",
-        [action_category, *([world_id] if world_id is not None else []), user_id, user_id],
-    ).fetchone()
+    scope_clause = (
+        "p.world_id IS NULL" if world_id is None else "(p.world_id IS NULL OR p.world_id = ?)"
+    )
+    row = (
+        container.store.reader()
+        .execute(
+            "SELECT 1 FROM permissions p "
+            "WHERE p.deleted_at IS NULL AND p.action_category = ? AND "
+            + scope_clause
+            + " AND (p.user_id = ? OR EXISTS ("
+            "SELECT 1 FROM role_assignments ra JOIN roles r ON r.role_id = ra.role_id "
+            "WHERE ra.user_id = ? AND ra.role_id = p.role_id "
+            "AND ra.deleted_at IS NULL AND r.deleted_at IS NULL)) LIMIT 1",
+            [action_category, *([world_id] if world_id is not None else []), user_id, user_id],
+        )
+        .fetchone()
+    )
     return row is not None
 
 
@@ -407,9 +406,11 @@ def register_middleware(app: Flask) -> None:
         if request.path == "/api/setup" and request.method == "POST":
             container = app.extensions.get("mcmanager_container")
             if container is not None:
-                active_users = container.store.reader().execute(
-                    "SELECT count(*) FROM users WHERE deleted_at IS NULL"
-                ).fetchone()[0]
+                active_users = (
+                    container.store.reader()
+                    .execute("SELECT count(*) FROM users WHERE deleted_at IS NULL")
+                    .fetchone()[0]
+                )
                 if active_users == 0:
                     cookie_token = request.cookies.get("csrf_token", "")
                     header_token = request.headers.get("X-CSRF-Token", "")
@@ -493,10 +494,7 @@ def register_middleware(app: Flask) -> None:
             )
             requirement = _permission_requirement(container)
             route_permission_granted = False
-            if (
-                requirement is not None
-                and admin_role is None
-            ):
+            if requirement is not None and admin_role is None:
                 route_permission_granted = _has_permission(
                     container,
                     user_id=session.user_id,
@@ -509,7 +507,12 @@ def register_middleware(app: Flask) -> None:
                     f"The {requirement[0]} permission is required.",
                     status=403,
                 )
-        if not _requires_superadmin() and _requires_admin() and admin_role is None and not route_permission_granted:
+        if (
+            not _requires_superadmin()
+            and _requires_admin()
+            and admin_role is None
+            and not route_permission_granted
+        ):
             role = (
                 container.store.reader()
                 .execute(

@@ -18,6 +18,7 @@ from app.services.operations import OperationService
 from app.services.restore import RestoreService
 from app.services.save_coordination import RconSaveCoordinator
 from app.services.scheduler import SchedulerService
+from app.services.server_properties import ServerPropertiesService
 from app.services.sync import SyncService
 from app.services.worlds import WorldsService
 
@@ -36,6 +37,7 @@ PERSISTENCE_PORT_SERVICES = (
     WorldsService,
     RconSaveCoordinator,
     SchedulerService,
+    ServerPropertiesService,
 )
 
 
@@ -52,9 +54,7 @@ def _imported_modules(source: str) -> set[str]:
 
 def test_services_do_not_import_platform_adapters():
     for source_path in SERVICES_DIR.glob('*.py'):
-        imported_modules = _imported_modules(
-            source_path.read_text(encoding='utf-8')
-        )
+        imported_modules = _imported_modules(source_path.read_text(encoding='utf-8'))
         platform_imports = {
             module
             for module in imported_modules
@@ -65,18 +65,19 @@ def test_services_do_not_import_platform_adapters():
 
 def test_services_use_ports_instead_of_concrete_infrastructure():
     for source_path in SERVICES_DIR.glob('*.py'):
-        imported_modules = _imported_modules(
-            source_path.read_text(encoding='utf-8')
-        )
+        imported_modules = _imported_modules(source_path.read_text(encoding='utf-8'))
         infrastructure_imports = {
             module
             for module in imported_modules
-            if module == 'app.infrastructure'
-            or module.startswith('app.infrastructure.')
+            if module == 'app.infrastructure' or module.startswith('app.infrastructure.')
         }
-        assert not infrastructure_imports, (
-            f'{source_path.name}: {infrastructure_imports}'
-        )
+        assert not infrastructure_imports, f'{source_path.name}: {infrastructure_imports}'
+
+
+def test_server_properties_service_uses_minecraft_port():
+    source_path = SERVICES_DIR / 'server_properties.py'
+    imported_modules = _imported_modules(source_path.read_text(encoding='utf-8'))
+    assert 'app.ports.minecraft' in imported_modules
 
 
 def test_sqlite_store_implements_persistence_port_and_services_accept_it():

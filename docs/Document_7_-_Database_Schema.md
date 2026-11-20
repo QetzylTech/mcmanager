@@ -51,7 +51,7 @@ IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 `runtime_id` PK | `label` UNIQ_SOFT | `executable_path` | `version_detected` | `status` // registered/verified/missing/deprecated | `version` INT // API optimistic lock | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 
 **2.8 runtime_sessions** // T2 in principle, practically permanent
-`session_id` PK | `world_id` FK->world_instances | `started_at` INT // set only at confirmed running (Doc 6 §2.2) | `ended_at` NULL | `end_reason` NULL // graceful_stop/forced_stop/crashed/emergency_stop/reconciled_missing | `rcon_secret_id` FK->secrets | `port_used` INT | `java_runtime_id` FK->java_runtimes // historical, not necessarily current | `launch_args_snapshot` JSON // captured at launch; independent of later edits | `created_at`
+`session_id` PK | `world_id` FK->world_instances | `started_at` INT // set only at confirmed running (Doc 6 §2.2) | `ended_at` NULL | `end_reason` NULL // graceful_stop/forced_stop/crashed/emergency_stop/reconciled_missing | `rcon_secret_id` FK->secrets | `rcon_port` INT NULL // persisted RCON control port for restart/save coordination | `port_used` INT | `java_runtime_id` FK->java_runtimes // historical, not necessarily current | `launch_args_snapshot` JSON // captured at launch; independent of later edits | `created_at`
 CONSTRAINT: partial UNIQUE `(world_id) WHERE ended_at IS NULL` — exactly one open session per world
 
 **2.9 operations** // durable command-plane record; immutable except milestone status progression
@@ -60,7 +60,7 @@ IDX: `(world_id, status)` — REQUIRED, backs the derived world lock (Doc 9 §1.
 RULE: progress `checkpoint` payloads are held in OperationService memory and sent over SSE. Persist this row only at initial creation, transition to `Running`, and terminal exit; the persisted terminal row carries the final checkpoint/message.
 
 **2.10 backup_artifacts** // T2, created-on-success-only, Doc 6 §2.5
-`artifact_id` PK | `world_id` NULL FK->world_instances // NULL = ManagerBackup (manager DB/settings/templates/permissions) | `category` // session_end/manual/scheduled/pre_restore/emergency/manager_config | `storage_path` | `size_bytes` INT | `checksum` // SHA-256 over full artifact (Doc 14 §11) | `suspect` INT // 0/1; set when a restore fails structural validation — surfaced, never auto-deleted (Doc 14 §11) | `operation_id` FK->operations // producing Backup op | `deleted_at` NULL // soft; file removed, row retained | `deleted_by` NULL | `created_at`
+`artifact_id` PK | `world_id` NULL FK->world_instances // NULL = ManagerBackup (manager DB/settings/templates/permissions) | `category` // session_end/manual/scheduled/pre_restore/emergency/manager_config | `storage_path` | `size_bytes` INT | `checksum` // SHA-256 over full artifact (Doc 14 §11) | `suspect` INT // 0/1; set when a restore fails structural validation — surfaced, never auto-deleted (Doc 14 §11) | `operation_id` FK->operations // producing Backup op | `deleted_at` NULL // direct delete removes file; stale tombstone retains file for grace | `deleted_by` NULL | `stale_tombstoned_at` NULL // delayed stale-backup purge marker | `created_at`
 IDX: `(world_id, category, created_at)` — shape retention keep-newest-N-per-category needs
 
 **2.11 restore_history** // T2, immutable append-only outcome record
@@ -73,7 +73,12 @@ IDX: `(world_id, category, created_at)` — shape retention keep-newest-N-per-ca
 `missed_run_id` PK | `schedule_id` // plain value, NOT an FK (snapshot rationale §0) | `schedule_name_snapshot` | `schedule_type_snapshot` | `expected_run_at` | `detected_at` | `resolution` // pending/resolved/ignored | `resolution_at` NULL | `resolution_by` NULL // user_id, plain value, not an FK (must outlive referenced user) | `created_at`
 
 **2.14 cleanup_policies** // T2, Doc 6 §2.7
-`policy_id` PK | `scope` // global/world | `world_id` NULL FK->world_instances | `age_rule_days` INT // floor 3, app-enforced (Doc 6 §2.7) | `space_rule_pct` INT NULL | `count_rules` JSON // per-category floors, each >= 3 | `schedule_id` NULL FK->schedules | `version` INT // Doc 9 §4 | `last_changed_by` FK->users | `last_changed_at` | `deleted_at` NULL | `deleted_by` NULL | `created_at`
+`policy_id` PK | `scope` // global/world | `world_id` NULL FK->world_instances | `age_rule_days` INT // floor 3, app-enforced | `space_rule_pct` INT NULL // default 90%, max 90 | `count_rules` JSON // per-category retention floors, each >= 3 | `stale_session_threshold` INT // default 7 completed sessions | `log_retention_days` INT NULL // NULL means unlimited; minimum 3 | `schedule_id` NULL FK->schedules | `version` INT // Doc 9 §4 | `last_changed_by` FK->users | `last_changed_at` | `deleted_at` NULL | `deleted_by` NULL | `created_at`
+
+Migration 005 adds `stale_session_threshold`, `log_retention_days`, and
+`backup_artifacts.stale_tombstoned_at` with a partial index. The dedicated
+tombstone timestamp distinguishes delayed stale-backup purge from direct
+backup deletion.
 
 **2.15 notifications** // T1 — permanent, Doc 6 §2.8
 `notification_id` PK | `category` | `severity` // critical/high/normal/informational — dropdown ordering (Doc 5) | `message` | `related_operation_id` NULL FK->operations | `related_world_id` NULL FK->world_instances | `requires_action` INT | `action_taken` NULL | `created_at`

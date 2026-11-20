@@ -52,6 +52,9 @@ RENDER_INTERVAL_LIVE_METRICS_S = 1.0  # 1Hz, bounded by MetricsCadence
 CLEANUP_BLAST_RADIUS_CAP = 500  # beyond: elevated confirmation required
 CLEANUP_AGE_FLOOR_DAYS = 3  # cannot save lower
 CLEANUP_COUNT_FLOOR = 3  # per backup category + stale-world scope
+CLEANUP_STALE_SESSION_DEFAULT = 7
+CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT = 90
+CLEANUP_TOMBSTONE_GRACE_DAYS = 3
 
 # Operation timeouts (Doc 8 section 5.1)
 OP_CREATEWORLD_TIMEOUT_S = 120
