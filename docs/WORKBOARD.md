@@ -1145,10 +1145,17 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   migrations; the Gate 5 browser suite passed (**7 passed**). Scoped Ruff, Black,
   isort, JavaScript syntax, and CRLF-aware `git diff --check` passed. The
   repository coverage threshold fails when these targeted tests run with
-  coverage enabled, so the focused pass intentionally used `--no-cov`. After
-  those checks, dispatcher error-code mapping was edited and has not been
-  revalidated; keep this card In Progress until the handoff checks below pass.
-- **Handoff:** First rerun the focused command:
+  coverage enabled, so the focused pass intentionally used `--no-cov`. The
+  latest dispatcher error-code mapping was included in the 97-test and scoped
+  static-gate rerun. Keep this card In Progress until the remaining API error
+  contract is completed.
+- **Handoff:** Complete the error contract:
+  `CatalogOperationDispatcher` now maps `BACKUP_PATH_UNSAFE`,
+  `CLEANUP_PATH_UNSAFE`, and `CLEANUP_STORAGE_USAGE_INVALID`, but
+  `backup_catalogs.delete_backup` still converts every `RetentionError` to
+  `BACKUP_RETENTION_GUARD`, and the new codes are not yet registered in
+  `app/web/errors.py`. Add the narrowly scoped API/error mapping and an
+  unsafe-path regression test, then rerun the focused command:
   `python -m pytest --no-cov -q tests/integration/test_cleanup_service.py
   tests/integration/test_backup_catalog_api.py
   tests/integration/test_scheduler_service.py
@@ -1156,13 +1163,7 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   tests/integration/test_schema_migrations.py`
   Then rerun scoped Ruff/Black/isort, `node --check
   app/shell/static/operator_ui.js`, and
-  `git -c core.whitespace=cr-at-eol diff --check`. Complete the error contract:
-  `CatalogOperationDispatcher` now maps `BACKUP_PATH_UNSAFE`,
-  `CLEANUP_PATH_UNSAFE`, and `CLEANUP_STORAGE_USAGE_INVALID`, but
-  `backup_catalogs.delete_backup` still converts every `RetentionError` to
-  `BACKUP_RETENTION_GUARD`, and the new codes are not yet registered in
-  `app/web/errors.py`. Add the narrowly scoped API/error mapping and an
-  unsafe-path regression test before marking Done. Scheduled backups are
+  `git -c core.whitespace=cr-at-eol diff --check`. Scheduled backups are
   explicitly categorized and enqueue a durable cleanup operation; the cap is
   three, with referenced artifacts retained even if that means exceeding it.
 
