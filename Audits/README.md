@@ -11,6 +11,7 @@ workboard before acting on them.
 
 ## Current records
 
+- [Full repository audit — 2026-11-21](FULL_AUDIT_2026-11-21.md)
 - [2026-11-20 realignment and verification](REALIGNMENT_2026-11-20.md)
 - [2026-11-20 verification log](verification_log_2026-11-20.md)
 - [Current requirement traceability ledger](reconciliation_traceability.csv)

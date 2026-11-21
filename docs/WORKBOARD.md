@@ -73,6 +73,19 @@ treated as current results without fresh verification.
 | AUD-2026-11-20-02 — Record sync, API/SSE, diagnostics, schema, and restore realignments | KB-G8-SYNC-CAP, KB-G5-API-CONTRACT, KB-G1-LOG-REPLAY, KB-G4-VERIFY, KB-G0-7 |
 | Detailed implementation/test inventory | Existing cleanup, lifecycle, architecture, API, test, platform, security, and performance cards above |
 
+## Follow-up audit transfer — 2026-11-21
+
+The full repository re-audit is recorded in
+[`Audits/FULL_AUDIT_2026-11-21.md`](../Audits/FULL_AUDIT_2026-11-21.md).
+It reconciles the 580-case collection and latest no-coverage run, identifies
+current documentation conflicts and stale evidence, and maps the complete
+remaining queue to existing cards. No overall completion percentage is
+reported.
+
+| Audit finding | Workboard tasks |
+|---|---|
+| AUD-2026-11-21-01 — Full implementation, test, and plan re-audit | KB-REC-01 through KB-REC-05, KB-G0-7, KB-G5-API-CONTRACT, KB-G5-8, KB-G5-CLEANUP-SCOPES, KB-G4-VERIFY, KB-G1-MINECRAFT, KB-G1-6, KB-G1-FORGE-SHUTDOWN, KB-G5-6, KB-G5-10, KB-PERF-01, KB-G0-5, KB-D12-2, KB-G8-CONTRACT, KB-G9-CONTRACT, KB-D11-TEST-PYRAMID, KB-D11-COVERAGE, KB-D11-ISO-25010, KB-DOC-PLAN-COHERENCE, KB-DOC-EVIDENCE-QUALITY |
+
 ## Reconciliation reset — 2026-11-19 (historical snapshot)
 
 The historical audit snapshot is no longer sufficient as a live status source.
