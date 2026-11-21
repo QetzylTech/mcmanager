@@ -153,8 +153,8 @@ def build_container(
         clock,
         operations,
         configuration,
-        filesystem,
         audit,
+        filesystem=filesystem,
     )
     server_properties = ServerPropertiesService(store, clock, configuration, operations)
     manager_lifecycle = ManagerLifecycleService(

@@ -11,7 +11,6 @@ from typing import Any
 from flask import Blueprint, current_app, g, request
 
 from app.domain.value_objects import ActorType, ConfigEditEntity, OperationStatus, OperationType
-from app.infrastructure.minecraft.java_compatibility import detect_java
 from app.services.configuration import ConfigurationConflictError, VersionedUpdate
 from app.services.operations import OperationInput
 from app.web.errors import error, ok
@@ -670,7 +669,7 @@ def verify_java_runtime(runtime_id: str):
     config_operation = _start_config_operation(
         ConfigEditEntity.JAVA_RUNTIMES, runtime_id, {"status": "verified"}
     )
-    detection = detect_java(row["executable_path"])
+    detection = container.minecraft_adapter.detect_java(row["executable_path"])
     writer = container.store.writer()
     if detection is None:
         writer.execute(

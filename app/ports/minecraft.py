@@ -51,6 +51,15 @@ class MinecraftCapabilities:
     tps_metric: bool = False
 
 
+@dataclass(frozen=True)
+class JavaDetection:
+    """Resolved Java runtime information."""
+
+    path: str
+    major: int
+    full_version: str
+
+
 # --- EULA (Doc 14 section 5) -------------------------------------------------
 
 def detect_eula(world_dir: str, file_name: str = 'eula.txt') -> EulaState:
@@ -556,6 +565,8 @@ class MinecraftServerPort(Protocol):
     def detect_eula(self, world_dir: str) -> EulaState: ...
 
     def accept_eula(self, world_dir: str, operator_id: str | None = None) -> None: ...
+
+    def detect_java(self, path: str) -> JavaDetection | None: ...
 
     def open_rcon(
         self, host: str, port: int, password: str, timeout_s: float = 5.0

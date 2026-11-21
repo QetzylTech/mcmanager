@@ -71,7 +71,7 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/worlds` | any | filters `state`, `server_type`, `mc_version`, `search` (display_name), `include_deleted=false` |
-| POST | `/api/worlds` | A | O CreateWorld; body: template_id, display_name, port, addressing_strategy/value, java_runtime_id, launch_args |
+| POST | `/api/worlds` | A | O CreateWorld; body: template_id, display_name, port, addressing_strategy/value, java_runtime_id, launch_args; provisions a stable world-ID directory and returns a world in `eula_required` until explicit acceptance |
 | GET | `/api/worlds/{world_id}` | any | detail incl. live state, **resolved capability record** (Doc 14 §2/§8), last backup summary; deleted → 404 |
 | PATCH | `/api/worlds/{world_id}` | A | RenameWorld `{display_name, version}` (metadata ConfigEdit, version per Doc 9 §4); allowed concurrently with Backup/Restore/Cleanup |
 | POST | `/api/worlds/{world_id}/delete-preview` | A | returns a short-lived, session-bound scope token; required by DeleteWorld |
@@ -109,9 +109,9 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 ### Cleanup
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/cleanup/policy` | A | Manager-wide policy; defaults: age 3 days, 90% storage trigger, 7 sessions, 3-day tombstone grace, unlimited log retention; unset policy returns `version=0` |
+| GET | `/api/cleanup/policy` | A | Manager-wide policy; defaults: age 3 days, 90% storage trigger, 7 sessions, unlimited log retention; unset policy returns `version=0` |
 | PATCH | `/api/cleanup/policy` | A S | Versioned ConfigEdit; `{version, age_rule_days?, space_rule_pct?, count_rules?, stale_session_threshold?, log_retention_days?, schedule_id?}`; version `0` creates the global default policy |
-| POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_backups\|logs, world_id?, policy_version?}` → target IDs, stale-backup tombstone/purge groups, and storage-pressure status in `data` |
+| POST | `/api/cleanup/dry-run` | A | O Cleanup `wet=false`; `{scope: backups\|stale_backups\|logs, world_id?, policy_version?}` → exact deletion target IDs and storage-pressure status in `data`; stale-backup targets are the oldest floor(50% of eligible stale backups) per pressured world |
 | POST | `/api/cleanup/execute` | A S | O Cleanup `wet=true`; requires matching completed dry-run (`scope`, `world_id`, `dry_run_operation_id`); exact plan revalidated; blast-radius cap enforced |
 | GET | `/api/cleanup/runs` | A | cleanup history with summaries in `data_json` |
 | GET | `/api/worlds/{world_id}/cleanup-preview` | A | scoped dry-run shorthand; supports `backups`, `stale_backups`, and `logs` |
@@ -140,8 +140,8 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 ### Settings & manager
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/settings` | A | merged effective global settings + `version` |
-| PATCH | `/api/settings` | A | O ConfigEdit global settings; requires `version`; 409 stale |
+| GET | `/api/settings` | A | merged effective global settings + `version`, including sync and concurrent-world-start limits |
+| PATCH | `/api/settings` | A | O ConfigEdit global settings; requires `version`; `sync_global_concurrency_cap` accepts a positive integer; `max_concurrent_world_starts` accepts a nonnegative integer (default 3), with `0` or `null` meaning unlimited; 409 stale |
 | GET | `/api/worlds/{world_id}/settings` | A | effective 3-tier settings |
 | PATCH | `/api/worlds/{world_id}/settings` | A | O ConfigEdit world override; requires `version`; notification defaults not overridable |
 | GET | `/api/manager` | any | singleton: deployed_version, setup_completed, state |
@@ -239,9 +239,9 @@ These routes are outside the 110-row HTTP catalog and retain explicit contracts:
 |---|---|---|---|
 | GET | `/api/pages` | A | list the 17 persistent-shell page modules |
 | GET | `/api/pages/{slug}` | A | read one page module summary |
-| GET | `/api/worlds/{world_id}/cleanup-policy` | A/S | read a world cleanup-policy override |
+| GET | `/api/worlds/{world_id}/cleanup-policy` | A/S | read a world cleanup-policy override or the effective inherited global default; response includes `cleanup_policy`, `version`, and `inherited` |
 | PATCH | `/api/worlds/{world_id}/cleanup-policy` | A/S | compare and update a world cleanup-policy version |
-| POST | `/api/supervisor/tick` | A/S | development and test supervisor tick aid; not a public status endpoint |
+| POST | `/api/supervisor/tick` | A/S | development and test supervisor tick aid; not a public status endpoint; requires active step-up and CSRF; returns `crashed` plus the tick timestamp |
 
 ## SSE stream contract
 
@@ -348,6 +348,7 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `SYNC_TRANSIENT` | n/a (attempt) | sync_attempts | `failed_transient` — retryable |
 | `SYNC_PERMANENT` | n/a (attempt) | sync_attempts | `failed_permanent` — terminal for job |
 | `SYNC_CONCURRENCY_CAP` | 429 | sync | Global transfer cap reached |
+| `SYNC_CAP_EXCEEDED` | 429 | sync | 50 GiB global daily transfer reservation/cap reached |
 | `CONFIG_INVALID_KEY` | 400 | server.properties | Key not valid for the world's server_type/mc_version capability schema (Doc 14 §6.2) |
 | `CONFIG_INVALID_VALUE` | 400 | server.properties | Value fails format validation for the world's server_type/mc_version capability schema |
 | `CONFIG_VERSION_CONFLICT` | 409 | ConfigEdit all | Stale `version` optimistic-lock rejection |

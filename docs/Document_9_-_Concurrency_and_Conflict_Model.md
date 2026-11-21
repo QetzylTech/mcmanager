@@ -18,16 +18,21 @@ Four lock classes. None are literal DB row locks — SQLite's own locking is a m
 - While tripped: Start and Backup blocked for *every* world — the one world-agnostic lock, because disk space is a shared host resource. Cleanup is *triggered* by the condition, never blocked by it; emergency stop always allowed.
 
 **1.3 Cleanup scope lock (per-scope, blocking, single-flight)**
-- Scope: `backups`, `stale_backups`, or `logs` (or a world's cleanup if world-scoped). A second Cleanup against the same scope while one runs = queued single-flight (§6) — waits and auto-dispatches when the in-flight reaches terminal. One Cleanup per scope at a time; does not reject additional requests. Stale-backup tombstoning additionally skips any world with in-flight Backup, Cleanup, Restore, or Sync work; purge protects restore/sync-referenced artifacts and honors the grace period.
+- Scope: `backups`, `stale_backups`, or `logs` (or a world's cleanup if world-scoped). A second Cleanup against the same scope while one runs = queued single-flight (§6) — waits and auto-dispatches when the in-flight reaches terminal. One Cleanup per scope at a time; does not reject additional requests. Stale-backup deletion skips any world with in-flight Backup, Cleanup, Restore, or Sync work and revalidates the exact eligible batch, quota pressure, retention floor, and restore/sync references before deleting.
 
 **1.4 Config version lock (per-row, optimistic, non-blocking)**
 - Scope: one row in any multi-editor-reachable config table. **Not** a blocking lock — nobody waits. Detects simultaneous edits and rejects instead of silently overwriting. Full treatment §4.
+
+**1.5 Bounded world-start admission (manager-wide, configurable)**
+- Start retains its per-world derived lock (§1.1); this is an additional admission limit for independent worlds, not a second world lock.
+- The dispatcher may run up to `global_settings.max_concurrent_world_starts` Start Operations at once (default 3). Additional starts stay durably queued until a slot is available. `NULL` or `0` means unlimited. Stop/Kill remain dispatchable independently, and one start failure does not block the others.
+- The dispatcher claims the batch before running it and prevents concurrent dispatcher batches in the same manager process, so multiple worker wakeups cannot exceed the configured limit.
 
 ## 2 What is *not* separately lockable (and why)
 
 - **Filesystem locks are not a domain-model concept.** BackupService's "pause autosave via RCON, wait for ack, then capture" sequence *is* the domain-level equivalent of a filesystem lock — guarantees the world isn't writing save files during capture, without an OS-level file lock. Platform-adapter implementation detail below this document's line.
 - **RuntimeSession is not separately lockable** — partial unique index (`world_id WHERE ended_at IS NULL`, Doc 7) already makes "one open session per world" a database-enforced invariant, stronger than an application lock.
-- **Notifications and audit records are never lock targets** — terminal-state notifications/audits are insert-only, so no single-writer lock contention is introduced by intermediate progress updates.
+- **Notifications and audit records are never lock targets** — terminal-state notifications/audits are insert-only, so no additional write-lock contention is introduced by intermediate progress updates.
 
 ## 3 Mutual-exclusion matrix
 

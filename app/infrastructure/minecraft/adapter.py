@@ -6,6 +6,7 @@ from app.domain.value_objects import EulaState, ServerReadinessLevel, ServerType
 from app.infrastructure.minecraft.capabilities import capabilities_for
 from app.infrastructure.minecraft.eula import accept, current_state
 from app.infrastructure.minecraft.gate import build_launch_argv, validate_launch
+from app.infrastructure.minecraft.java_compatibility import detect_java
 from app.infrastructure.minecraft.rcon import RconClient
 from app.infrastructure.minecraft.readiness import (
     build_state,
@@ -14,6 +15,7 @@ from app.infrastructure.minecraft.readiness import (
 )
 from app.ports.minecraft import (
     GateResult,
+    JavaDetection,
     LaunchContext,
     MinecraftCapabilities,
     MinecraftRconPort,
@@ -81,6 +83,9 @@ class MinecraftServerAdapter:
 
     def accept_eula(self, world_dir: str, operator_id: str | None = None) -> None:
         accept(world_dir, operator_id=operator_id)
+
+    def detect_java(self, path: str) -> JavaDetection | None:
+        return detect_java(path)
 
     def open_rcon(
         self, host: str, port: int, password: str, timeout_s: float = 5.0

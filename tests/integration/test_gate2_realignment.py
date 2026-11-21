@@ -299,6 +299,8 @@ def test_settings_api_resolves_and_edits_global_and_world_settings(store, clock)
     global_response = client.get("/api/settings")
     assert global_response.status_code == 200
     assert global_response.get_json()["data"]["settings"]["timezone"] == "UTC"
+    assert global_response.get_json()["data"]["settings"]["sync_global_concurrency_cap"] == 2
+    assert global_response.get_json()["data"]["settings"]["max_concurrent_world_starts"] == 3
     assert global_response.get_json()["data"]["version"] == 1
 
     invalid_global_patch = client.patch(
@@ -328,6 +330,73 @@ def test_settings_api_resolves_and_edits_global_and_world_settings(store, clock)
     global_audit_payload = json.loads(global_audit["payload"])
     assert global_audit_payload["before"]["timezone"] == "UTC"
     assert global_audit_payload["after"]["timezone"] == "Pacific/Auckland"
+
+    invalid_zero_cap_patch = client.patch(
+        "/api/settings",
+        json={"version": 2, "sync_global_concurrency_cap": 0},
+    )
+    assert invalid_zero_cap_patch.status_code == 400
+    invalid_cap_patch = client.patch(
+        "/api/settings",
+        json={"version": 2, "sync_global_concurrency_cap": True},
+    )
+    assert invalid_cap_patch.status_code == 400
+    valid_cap_patch = client.patch(
+        "/api/settings",
+        json={"version": 2, "sync_global_concurrency_cap": 1},
+    )
+    assert valid_cap_patch.status_code == 200
+    cap_response = valid_cap_patch.get_json()["data"]
+    assert cap_response["settings"]["sync_global_concurrency_cap"] == 1
+    assert cap_response["version"] == 3
+    cap_operation = cap_response["operation"]
+    assert cap_operation["op_type"] == OperationType.CONFIG_EDIT.value
+    cap_audit = store.reader().execute(
+        "SELECT payload FROM audit_records WHERE operation_id = ?",
+        (cap_operation["op_id"],),
+    ).fetchone()
+    assert cap_audit is not None
+    cap_audit_payload = json.loads(cap_audit["payload"])
+    assert cap_audit_payload["before"]["sync_global_concurrency_cap"] == 2
+    assert cap_audit_payload["after"]["sync_global_concurrency_cap"] == 1
+
+    invalid_start_limit_patch = client.patch(
+        "/api/settings",
+        json={"version": 3, "max_concurrent_world_starts": -1},
+    )
+    assert invalid_start_limit_patch.status_code == 400
+    invalid_start_limit_type = client.patch(
+        "/api/settings",
+        json={"version": 3, "max_concurrent_world_starts": True},
+    )
+    assert invalid_start_limit_type.status_code == 400
+    start_limit_patch = client.patch(
+        "/api/settings",
+        json={"version": 3, "max_concurrent_world_starts": 1},
+    )
+    assert start_limit_patch.status_code == 200
+    assert (
+        start_limit_patch.get_json()["data"]["settings"]["max_concurrent_world_starts"]
+        == 1
+    )
+    unlimited_start_patch = client.patch(
+        "/api/settings",
+        json={"version": 4, "max_concurrent_world_starts": None},
+    )
+    assert unlimited_start_patch.status_code == 200
+    assert (
+        unlimited_start_patch.get_json()["data"]["settings"]["max_concurrent_world_starts"]
+        is None
+    )
+    zero_start_limit_patch = client.patch(
+        "/api/settings",
+        json={"version": 5, "max_concurrent_world_starts": 0},
+    )
+    assert zero_start_limit_patch.status_code == 200
+    assert (
+        zero_start_limit_patch.get_json()["data"]["settings"]["max_concurrent_world_starts"]
+        == 0
+    )
 
     world_response = client.get("/api/worlds/world_1/settings")
     assert world_response.status_code == 200

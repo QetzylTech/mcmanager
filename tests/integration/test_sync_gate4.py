@@ -135,6 +135,16 @@ def test_sync_retry_timeline_and_attempt_history_are_write_once(store, clock, tm
         ]
         == before
     )
+    with pytest.raises(sqlite3.IntegrityError, match='strictly sequential'):
+        store.writer().execute(
+            """
+            INSERT INTO sync_attempts (
+                attempt_id, sync_id, attempt_number, started_at, finished_at,
+                outcome, error_message, created_at
+            ) VALUES (?, ?, 5, 1, 1, 'failed_permanent', 'gap', 1)
+            """,
+            ('sa_gap', sync_id),
+        )
 
 
 def test_daily_transfer_cap_stops_sync_without_touching_local_artifact(store, clock, tmp_path):
@@ -190,6 +200,60 @@ def test_global_sync_concurrency_cap_rejects_third_in_flight_transfer(
     service._release_transfer(1)
 
 
+def test_dispatch_sync_uses_global_concurrency_cap_override(store, clock, tmp_path):
+    artifact = _create_artifact(store, clock, tmp_path)
+    connection = store.writer()
+    connection.execute(
+        """
+        INSERT INTO global_settings (
+            settings_id, timezone, idle_countdown_seconds, notification_defaults,
+            minecraft_root_path, backup_root_path, log_root_path, offsite_sync_defaults,
+            version, updated_at, updated_by, sync_global_concurrency_cap
+        ) VALUES (
+            'global', 'UTC', NULL, NULL, 'C:/worlds', 'C:/backups', 'C:/logs',
+            NULL, 1, ?, 'gate4_user', 1
+        )
+        """,
+        (int(clock.now()),),
+    )
+    connection.commit()
+
+    transfer_started = threading.Event()
+    release_transfer = threading.Event()
+    transport_calls: list[str] = []
+
+    class BlockingTransport:
+        def upload_file(self, target_id, _source_path, _cancel_event=None) -> None:
+            transport_calls.append(target_id)
+            transfer_started.set()
+            if not release_transfer.wait(timeout=5):
+                raise AssertionError('test did not release the active transfer')
+
+    service = SyncService(store, BlockingTransport(), clock, sleeper=lambda _seconds: None)
+    service.DAILY_TRANSFER_CAP_BYTES = artifact.size_bytes * 10
+    dispatch_errors: list[BaseException] = []
+
+    def dispatch() -> None:
+        try:
+            service.dispatch_sync(artifact.artifact_id, 'configured-first')
+        except BaseException as exc:
+            dispatch_errors.append(exc)
+
+    worker = threading.Thread(target=dispatch)
+    worker.start()
+    assert transfer_started.wait(timeout=5)
+    try:
+        with pytest.raises(SyncError, match='SYNC_CONCURRENCY_CAP'):
+            service.dispatch_sync(artifact.artifact_id, 'configured-second')
+    finally:
+        release_transfer.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert dispatch_errors == []
+    assert transport_calls == ['configured-first']
+
+
 def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(store, clock, tmp_path):
     artifact = _create_artifact(store, clock, tmp_path)
     transfer_started = threading.Event()
@@ -227,6 +291,121 @@ def test_in_flight_sync_reservation_prevents_concurrent_cap_overshoot(store, clo
     assert errors == []
     assert transport_calls == [Path(artifact.storage_path)]
     assert service.get_bytes_transferred_today() == artifact.size_bytes
+
+
+def test_dispatch_sync_enforces_two_active_uploads_and_releases_slots(store, clock, tmp_path):
+    artifact = _create_artifact(store, clock, tmp_path)
+
+    class BlockingTransport:
+        def __init__(self) -> None:
+            self.lock = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+            self.calls: list[str] = []
+            self.gates: dict[str, tuple[threading.Event, threading.Event]] = {}
+
+        def block(self, target_id: str) -> tuple[threading.Event, threading.Event]:
+            gate = (threading.Event(), threading.Event())
+            self.gates[target_id] = gate
+            return gate
+
+        def upload_file(self, target_id, _source_path, _cancel_event=None) -> None:
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                self.calls.append(target_id)
+            gate = self.gates.get(target_id)
+            try:
+                if gate is not None:
+                    started, release = gate
+                    started.set()
+                    if not release.wait(timeout=5):
+                        raise AssertionError('test did not release the active transfer')
+                if target_id == 'permanent-failure':
+                    raise PermanentSyncTransportError('target configuration is invalid')
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    transport = BlockingTransport()
+    service = SyncService(store, transport, clock, sleeper=lambda _seconds: None)
+    service.DAILY_TRANSFER_CAP_BYTES = artifact.size_bytes * 10
+    dispatch_errors: list[BaseException] = []
+
+    def run_pair(target_ids: tuple[str, str]) -> None:
+        gates = [transport.block(target_id) for target_id in target_ids]
+        results: list[str] = []
+
+        def dispatch(target_id: str) -> None:
+            try:
+                results.append(service.dispatch_sync(artifact.artifact_id, target_id))
+            except BaseException as exc:
+                dispatch_errors.append(exc)
+
+        workers = [threading.Thread(target=dispatch, args=(target_id,)) for target_id in target_ids]
+        for worker in workers:
+            worker.start()
+        try:
+            started_signals = [started.wait(timeout=5) for started, _release in gates]
+        finally:
+            for _started, release in gates:
+                release.set()
+            for worker in workers:
+                worker.join(timeout=5)
+
+        assert all(not worker.is_alive() for worker in workers)
+        assert dispatch_errors == []
+        assert all(started_signals)
+        assert len(results) == 2
+
+    initial_targets = ('first-blocked', 'second-blocked')
+    gates = [transport.block(target_id) for target_id in initial_targets]
+    initial_errors: list[BaseException] = []
+
+    def dispatch_initial(target_id: str) -> None:
+        try:
+            service.dispatch_sync(artifact.artifact_id, target_id)
+        except BaseException as exc:
+            initial_errors.append(exc)
+
+    workers = [
+        threading.Thread(target=dispatch_initial, args=(target_id,))
+        for target_id in initial_targets
+    ]
+    for worker in workers:
+        worker.start()
+    try:
+        started_signals = [started.wait(timeout=5) for started, _release in gates]
+        if all(started_signals):
+            with transport.lock:
+                assert transport.active == SYNC_GLOBAL_CONCURRENCY_CAP == 2
+            assert service.get_bytes_transferred_today() < service.DAILY_TRANSFER_CAP_BYTES
+            with pytest.raises(SyncError, match='SYNC_CONCURRENCY_CAP'):
+                service.dispatch_sync(artifact.artifact_id, 'third-rejected')
+            assert 'third-rejected' not in transport.calls
+    finally:
+        for _started, release in gates:
+            release.set()
+        for worker in workers:
+            worker.join(timeout=5)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert initial_errors == []
+    assert all(started_signals)
+
+    run_pair(('after-success-one', 'after-success-two'))
+
+    failed_sync_id = service.dispatch_sync(artifact.artifact_id, 'permanent-failure')
+    failed_record = (
+        store.reader()
+        .execute('SELECT status FROM sync_records WHERE sync_id = ?', (failed_sync_id,))
+        .fetchone()
+    )
+    assert failed_record['status'] == SyncRecordStatus.FAILED.value
+
+    run_pair(('after-failure-one', 'after-failure-two'))
+    assert transport.max_active == SYNC_GLOBAL_CONCURRENCY_CAP
+    assert transport.active == 0
 
 
 def test_transport_failure_does_not_invalidate_local_backup(store, clock, tmp_path):

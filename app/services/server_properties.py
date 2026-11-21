@@ -14,6 +14,7 @@ from app.domain.value_objects import (
     OperationType,
     ServerType,
 )
+from app.ports.clock import Clock
 from app.ports.minecraft import (
     CORE_MANAGER_PROPERTIES,
     PropertyValidation,
@@ -22,10 +23,10 @@ from app.ports.minecraft import (
     validate_properties,
     validate_properties_file,
 )
-from app.ports.clock import Clock
 from app.ports.persistence import PersistencePort
 from app.services.configuration import ConfigurationConflictError, ConfigurationService
 from app.services.operations import OperationInput, OperationService
+from app.services.world_paths import resolve_world_directory
 
 
 class ManagedPropertyError(ValueError):
@@ -267,16 +268,12 @@ class ServerPropertiesService:
         return int(row["version"]) if row is not None else 0
 
     def _properties_path(self, world: dict[str, Any]) -> Path:
-        if world["addressing_strategy"] == "path":
-            candidate = Path(world["addressing_value"])
-            if candidate.is_absolute():
-                return candidate / "server.properties"
         try:
             settings = self._configuration.resolve_effective(world["world_id"])
         except KeyError:
             settings = {"minecraft_root_path": "worlds"}
         root = settings["minecraft_root_path"] or "worlds"
-        return Path(str(root)) / str(world["display_name"]) / "server.properties"
+        return resolve_world_directory(world, str(root)) / "server.properties"
 
     @staticmethod
     def _read_file(path: Path) -> dict[str, str]:

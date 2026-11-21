@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import time
@@ -219,6 +220,82 @@ def test_missed_runs_notifications_and_audit_routes(catalog_app):
     assert audit.status_code == 200
     audit_id = audit.json["data"]["audit"][0]["audit_id"]
     assert client.get(f"/api/audit/{audit_id}").status_code == 200
+
+
+def test_history_routes_validate_filters_pagination_and_missing_ids(catalog_app):
+    client, headers = _admin_client(catalog_app)
+
+    invalid_requests = (
+        ("/api/audit", {"limit": "invalid"}),
+        ("/api/audit", {"limit": "501"}),
+        ("/api/audit", {"offset": "-1"}),
+        ("/api/audit", {"from": "not-a-timestamp"}),
+        ("/api/audit", {"to": "not-a-timestamp"}),
+        ("/api/audit", {"sort": "payload"}),
+        ("/api/notifications", {"severity": "urgent"}),
+        ("/api/notifications", {"read": "sometimes"}),
+        ("/api/notifications", {"include_dismissed": "sometimes"}),
+        ("/api/notifications", {"limit": "invalid"}),
+    )
+    for path, query in invalid_requests:
+        response = client.get(path, query_string=query)
+        assert response.status_code == 400
+        assert response.json["error"]["code"] == "VALIDATION_ERROR"
+
+    filtered_audit = client.get(
+        "/api/audit",
+        query_string={
+            "actor_user_id": "missing-user",
+            "world_id": "missing-world",
+            "event_type": "missing-event",
+            "from": "1763596800",
+            "to": "2026-11-21T23:59:59Z",
+            "sort": "event_type,-actor_user_id,world_id,-created_at",
+            "limit": "2",
+            "offset": "0",
+        },
+    )
+    assert filtered_audit.status_code == 200
+    assert filtered_audit.json["meta"]["pagination"]["total"] == 0
+
+    assert client.get("/api/audit/missing-audit").status_code == 404
+    assert (
+        client.post("/api/notifications/missing-notification/read", headers=headers).status_code
+        == 404
+    )
+    assert (
+        client.post("/api/notifications/missing-notification/dismiss", headers=headers).status_code
+        == 404
+    )
+
+
+def test_document10_api_route_catalog_matches_registered_api_routes(catalog_app):
+    document = (
+        Path(__file__).resolve().parents[2] / "docs" / "Document_10_-_API_Contract.md"
+    ).read_text(encoding="utf-8")
+    def normalized_path(path: str) -> str:
+        path = re.sub(r"<(?:[^:<>]+:)?[^<>]+>", "{}", path)
+        return re.sub(r"\{[^{}]+\}", "{}", path)
+
+    documented = {
+        (method, normalized_path(path))
+        for method, path in re.findall(
+            r"^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`\s*\|",
+            document,
+            flags=re.MULTILINE,
+        )
+        if path.startswith("/api/")
+    }
+    registered = {
+        (method, normalized_path(rule.rule))
+        for rule in catalog_app.url_map.iter_rules()
+        if rule.rule.startswith("/api/")
+        for method in rule.methods & {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    }
+    assert documented == registered, (
+        f"undocumented API routes: {sorted(registered - documented)}; "
+        f"unregistered documented routes: {sorted(documented - registered)}"
+    )
 
 
 def test_admin_catalog_endpoints_enforce_superadmin_and_csrf(catalog_app):

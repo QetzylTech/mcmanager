@@ -23,6 +23,7 @@ from app.domain.value_objects import (
     WorldState,
 )
 from app.services.configuration import ConfigurationConflictError, VersionedUpdate
+from app.services.world_paths import allocate_world_directory, resolve_world_directory
 from app.web.errors import error, ok
 
 world_management_bp = Blueprint("api_world_management", __name__, url_prefix="/api")
@@ -53,15 +54,13 @@ def _world(world_id: str) -> dict[str, Any] | None:
 
 
 def _world_directory(world: dict[str, Any]) -> Path:
-    if world["addressing_strategy"] == "path":
-        candidate = Path(world["addressing_value"])
-        if candidate.is_absolute():
-            return candidate
     try:
         settings = _container().configuration.resolve_effective(world["world_id"])
     except KeyError:
-        return Path("worlds") / str(world["display_name"])
-    return Path(str(settings["minecraft_root_path"])) / str(world["display_name"])
+        root = "worlds"
+    else:
+        root = str(settings["minecraft_root_path"] or "worlds")
+    return resolve_world_directory(world, root)
 
 
 def _log_directory(world_id: str) -> Path:
@@ -259,15 +258,23 @@ def create_world() -> Any:
         "port": body["port"],
         "addressing_strategy": body["addressing_strategy"],
         "addressing_value": body["addressing_value"].strip(),
-        "state": WorldState.OFF.value,
+        "state": WorldState.EULA_REQUIRED.value,
         "pre_backup_state": None,
         "launch_args": launch_args,
+        "world_directory": "",
         "metadata_version": 1,
         "deleted_at": None,
         "deleted_by": None,
         "created_at": now,
         "updated_at": now,
     }
+    try:
+        settings = container.configuration.resolve_effective(world_id)
+    except KeyError:
+        root = "worlds"
+    else:
+        root = str(settings["minecraft_root_path"] or "worlds")
+    world["world_directory"] = str(allocate_world_directory(world, root))
     operation, replayed = container.worlds.enqueue_world_mutation(
         op_type=OperationType.CREATE_WORLD,
         world_id=None,
@@ -291,15 +298,19 @@ def update_world(world_id: str) -> Any:
         or body["version"] < 1
     ):
         return error("VALIDATION_ERROR", "A display name and metadata version are required.")
-    if _world(world_id) is None:
+    world = _world(world_id)
+    if world is None:
         return error("WORLD_NOT_FOUND", "World not found.")
+    fields = {"display_name": body["display_name"].strip()}
+    if not world.get("world_directory"):
+        fields["world_directory"] = str(_world_directory(world).resolve())
     try:
         _container().configuration.update_versioned(
             VersionedUpdate(
                 entity=ConfigEditEntity.WORLD_INSTANCES,
                 row_id=world_id,
                 expected_version=body["version"],
-                fields={"display_name": body["display_name"].strip()},
+                fields=fields,
                 actor_type=ActorType.USER,
                 actor_user_id=g.current_user_id,
             )

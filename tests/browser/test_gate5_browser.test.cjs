@@ -33,7 +33,13 @@ test('operator UI navigates all 17 modules without a document reload', async () 
   const reloads = [];
   const historyEntries = [];
   const documentListeners = new Map();
-  const root = { innerHTML: '', addEventListener() {} };
+  const rootListeners = new Map();
+  const root = {
+    innerHTML: '',
+    addEventListener(type, handler) {
+      rootListeners.set(type, handler);
+    },
+  };
   const main = { dataset: { activePage: 'home' } };
   const anchors = slugs.map((slug) => ({
     dataset: { page: slug },
@@ -76,7 +82,8 @@ test('operator UI navigates all 17 modules without a document reload', async () 
     addEventListener() {},
   };
   const genericData = {
-    worlds: [], templates: [], java_runtimes: [], schedules: [], settings: {}, version: 1,
+    worlds: [], templates: [], java_runtimes: [], schedules: [],
+    settings: { max_concurrent_world_starts: 3 }, version: 1,
     cleanup_runs: [], missed_runs: [], notifications: [], unread_count: 0, audit: [],
     sync_targets: [], sync_records: [], manager: {}, backups: [], restores: [], health: {},
     worlds_count: 0, active_worlds: 0,
@@ -94,11 +101,21 @@ test('operator UI navigates all 17 modules without a document reload', async () 
       },
     };
   };
+  class MockFormData {
+    constructor(form) {
+      this.form = form;
+    }
+
+    entries() {
+      return Object.entries(this.form.values)[Symbol.iterator]();
+    }
+  }
   vm.runInNewContext(source, {
     document,
     window,
     history,
     fetch,
+    FormData: MockFormData,
     URLSearchParams,
     setInterval: () => 1,
     clearInterval() {},
@@ -109,6 +126,7 @@ test('operator UI navigates all 17 modules without a document reload', async () 
 
   const clickHandler = documentListeners.get('click');
   const intercepted = [];
+  let settingsFormHtml = '';
   for (const anchor of anchors) {
     let prevented = false;
     await clickHandler({
@@ -123,6 +141,13 @@ test('operator UI navigates all 17 modules without a document reload', async () 
     });
     intercepted.push(prevented);
     await flush();
+    if (anchor.dataset.page === 'settings') {
+      assert.match(
+        root.innerHTML,
+        /name="max_concurrent_world_starts" type="number" value="3"/,
+      );
+      settingsFormHtml = root.innerHTML;
+    }
   }
 
   const pageRequests = requests.filter(({ url }) => url.startsWith('/api/pages/'));
@@ -131,6 +156,24 @@ test('operator UI navigates all 17 modules without a document reload', async () 
   assert.equal(historyEntries.length, 17);
   assert.deepEqual(reloads, []);
   assert.doesNotMatch(root.innerHTML, /error-surface/);
+
+  assert.notEqual(settingsFormHtml, '');
+  assert.match(settingsFormHtml, /set 0 or leave blank for unlimited starts/);
+  const submitHandler = rootListeners.get('submit');
+  for (const [value, expected] of [['0', 0], ['', null]]) {
+    requests.length = 0;
+    const form = {
+      dataset: { form: 'global-settings' },
+      values: { version: '1', max_concurrent_world_starts: value },
+      matches: () => false,
+    };
+    await submitHandler({
+      target: { closest: () => form },
+      preventDefault() {},
+    });
+    const patch = requests.find(({ url }) => url === '/api/settings');
+    assert.equal(JSON.parse(patch.options.body).max_concurrent_world_starts, expected);
+  }
 });
 
 test('legacy shell.js prototype intercepts navigation without a reload', async () => {

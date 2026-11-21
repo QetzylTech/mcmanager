@@ -49,6 +49,10 @@ def _backup_service(store, clock, coordinator=None) -> BackupService:
     )
 
 
+def _cleanup_service(store, clock) -> CleanupService:
+    return CleanupService(store, clock, filesystem=LocalFilesystem())
+
+
 class RecordingSaveCoordinator:
     def __init__(self, *, fail_flush: bool = False) -> None:
         self.calls: list[str] = []
@@ -96,11 +100,19 @@ def test_backup_zip_sha256_registers_only_after_success(store, clock, tmp_path):
         running=True,
     )
 
-    assert coordinator.calls == [f'save-off:{world_id}', f'save-all:{world_id}', f'save-on:{world_id}']
+    assert coordinator.calls == [
+        f'save-off:{world_id}',
+        f'save-all:{world_id}',
+        f'save-on:{world_id}',
+    ]
     assert len(result.checksum) == 64
     with zipfile.ZipFile(result.storage_path) as archive:
         assert archive.namelist() == ['level.dat']
-    row = store.reader().execute('SELECT * FROM backup_artifacts WHERE artifact_id = ?', (result.artifact_id,)).fetchone()
+    row = (
+        store.reader()
+        .execute('SELECT * FROM backup_artifacts WHERE artifact_id = ?', (result.artifact_id,))
+        .fetchone()
+    )
     assert row['checksum'] == result.checksum
     OperationService(store, clock).transition(op['op_id'], OperationStatus.COMPLETED)
 
@@ -115,7 +127,15 @@ def test_backup_zip_sha256_registers_only_after_success(store, clock, tmp_path):
             category=TriggerType.MANUAL,
             running=True,
         )
-    assert store.reader().execute('SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?', (failed_op['op_id'],)).fetchone()['n'] == 0
+    assert (
+        store.reader()
+        .execute(
+            'SELECT COUNT(*) AS n FROM backup_artifacts WHERE operation_id = ?',
+            (failed_op['op_id'],),
+        )
+        .fetchone()['n']
+        == 0
+    )
     assert not list((tmp_path / 'failed').glob('*.part'))
 
 
@@ -137,7 +157,13 @@ def test_backup_validation_flags_suspect_on_checksum_mismatch(store, clock, tmp_
 
     with pytest.raises(BackupIntegrityError):
         service.validate_artifact(result.artifact_id)
-    row = store.reader().execute('SELECT suspect FROM backup_artifacts WHERE artifact_id = ?', (result.artifact_id,)).fetchone()
+    row = (
+        store.reader()
+        .execute(
+            'SELECT suspect FROM backup_artifacts WHERE artifact_id = ?', (result.artifact_id,)
+        )
+        .fetchone()
+    )
     assert row['suspect'] == 1
 
 
@@ -176,11 +202,28 @@ def test_restore_failed_restart_rolls_back_to_pre_restore_backup(store, clock, t
 
     assert result.outcome == 'reverted'
     assert (world_dir / 'level.dat').read_text(encoding='utf-8') == 'old'
-    state = store.reader().execute('SELECT state FROM world_instances WHERE world_id = ?', (world_id,)).fetchone()
+    state = (
+        store.reader()
+        .execute('SELECT state FROM world_instances WHERE world_id = ?', (world_id,))
+        .fetchone()
+    )
     assert state['state'] == 'off'
-    original = store.reader().execute('SELECT outcome FROM restore_history WHERE restore_id = ?', (result.restore_id,)).fetchone()
-    rollback = store.reader().execute('SELECT rollback_of_restore_id FROM restore_history WHERE rollback_of_restore_id = ?', (result.restore_id,)).fetchone()
-    assert original['outcome'] == 'reverted'
+    original = (
+        store.reader()
+        .execute('SELECT outcome FROM restore_history WHERE restore_id = ?', (result.restore_id,))
+        .fetchone()
+    )
+    rollback = (
+        store.reader()
+        .execute(
+            'SELECT outcome, rollback_of_restore_id FROM restore_history '
+            'WHERE rollback_of_restore_id = ?',
+            (result.restore_id,),
+        )
+        .fetchone()
+    )
+    assert original['outcome'] == 'success'
+    assert rollback['outcome'] == 'reverted'
     assert rollback['rollback_of_restore_id'] == result.restore_id
 
 
@@ -198,10 +241,17 @@ def test_cleanup_enforces_age_count_and_last_viable_artifact(store, clock, tmp_p
                 suspect, operation_id, deleted_at, deleted_by, created_at
             ) VALUES (?, ?, 'manual', ?, 1, ?, 0, ?, NULL, NULL, ?)
             """,
-            (f'ba_{idx}', world_id, str(path), '0' * 64, op['op_id'], int(clock.now()) - (10 - idx) * 24 * 60 * 60),
+            (
+                f'ba_{idx}',
+                world_id,
+                str(path),
+                '0' * 64,
+                op['op_id'],
+                int(clock.now()) - (10 - idx) * 24 * 60 * 60,
+            ),
         )
     connection.commit()
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
 
     with pytest.raises(RetentionError):
         cleanup.backup_candidates(older_than_days=1)

@@ -6,7 +6,7 @@ import pytest
 
 from app import create_app
 from app.shell.routes import PAGE_MODULES
-from benchmarks.performance_acceptance import run as run_performance_acceptance
+from benchmarks import performance_acceptance
 
 
 def _app(tmp_path, migrations_dir, clock):
@@ -225,9 +225,21 @@ def test_sse_endpoints_emit_nonblank_snapshots(tmp_path, migrations_dir, clock):
         next(app_iter, None)
 
 
-def test_performance_acceptance_smoke(tmp_path):
-    result = run_performance_acceptance(
+def test_performance_acceptance_smoke(tmp_path, monkeypatch):
+    created_apps = []
+    create_app_function = performance_acceptance.create_app
+
+    def track_created_app(**kwargs):
+        app = create_app_function(**kwargs)
+        created_apps.append(app)
+        return app
+
+    monkeypatch.setattr(performance_acceptance, "create_app", track_created_app)
+    result = performance_acceptance.run(
         str(tmp_path / "perf.db"),
         str(tmp_path / "perf.key"),
     )
     assert result["passed"], result
+    assert len(created_apps) == 1
+    workers = created_apps[0].extensions["mcmanager_workers"]
+    assert all(not worker.is_alive() for worker in workers)

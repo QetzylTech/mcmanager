@@ -14,6 +14,7 @@ import app.bootstrap as bootstrap
 from app import create_app
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
 from app.services.backup import BackupResult
+from app.services.cleanup import RetentionError
 from app.services.operations import OperationInput
 from app.services.worlds import WorldsService
 from app.web.middleware import session_csrf_token
@@ -518,6 +519,25 @@ def test_backup_delete_enqueues_idempotent_cleanup_and_audits(backup_api_app, mo
     assert step_up_denied.status_code == 403
     assert step_up_denied.json["error"]["code"] == "STEP_UP_REQUIRED"
     monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    original_validate = container.cleanup.validate_backup_artifact_delete
+
+    def unsafe_validate(*_args, **_kwargs):
+        raise RetentionError("BACKUP_PATH_UNSAFE")
+
+    monkeypatch.setattr(
+        container.cleanup,
+        "validate_backup_artifact_delete",
+        unsafe_validate,
+    )
+    unsafe = admin.delete("/api/backups/retained_one", headers=headers)
+    assert unsafe.status_code == 409
+    assert unsafe.json["error"]["code"] == "BACKUP_PATH_UNSAFE"
+    monkeypatch.setattr(
+        container.cleanup,
+        "validate_backup_artifact_delete",
+        original_validate,
+    )
 
     blocked = admin.delete("/api/backups/retained_one", headers=headers)
     assert blocked.status_code == 409

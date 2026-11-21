@@ -35,7 +35,7 @@ Standard shape for all: authorize → validate preconditions → create Operatio
 
 | Operation Type | Preconditions | Domain Service | Terminal Success State |
 |---|---|---|---|
-| CreateWorld | valid Template, non-conflicting port/addressing, authorization | WorldService | new `world_instances` row, `state = off` |
+| CreateWorld | valid Template, non-conflicting port/addressing, authorization | WorldService | provisioned, world-ID-keyed directory and new `world_instances` row, `state = eula_required`; never accepts EULA implicitly |
 | Start | world `off`, storage guard passes, not in 10s cooldown, **EULA accepted** (Doc 14 §5 — `eula_required` rejects `EULA_NOT_ACCEPTED`, no Operation) | RuntimeService | `state = running`, new `runtime_sessions` row |
 | Stop | world != `off`, password verified | RuntimeService | `state = off`, `runtime_sessions.ended_at` set |
 | Kill | world `running`/`stopping` (escalation), password step-up + elevated confirmation | RuntimeService | same as Stop, `end_reason = forced_stop` |
@@ -52,14 +52,15 @@ Standard shape for all: authorize → validate preconditions → create Operatio
 ### 2.x Flows (compressed; diagram shape is uniform)
 
 - **Start:** POST /worlds/{id}/start → authz(start) → create Op(Queued) → dispatch → launch via platform adapter → checkpoint(starting) → wait readiness → checkpoint(running) + open RuntimeSession → audit(OpCompleted) → notify(WorldStarted).
+- **Concurrent starts:** the dispatcher runs independent worlds concurrently up to `global_settings.max_concurrent_world_starts` (default 3); `NULL` or `0` means unlimited. Additional Start Operations remain queued, and a failure on one world does not prevent other selected worlds from completing.
 - **Backup (running):** trigger → create Op → dispatch → storage guard → RCON pause autosave → capture archive → register BackupArtifact → RCON resume autosave → checkpoint(Completed) → audit.
 - **Restore:** create Op (password-verified) → dispatch → validate artifact integrity → **mandatory pre-restore backup** → stage extracted files → archive old world → switch server.properties → record restore_history → checkpoint(Completed | Failed[reverted]) → audit.
-- **Cleanup (wet):** require an exact completed preview → dispatch → evaluate candidates against the current CleanupPolicy and references → enforce the 500-target cap/elevated confirmation → stale backups are tombstoned under storage pressure, then purged only after the 3-day grace; eligible rotated logs may be removed under finite retention → checkpoint(Completed, summary in data_json) → audit. World directories and records are never selected.
+- **Cleanup (wet):** require an exact completed preview → dispatch → evaluate candidates against the current CleanupPolicy and references → enforce the 500-target cap/elevated confirmation → when a world's configured storage threshold is reached, directly delete the oldest floor(50% of its eligible stale backups); recalculate the batch on every run, with no tombstone or grace period. Eligible rotated logs may be removed under finite retention → checkpoint(Completed, summary in data_json) → audit. World directories and records are never selected.
 - **Sync (auto after backup):** register artifact → create Op(Sync, artifact_id) → dispatch → create sync_records(pending) → resolve SyncTarget → loop attempts: upload; insert immutable sync_attempts row (attempt_number+1) → update sync_records.status from latest attempt → checkpoint(Completed|Failed) → notify(SyncFailed) on terminal failure.
 - **Crash detection:** probe observes unexpected exit → create Op(CrashDetected, actor=system) → state=crashed, close RuntimeSession(end_reason=crashed) → audit → notify(WorldCrashed).
 - **ConfigEdit:** PATCH with version → authz → **compare submitted version vs current; stale → 409 CONFIG_VERSION_CONFLICT, no Operation** (Doc 9 §4) → create Op → apply write (deleted_at/revoked marker if applicable) → checkpoint(Completed) → audit with before/after diff in payload.
 - **Kill:** POST (step-up + elevated confirmation) → authz → create Op(Kill) — **atomically cancels in-flight Stop (`superseded_by_kill`), becomes sole in-flight op** → forced terminate via platform adapter (process group / job object) → checkpoint(Completed) + close RuntimeSession(forced_stop) → audit → notify.
-- **CreateWorld:** POST /api/worlds → authz(create_world) → create Op → dispatch → validate template + port/addressing uniqueness → provision directories + registry row (state=off) → checkpoint(Completed) → audit.
+- **CreateWorld:** POST /api/worlds → authz(create_world) → create Op → dispatch → validate template + port/addressing uniqueness → provision the stable world-ID (or explicit absolute custom) directory + registry row (`state=eula_required`, `world_directory` persisted) → checkpoint(Completed) → audit. The directory contains no accepted EULA; only the explicit audited EULA action may write `eula=true`.
 - **DeleteWorld:** POST (step-up + preview hash) → authz → precondition: state=off, no in-flight Backup/Restore/Cleanup → else 409, no Operation → create Op → tombstone world_instances, soft-delete schedules/cleanup_policies → remove world files → checkpoint(Completed) → audit → notify.
 
 ## 3 Query responsibilities
@@ -89,10 +90,12 @@ Ship as defaults in `global_settings`; globally overridable only where the table
 | Stop graceful deadline | **60s** | then escalate to Kill (escalation reuses Kill path — Doc 13 C10) |
 | Kill process-level deadline | **10s** | after forced signal, if tree not exited → supervisor re-asserts termination, marks `forced` on exit-classification |
 | Start cooldown | **10s** | duplicate-start guard (Doc 9 §6 "Start — Ignored") |
+| Concurrent world starts | **3 by default** | configurable through `global_settings.max_concurrent_world_starts`; `NULL` or `0` means unlimited |
 | Sync transient retries | **3 total attempts** | exp backoff waits 30s/60s between attempts; 3rd `failed_transient` → SyncRecord `failed` |
 | Sync per-attempt timeout | **120s** | configurable |
 | Sync outer overall bound | **30min** | total wall-clock for all attempts; configurable |
-| Sync global concurrency cap | **2 simultaneous transfers** | §7; configurable (Doc 10 `SYNC_CONCURRENCY_CAP`) |
+| Sync global concurrency cap | **2 simultaneous transfers** | §7; configurable via `global_settings.sync_global_concurrency_cap` (Doc 10 `/api/settings`) |
+| Sync daily transfer cap | **50 GiB** | global reserved/transferred-byte cap per UTC day; hitting it raises `SYNC_CAP_EXCEEDED`; implementation-tuned shipped value |
 | MetricsCadence | null / **15s** cache / **1Hz** stream | locked, not part of global settings |
 | Storage guard default reserve | **10 GB** absolute | + 10% free-space bound as overflow safety net (Doc 9 §1.2); configurable |
 | Step-up window | **10min** | Doc 6 §2.14; configurable |
@@ -104,8 +107,7 @@ Ship as defaults in `global_settings`; globally overridable only where the table
 | Scheduled backup cap | **3 artifacts per world** | enforced by a durable Cleanup Operation after scheduled backups; referenced artifacts may exceed the cap |
 | Stale-backup age floor | **3 days** | hard minimum; default 3 days |
 | Stale-backup session threshold | **7 completed runtime sessions** | counted for the same world after artifact creation |
-| Stale-backup storage trigger | **90% used** | tombstoning only; matured purge is not blocked by lower utilization |
-| Stale-backup tombstone grace | **3 days** | minimum delay before file and metadata purge |
+| Stale-backup storage trigger | **90% used** | each run deletes the oldest floor(50% of eligible stale backups) per pressured world; threshold configurable up to 90% |
 | Historical-log retention | **Unlimited** | only explicitly configured finite retention enables expired rotated-log deletion |
 | Password retry throttle | **5 failures** → lockout; lockout **15 min** | configurable via `global_settings` (Doc 6 §1.1) |
 | Session expiry | **7 days** inactivity; absolute max **30 days** | Doc 6 §2.14; configurable |

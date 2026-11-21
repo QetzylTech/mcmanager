@@ -17,8 +17,10 @@ from app.infrastructure.minecraft.properties_schema import (
     CORE_MANAGER_PROPERTIES,
     allowed_keys,
     is_valid_key,
+    is_valid_value,
     parse_properties,
     validate_properties,
+    validate_properties_file,
 )
 from app.infrastructure.minecraft.rcon import SAFE_COMMANDS, RconClient, RconError
 from app.infrastructure.minecraft.readiness import (
@@ -316,6 +318,47 @@ def test_validate_properties_rejects_bad_values(props, expected_error):
     )
     assert not result.valid
     assert any(expected_error in error for error in result.errors)
+
+
+def test_validate_properties_file_converts_schema_values_and_keeps_deprecation_hints():
+    result = validate_properties_file(
+        properties={
+            'max-players': '24',
+            'white-list': 'TRUE',
+            'enforce-whitelist': 'false',
+            'difficulty': 'hard',
+            'generator-settings': 'legacy',
+        },
+        server_type=ServerType.VANILLA,
+        mc_version='1.20',
+    )
+
+    assert result.valid
+    assert result.errors == []
+    assert result.deprecated_hints == [
+        'generator-settings: deprecated in 1.7 (replaced by level-seed)'
+    ]
+    assert is_valid_value('max-players', 24, ServerType.VANILLA, '1.21')
+    assert not is_valid_value('max-players', '24', ServerType.VANILLA, '1.21')
+
+
+def test_validate_properties_file_rejects_unparseable_and_unknown_values():
+    result = validate_properties_file(
+        properties={
+            'max-players': 'twenty',
+            'white-list': 'sometimes',
+            'unknown-key': 'value',
+        },
+        server_type=ServerType.VANILLA,
+        mc_version='1.21',
+    )
+
+    assert not result.valid
+    assert {error.split(':', 1)[0] for error in result.errors} == {
+        'max-players',
+        'white-list',
+        'unknown-key',
+    }
 
 
 def test_deprecated_property_preserved_with_hint():

@@ -11,9 +11,13 @@ import pytest
 from app.domain.value_objects import ActorType, OperationType, TriggerType
 from app.infrastructure.backup_engine import NativeBackupEngine
 from app.ports.filesystem import DiskUsage
+from app.ports.minecraft import MinecraftRconError
 from app.services.backup import BackupIntegrityError, BackupService
 from app.services.operations import OperationInput, OperationService
-from app.services.save_coordination import RconSaveCoordinator
+from app.services.save_coordination import (
+    RconSaveCoordinationError,
+    RconSaveCoordinator,
+)
 
 from .test_phase3_control_plane import _seed_world
 
@@ -347,3 +351,161 @@ def test_rcon_save_coordinator_uses_closed_save_command_sequence(monkeypatch):
     coordinator.resume_autosave('world')
 
     assert events == ['save-off', 'save-all', 'save-on']
+
+
+def test_rcon_save_coordinator_reads_open_session_and_closes_each_command_client():
+    row = {
+        'session_id': 'session-1',
+        'rcon_secret_id': 'secret-1',
+        'rcon_port': 25575,
+        'port_used': 25565,
+    }
+
+    class Store:
+        def reader(self):
+            return self
+
+        def execute(self, _query, parameters):
+            assert parameters == ('world-1',)
+            return self
+
+        def fetchone(self):
+            return row
+
+    class Secrets:
+        def read(self, secret_id):
+            assert secret_id == 'secret-1'
+            return 'rotated-password'
+
+    events: list[tuple[str, object]] = []
+
+    class Client:
+        def connect(self):
+            events.append(('connect', None))
+
+        def command(self, command):
+            events.append(('command', command))
+            return ''
+
+        def close(self):
+            events.append(('close', None))
+
+    def factory(host, port, password):
+        events.append(('factory', (host, port, password)))
+        return Client()
+
+    coordinator = RconSaveCoordinator(Store(), Secrets(), rcon_factory=factory)
+    coordinator.suspend_autosave('world-1')
+    coordinator.flush('world-1')
+    coordinator.resume_autosave('world-1')
+
+    assert events == [
+        ('factory', ('127.0.0.1', 25575, 'rotated-password')),
+        ('connect', None),
+        ('command', 'save-off'),
+        ('close', None),
+        ('factory', ('127.0.0.1', 25575, 'rotated-password')),
+        ('connect', None),
+        ('command', 'save-all'),
+        ('close', None),
+        ('factory', ('127.0.0.1', 25575, 'rotated-password')),
+        ('connect', None),
+        ('command', 'save-on'),
+        ('close', None),
+    ]
+
+
+@pytest.mark.parametrize(
+    ('session', 'secret_error', 'with_factory', 'message'),
+    (
+        (None, None, True, 'no open runtime session'),
+        ({'session_id': 'session-1', 'rcon_secret_id': 'secret-1', 'rcon_port': None}, None, True, 'rcon port missing'),
+        (
+            {'session_id': 'session-1', 'rcon_secret_id': 'secret-1', 'rcon_port': 25575},
+            RuntimeError('unavailable'),
+            True,
+            'rcon secret unreadable',
+        ),
+        (
+            {'session_id': 'session-1', 'rcon_secret_id': 'secret-1', 'rcon_port': 25575},
+            None,
+            False,
+            'factory must be injected',
+        ),
+    ),
+)
+def test_rcon_save_coordinator_reports_session_setup_failures(
+    session, secret_error, with_factory, message
+):
+    class Store:
+        def reader(self):
+            return self
+
+        def execute(self, _query, _parameters):
+            return self
+
+        def fetchone(self):
+            return session
+
+    class Secrets:
+        def read(self, _secret_id):
+            if secret_error is not None:
+                raise secret_error
+            return 'password'
+
+    factory = (lambda _host, _port, _password: None) if with_factory else None
+    coordinator = RconSaveCoordinator(Store(), Secrets(), rcon_factory=factory)
+
+    with pytest.raises(RconSaveCoordinationError, match=message):
+        coordinator.flush('world-1')
+
+
+@pytest.mark.parametrize(
+    'failure_at',
+    ('connect', 'suspend_autosave', 'flush', 'resume_autosave'),
+)
+def test_rcon_save_coordinator_closes_client_when_rcon_fails(failure_at):
+    row = {
+        'session_id': 'session-1',
+        'rcon_secret_id': 'secret-1',
+        'rcon_port': 25575,
+    }
+    events: list[str] = []
+
+    class Store:
+        def reader(self):
+            return self
+
+        def execute(self, _query, _parameters):
+            return self
+
+        def fetchone(self):
+            return row
+
+    class Secrets:
+        def read(self, _secret_id):
+            return 'password'
+
+    class Client:
+        def connect(self):
+            if failure_at == 'connect':
+                raise MinecraftRconError('connection refused')
+
+        def command(self, _command):
+            if failure_at != 'connect':
+                raise MinecraftRconError('command rejected')
+            return ''
+
+        def close(self):
+            events.append('close')
+
+    coordinator = RconSaveCoordinator(
+        Store(), Secrets(), rcon_factory=lambda _host, _port, _password: Client()
+    )
+
+    with pytest.raises(RconSaveCoordinationError):
+        getattr(coordinator, 'suspend_autosave' if failure_at == 'connect' else failure_at)(
+            'world-1'
+        )
+
+    assert events == ['close']

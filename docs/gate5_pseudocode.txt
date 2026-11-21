@@ -37,7 +37,7 @@ Focus: Flask REST Blueprints, CSRF Double-Submit, BroadcastChannel SSE Multi-Tab
 ================================================================================
 
 MODULE 1: HTTP API ROUTES & CSRF MIDDLEWARE GATEWAY
-File Scope: src/mcmanager/app/web/api/ & src/mcmanager/app/web/middleware.py
+File Scope: app/web/api/ & app/web/middleware.py
 
 ```python
 from flask import Blueprint, request, jsonify, g
@@ -97,7 +97,7 @@ def start_world_route(world_id: str):
 
 ================================================================================
 MODULE 2: BROADCASTCHANNEL SSE CLIENT & LEADER ELECTION
-File Scope: src/mcmanager/static/js/stream_client.js
+File Scope: app/shell/static/stream_client.js
 
 ```javascript
 /**
@@ -173,7 +173,7 @@ const streamManager = new StreamClientManager();
 
 ================================================================================
 MODULE 3: PERSISTENT WEB SHELL & UI COMPONENT GEOMETRY
-File Scope: src/mcmanager/templates/shell.html & src/mcmanager/static/css/tokens.css
+File Scope: app/shell/templates/shell.html & app/shell/static/shell.css
 
 ```html
 <!-- Persistent Single-Page Shell Layout (Doc 4 & Doc 5) -->

@@ -22,6 +22,8 @@ _GLOBAL_FIELDS = frozenset(
         "backup_root_path",
         "log_root_path",
         "offsite_sync_defaults",
+        "sync_global_concurrency_cap",
+        "max_concurrent_world_starts",
     }
 )
 _WORLD_FIELDS = {
@@ -55,6 +57,10 @@ def _request_update(fields: frozenset[str] | dict[str, str]) -> tuple[int, dict[
     world_override = isinstance(fields, dict)
     for key, value in values.items():
         if key == "idle_countdown_seconds":
+            valid = value is None or (type(value) is int and value >= 0)
+        elif key == "sync_global_concurrency_cap":
+            valid = type(value) is int and value > 0
+        elif key == "max_concurrent_world_starts":
             valid = value is None or (type(value) is int and value >= 0)
         elif key in _JSON_FIELDS:
             valid = value is None or isinstance(value, dict)
@@ -90,6 +96,8 @@ def get_global_settings() -> tuple[Response, int]:
                     "backup_root_path",
                     "log_root_path",
                     "offsite_sync_defaults",
+                    "sync_global_concurrency_cap",
+                    "max_concurrent_world_starts",
                 )
             },
             "version": settings["version"],
@@ -136,6 +144,8 @@ def update_global_settings() -> tuple[Response, int]:
                     "backup_root_path",
                     "log_root_path",
                     "offsite_sync_defaults",
+                    "sync_global_concurrency_cap",
+                    "max_concurrent_world_starts",
                 )
             },
             "version": settings["version"],

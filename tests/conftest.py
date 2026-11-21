@@ -8,6 +8,7 @@ exactly the production boot path (ARCHITECTURE section 9).
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -51,16 +52,15 @@ def clock() -> FakeClock:
 
 
 @pytest.fixture
-def store(database_path, migrations_dir) -> SqliteStore:
+def store(database_path, migrations_dir) -> Generator[SqliteStore, None, None]:
     """Raw store with migrations + boot FK sweep applied (schema tests)."""
     store = SqliteStore(database_path)
     store.open()
     try:
         run_migrations(store, migrations_dir)
-    except Exception:
+        yield store
+    finally:
         store.close()
-        raise
-    return store
 
 
 @pytest.fixture

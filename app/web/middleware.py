@@ -57,7 +57,6 @@ def _requires_step_up() -> bool:
         path.endswith("/stop")
         or path.endswith("/kill")
         or path.endswith("/eula/accept")
-        or path.endswith("/runtime-config")
         or path.endswith("/cleanup-policy")
         or path == "/api/supervisor/tick"
         or path == "/api/cleanup/policy"
@@ -233,7 +232,7 @@ def _permission_requirement(container: Any) -> tuple[str, str | None] | None:
         if suffix == "/settings":
             return ("world.settings.view" if method == "GET" else "world.settings.edit", world_id)
         if suffix == "/cleanup-policy":
-            return ("world.cleanup" if method == "GET" else "world.cleanup.manage", world_id)
+            return "world.cleanup", world_id
         if suffix == "/eula":
             return ("world.view", world_id) if method == "GET" else None
         if suffix == "/eula/accept" and method == "POST":
@@ -249,9 +248,19 @@ def _permission_requirement(container: Any) -> tuple[str, str | None] | None:
         if suffix == "/backups":
             return ("world.backup.view" if method == "GET" else "world.backup.create", world_id)
         if suffix == "/restores":
-            return ("world.restore.view" if method == "GET" else "world.restore", world_id)
+            return (
+                "world.restore.view"
+                if method == "GET"
+                else "world.restore.restore",
+                world_id,
+            )
         if suffix in {"/restores/rollback", "/cleanup-preview"}:
-            return ("world.restore" if suffix.endswith("rollback") else "world.cleanup", world_id)
+            return (
+                "world.restore.restore"
+                if suffix.endswith("rollback")
+                else "world.cleanup",
+                world_id,
+            )
 
     if path.startswith("/stream/worlds/") and world_id is not None:
         suffix = path[len(f"/stream/worlds/{world_id}") :].rstrip("/")

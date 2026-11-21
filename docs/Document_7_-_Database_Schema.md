@@ -31,13 +31,13 @@ Legend: type `TEXT` unless marked (`INT`, `JSON`). `PK` = primary key. `FK->t` =
 `manager_id` PK | `deployed_version` // commit ref | `setup_completed` INT | `created_at` | `updated_at`
 
 **2.2 global_settings** // T2, singleton; defaults inherited by any world without a `world_settings` override
-`settings_id` PK | `timezone` // IANA | `idle_countdown_seconds` INT | `notification_defaults` JSON | `minecraft_root_path` | `backup_root_path` | `log_root_path` | `offsite_sync_defaults` JSON // creds in secrets | `version` INT // Doc 9 §4 | `updated_at` | `updated_by` FK->users
+`settings_id` PK | `timezone` // IANA | `idle_countdown_seconds` INT NULL | `notification_defaults` JSON NULL | `minecraft_root_path` | `backup_root_path` | `log_root_path` | `offsite_sync_defaults` JSON NULL // creds in secrets | `sync_global_concurrency_cap` INT // positive; default 2 | `max_concurrent_world_starts` INT NULL // nonnegative; default 3, NULL or 0 = unlimited | `version` INT // Doc 9 §4 | `updated_at` | `updated_by` FK->users
 
 **2.3 schema_migrations**
 `version` INT PK sequential | `name` | `applied_at` INT
 
 **2.4 world_instances** // T2, tombstoned, never hard-deleted in practice per Doc 6
-`world_id` PK IMM // forever, even past deleted_at | `display_name` UNIQ_SOFT | `template_id` FK->templates | `server_type` // vanilla/forge/fabric/paper/... | `mc_version` | `java_runtime_id` FK->java_runtimes | `port` INT UNIQ_SOFT | `addressing_strategy` // subdomain/port/path | `addressing_value` | `state` // off/queued/starting/running/stopping/restoring/backing_up/crashed/error/eula_required (Doc 6 §5) | `pre_backup_state` NULL // only while state=backing_up | `launch_args` JSON // editable only while state=off: Doc 6 §4, Doc 9 §5 | `metadata_version` INT // Doc 9 §4, metadata fields only | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
+`world_id` PK IMM // forever, even past deleted_at | `display_name` UNIQ_SOFT | `template_id` FK->templates | `server_type` // vanilla/forge/fabric/paper/... | `mc_version` | `java_runtime_id` FK->java_runtimes | `port` INT UNIQ_SOFT | `addressing_strategy` // subdomain/port/path | `addressing_value` | `world_directory` TEXT NULL // persisted physical path; NULL only for legacy rows resolved by compatibility rules | `state` // off/queued/starting/running/stopping/restoring/backing_up/crashed/error/eula_required (Doc 6 §5) | `pre_backup_state` NULL // only while state=backing_up | `launch_args` JSON NULL // editable only while state=off: Doc 6 §4, Doc 9 §5 | `metadata_version` INT // Doc 9 §4, metadata fields only | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 
 **2.5 world_settings** // T2, 1:1 with world_instances; row exists only when a world overrides global_settings
@@ -48,7 +48,7 @@ IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 `template_id` PK | `name` UNIQ_SOFT | `category` // free-text, never a closed enum | `default_version` | `config_defaults` JSON // must include generic launch-command template; adapter launches by data | `source` // built_in/imported | `deprecated` INT // distinct from deleted_at: hidden from create, still referenced historically | `version` INT // Doc 9 §4 | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 
 **2.7 java_runtimes** // T2, soft-deprecated only, Doc 6 §2.11
-`runtime_id` PK | `label` UNIQ_SOFT | `executable_path` | `version_detected` | `status` // registered/verified/missing/deprecated | `version` INT // API optimistic lock | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
+`runtime_id` PK | `label` UNIQ_SOFT | `executable_path` | `version_detected` NULL | `status` // registered/verified/missing/deprecated | `version` INT // API optimistic lock | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 
 **2.8 runtime_sessions** // T2 in principle, practically permanent
 `session_id` PK | `world_id` FK->world_instances | `started_at` INT // set only at confirmed running (Doc 6 §2.2) | `ended_at` NULL | `end_reason` NULL // graceful_stop/forced_stop/crashed/emergency_stop/reconciled_missing | `rcon_secret_id` FK->secrets | `rcon_port` INT NULL // persisted RCON control port for restart/save coordination | `port_used` INT | `java_runtime_id` FK->java_runtimes // historical, not necessarily current | `launch_args_snapshot` JSON // captured at launch; independent of later edits | `created_at`
@@ -60,7 +60,7 @@ IDX: `(world_id, status)` — REQUIRED, backs the derived world lock (Doc 9 §1.
 RULE: progress `checkpoint` payloads are held in OperationService memory and sent over SSE. Persist this row only at initial creation, transition to `Running`, and terminal exit; the persisted terminal row carries the final checkpoint/message.
 
 **2.10 backup_artifacts** // T2, created-on-success-only, Doc 6 §2.5
-`artifact_id` PK | `world_id` NULL FK->world_instances // NULL = ManagerBackup (manager DB/settings/templates/permissions) | `category` // session_end/manual/scheduled/pre_restore/emergency/manager_config | `storage_path` | `size_bytes` INT | `checksum` // SHA-256 over full artifact (Doc 14 §11) | `suspect` INT // 0/1; set when a restore fails structural validation — surfaced, never auto-deleted (Doc 14 §11) | `operation_id` FK->operations // producing Backup op | `deleted_at` NULL // direct delete removes file; stale tombstone retains file for grace | `deleted_by` NULL | `stale_tombstoned_at` NULL // delayed stale-backup purge marker | `created_at`
+`artifact_id` PK | `world_id` NULL FK->world_instances // NULL = ManagerBackup (manager DB/settings/templates/permissions) | `category` // session_end/manual/scheduled/pre_restore/emergency/manager_config | `storage_path` | `size_bytes` INT | `checksum` // SHA-256 over full artifact (Doc 14 §11) | `suspect` INT // 0/1; set when a restore fails structural validation — surfaced, never auto-deleted (Doc 14 §11) | `operation_id` FK->operations // producing Backup op | `deleted_at` NULL // direct delete removes file; stale cleanup hard-deletes the row and file | `deleted_by` NULL | `stale_tombstoned_at` NULL // legacy marker for pre-policy-change stale tombstones; new cleanup never sets it | `created_at`
 IDX: `(world_id, category, created_at)` — shape retention keep-newest-N-per-category needs
 
 **2.11 restore_history** // T2, immutable append-only outcome record
@@ -73,12 +73,18 @@ IDX: `(world_id, category, created_at)` — shape retention keep-newest-N-per-ca
 `missed_run_id` PK | `schedule_id` // plain value, NOT an FK (snapshot rationale §0) | `schedule_name_snapshot` | `schedule_type_snapshot` | `expected_run_at` | `detected_at` | `resolution` // pending/resolved/ignored | `resolution_at` NULL | `resolution_by` NULL // user_id, plain value, not an FK (must outlive referenced user) | `created_at`
 
 **2.14 cleanup_policies** // T2, Doc 6 §2.7
-`policy_id` PK | `scope` // global/world | `world_id` NULL FK->world_instances | `age_rule_days` INT // floor 3, app-enforced | `space_rule_pct` INT NULL // default 90%, max 90 | `count_rules` JSON // per-category retention floors, each >= 3 | `stale_session_threshold` INT // default 7 completed sessions | `log_retention_days` INT NULL // NULL means unlimited; minimum 3 | `schedule_id` NULL FK->schedules | `version` INT // Doc 9 §4 | `last_changed_by` FK->users | `last_changed_at` | `deleted_at` NULL | `deleted_by` NULL | `created_at`
+`policy_id` PK | `scope` // global/world | `world_id` NULL FK->world_instances | `age_rule_days` INT // floor 3, app-enforced | `space_rule_pct` INT NULL // default 90%, max 90 | `count_rules` JSON NULL // per-category retention floors, each >= 3 | `stale_session_threshold` INT // default 7 completed sessions | `log_retention_days` INT NULL // NULL means unlimited; minimum 3 | `schedule_id` NULL FK->schedules | `version` INT // Doc 9 §4 | `last_changed_by` FK->users | `last_changed_at` | `deleted_at` NULL | `deleted_by` NULL | `created_at`
 
-Migration 005 adds `stale_session_threshold`, `log_retention_days`, and
-`backup_artifacts.stale_tombstoned_at` with a partial index. The dedicated
-tombstone timestamp distinguishes delayed stale-backup purge from direct
-backup deletion.
+Migration 005 adds `stale_session_threshold`, `log_retention_days`, and the
+legacy `backup_artifacts.stale_tombstoned_at` marker with a partial index.
+Existing markers remain readable so eligible legacy tombstones can be directly
+deleted under the current pressure and 50%-batch rules; new cleanup runs do not
+set the marker.
+
+Migration 008 adds the persisted world directory and configurable concurrent
+start limit. New worlds use an immutable world-ID directory (unless an absolute
+custom path is explicitly selected); legacy rows retain their existing
+display-name/path resolution until a rename persists that path.
 
 **2.15 notifications** // T1 — permanent, Doc 6 §2.8
 `notification_id` PK | `category` | `severity` // critical/high/normal/informational — dropdown ordering (Doc 5) | `message` | `related_operation_id` NULL FK->operations | `related_world_id` NULL FK->world_instances | `requires_action` INT | `action_taken` NULL | `created_at`
@@ -128,7 +134,7 @@ CHECK: `(role_id IS NOT NULL) != (user_id IS NOT NULL)` // dual-ownership, exact
 IDX: `(artifact_id)` — has-this-backup-been-synced; `(status)` — failed-sync surfacing
 
 **2.27 sync_attempts** // T1 — permanent, no deleted_at; actual retry history, Doc 6 §2.17.2
-`attempt_id` PK | `sync_id` FK->sync_records | `attempt_number` INT // strictly sequential per sync_id, from 1, no gaps | `started_at` | `finished_at` | `outcome` // succeeded/failed_transient/failed_permanent | `error_message` NULL // NULL on success | `created_at`
+`attempt_id` PK | `sync_id` FK->sync_records | `attempt_number` INT // strictly sequential per sync_id, from 1, no gaps | `started_at` | `finished_at` NULL | `outcome` // succeeded/failed_transient/failed_permanent | `error_message` NULL // NULL on success | `created_at`
 CONSTRAINT: UNIQUE `(sync_id, attempt_number)`
 RULE: every column write-once; no UPDATE ever — a new attempt is a new row (append-only like audit_records)
 
@@ -186,7 +192,7 @@ Worlds in `eula_required` are never probed — no session can be open while `eul
 ## 9 Performance considerations
 
 - Indexes target needed query patterns: active-world lists, per-world operation history, retention evaluation by category, audit filtering by actor/world/time.
-- `operations` + `audit_records` write volume is reduced about 75–80%: operations persist only at creation, `Running`, and terminal exit; audit rows are terminal-only (plus security/auth and ConfigEdit events). Intermediate checkpoints stream from memory, avoiding write amplification and single-writer contention.
+- `operations` + `audit_records` write volume is reduced about 75–80%: operations persist only at creation, `Running`, and terminal exit; audit rows are terminal-only (plus security/auth and ConfigEdit events). Intermediate checkpoints stream from memory, avoiding write amplification.
 - `runtime_sessions` partial unique index (`world_id WHERE ended_at IS NULL`) is the constraint doing real concurrency enforcement — prevents two simultaneous starts producing two open sessions, not just application locking.
 
 ## 10 SQLite operational contract (normative)
@@ -195,10 +201,10 @@ Implementation requirements, not options (ARCHITECTURE §16 ruling 16; Doc 14 §
 
 - **WAL mode** on primary pool: `PRAGMA journal_mode = WAL` at boot before any write; WAL files beside the DB.
 - **Busy timeout**: every connection sets `PRAGMA busy_timeout` (default 5s) before use — `SQLITE_BUSY` resolved by waiting, not failing fast. Surpassed timeouts raise a mapped error, never a raw 500.
-- **Connection split**: one read-write writer connection (serialized writes; long transactions allowed only on it) + pool of read-only connections. Readers never take the write lock; writer is the single serialization point for multi-statement transactions (e.g. Operation creation + audit insert + event).
+- **Connection split**: one thread-local read-write connection per worker thread + pool of read-only connections. SQLite serializes write transactions across connections; a transaction's statements stay on its owning connection and cannot interleave with another thread's transaction.
 - **Transaction boundaries**: every multi-table state change (Operation create/terminal + audit row + notification/event) runs in a single explicit transaction on the writer. No implicit per-statement commits across a logical unit.
 - **Checkpoint policy**: automatic WAL checkpoint at boot after reconciliation; `wal_checkpoint(TRUNCATE)` after large write bursts (e.g. cleanup run) — bounded work, never a background thread hammering the file.
-- **`SQLITE_BUSY` handling**: with busy_timeout + single writer, residual `SQLITE_BUSY` = genuine long transaction in flight; retry once after a short settle, then surface as mapped error with the op recorded `Failed` — never silently dropped.
+- **`SQLITE_BUSY` handling**: with busy_timeout + SQLite's serialized writes, residual `SQLITE_BUSY` = genuine long transaction in flight; retry once after a short settle, then surface as mapped error with the op recorded `Failed` — never silently dropped.
 - **Long-running backup/cleanup transactions**: staged, never held open. Backup engine writes artifact in chunks, opens a short transaction only to register the `backup_artifacts` row; cleanup deletes rows in bounded batches, each its own short transaction.
 - **ManagerBackup**: via **SQLite's online backup API** (`sqlite3.Connection.backup()`) — consistent snapshot of a live database, **never a plain file copy** of a `.db` (ARCHITECTURE §16 ruling 16, Doc 14 §11). Snapshot then enveloped in standard ZIP + SHA-256 artifact.
 - **Secrets at rest** (ARCHITECTURE §16 ruling 14): all `secrets.encrypted_value` rows are ciphertext. Encryption key lives in a **server-side keyfile outside the database** (never a table), provisioned at first setup; keyfile loss = documented unrecoverable secret loss. Key rotation re-encrypts rows with a new key version.

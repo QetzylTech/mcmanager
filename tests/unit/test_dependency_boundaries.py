@@ -80,6 +80,20 @@ def test_server_properties_service_uses_minecraft_port():
     assert 'app.ports.minecraft' in imported_modules
 
 
+def test_java_catalog_route_uses_minecraft_port_not_infrastructure():
+    source_path = REPOSITORY_ROOT / 'app' / 'web' / 'api' / 'catalogs.py'
+    imported_modules = _imported_modules(source_path.read_text(encoding='utf-8'))
+    forbidden = {
+        module
+        for module in imported_modules
+        if module == 'app.infrastructure'
+        or module.startswith('app.infrastructure.')
+        or module == 'app.platform'
+        or module.startswith('app.platform.')
+    }
+    assert not forbidden, f'{source_path.name}: {forbidden}'
+
+
 def test_sqlite_store_implements_persistence_port_and_services_accept_it():
     assert isinstance(SqliteStore.__new__(SqliteStore), PersistencePort)
     for service in PERSISTENCE_PORT_SERVICES:

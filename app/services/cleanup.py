@@ -15,10 +15,8 @@ from app.domain.tuning import (
     CLEANUP_COUNT_FLOOR,
     CLEANUP_STALE_SESSION_DEFAULT,
     CLEANUP_STORAGE_THRESHOLD_DEFAULT_PCT,
-    CLEANUP_TOMBSTONE_GRACE_DAYS,
 )
 from app.domain.value_objects import OperationStatus
-from app.infrastructure.filesystem import LocalFilesystem
 from app.ports.clock import Clock
 from app.ports.filesystem import FilesystemPort
 from app.ports.persistence import PersistencePort
@@ -29,6 +27,7 @@ from app.services.operations import OperationService
 DAY = 24 * 60 * 60
 STALE_BACKUP_CATEGORIES = frozenset({'session_end', 'manual', 'emergency', 'pre_restore'})
 SCHEDULED_BACKUP_CAP = 3
+STALE_BACKUP_AUTO_DELETE_PERCENT = 50
 IN_FLIGHT_CLEANUP_CONFLICTS = (
     'Backup',
     'Cleanup',
@@ -68,14 +67,15 @@ class CleanupService:
         clock: Clock,
         operations: OperationService | None = None,
         configuration: ConfigurationService | None = None,
-        filesystem: FilesystemPort | None = None,
         audit: AuditService | None = None,
+        *,
+        filesystem: FilesystemPort,
     ) -> None:
         self._store = store
         self._clock = clock
         self._operations = operations or OperationService(store, clock)
         self._configuration = configuration or ConfigurationService(store, clock)
-        self._filesystem = filesystem or LocalFilesystem()
+        self._filesystem = filesystem
         self._audit = audit or AuditService(store, clock)
         self._previews: dict[tuple[str | None, str], str] = {}
 
@@ -254,7 +254,7 @@ class CleanupService:
         world_id: str | None,
         operation_id: str,
     ) -> tuple[list[CleanupCandidate], dict[str, dict[str, Any]]]:
-        """Find policy-eligible backup artifacts only when their volume is pressured."""
+        """Select half of each pressured world's eligible stale backups, oldest first."""
         candidates: list[CleanupCandidate] = []
         pressure_by_world: dict[str, dict[str, Any]] = {}
         now = int(self._clock.now())
@@ -263,9 +263,7 @@ class CleanupService:
             policy = self.cleanup_policy(candidate_world_id)
             pressure = self._pressure(candidate_world_id, policy['space_rule_pct'])
             pressure_by_world[candidate_world_id] = pressure
-            if not pressure['triggered'] or self._world_has_in_flight_operation(
-                reader, candidate_world_id, operation_id
-            ):
+            if self._world_has_in_flight_operation(reader, candidate_world_id, operation_id):
                 continue
             rows = reader.execute(
                 """
@@ -275,8 +273,10 @@ class CleanupService:
                            AS sessions_since
                 FROM backup_artifacts b
                 WHERE b.world_id = ?
-                  AND b.deleted_at IS NULL
-                  AND b.stale_tombstoned_at IS NULL
+                  AND (
+                      b.deleted_at IS NULL
+                      OR (b.deleted_by = 'system' AND b.stale_tombstoned_at IS NOT NULL)
+                  )
                   AND b.suspect = 0
                   AND b.category IN ('session_end', 'manual', 'emergency', 'pre_restore')
                 ORDER BY b.category, b.created_at DESC, b.artifact_id DESC
@@ -284,10 +284,15 @@ class CleanupService:
                 (candidate_world_id,),
             ).fetchall()
             groups: dict[str, list[Any]] = defaultdict(list)
+            legacy_tombstones: list[Any] = []
             for row in rows:
-                groups[str(row['category'])].append(row)
+                if row['stale_tombstoned_at'] is not None:
+                    legacy_tombstones.append(row)
+                else:
+                    groups[str(row['category'])].append(row)
             cutoff = now - policy['age_rule_days'] * DAY
             count_rules = policy['count_rules']
+            eligible: list[CleanupCandidate] = []
             for category, artifacts in groups.items():
                 keep_count = count_rules.get(category, CLEANUP_COUNT_FLOOR)
                 if type(keep_count) is not int or keep_count < CLEANUP_COUNT_FLOOR:
@@ -303,7 +308,7 @@ class CleanupService:
                     ):
                         continue
                     path = self._require_backup_path(candidate_world_id, str(row['storage_path']))
-                    candidates.append(
+                    eligible.append(
                         CleanupCandidate(
                             artifact_id=artifact_id,
                             storage_path=str(path),
@@ -313,51 +318,30 @@ class CleanupService:
                             sessions_since=int(row['sessions_since']),
                         )
                     )
-        candidates.sort(key=lambda candidate: (candidate.world_id or '', candidate.created_at))
-        return candidates, pressure_by_world
-
-    def stale_tombstone_candidates(
-        self, *, world_id: str | None, operation_id: str
-    ) -> list[CleanupCandidate]:
-        """Find tombstoned backup artifacts whose grace period has elapsed."""
-        cutoff = int(self._clock.now()) - CLEANUP_TOMBSTONE_GRACE_DAYS * DAY
-        rows = (
-            self._store.reader()
-            .execute(
-                """
-            SELECT artifact_id, world_id, category, storage_path, created_at,
-                   stale_tombstoned_at
-            FROM backup_artifacts
-            WHERE stale_tombstoned_at IS NOT NULL
-              AND deleted_at IS NOT NULL
-              AND stale_tombstoned_at <= ?
-              AND world_id IS NOT NULL
-              AND category IN ('session_end', 'manual', 'emergency', 'pre_restore')
-              AND (? IS NULL OR world_id = ?)
-            ORDER BY stale_tombstoned_at, artifact_id
-            """,
-                (cutoff, world_id, world_id),
-            )
-            .fetchall()
-        )
-        candidates: list[CleanupCandidate] = []
-        for row in rows:
-            candidate_world_id = str(row['world_id'])
-            if self._world_has_in_flight_operation(
-                self._store.reader(), candidate_world_id, operation_id
-            ) or self._artifact_is_referenced(self._store.reader(), str(row['artifact_id'])):
-                continue
-            path = self._require_backup_path(candidate_world_id, str(row['storage_path']))
-            candidates.append(
-                CleanupCandidate(
-                    artifact_id=str(row['artifact_id']),
-                    storage_path=str(path),
-                    world_id=candidate_world_id,
-                    category=str(row['category']),
-                    created_at=int(row['created_at']),
+            for row in legacy_tombstones:
+                artifact_id = str(row['artifact_id'])
+                if (
+                    int(row['created_at']) > cutoff
+                    or int(row['sessions_since']) < policy['stale_session_threshold']
+                    or self._artifact_is_referenced(reader, artifact_id)
+                ):
+                    continue
+                path = self._require_backup_path(candidate_world_id, str(row['storage_path']))
+                eligible.append(
+                    CleanupCandidate(
+                        artifact_id=artifact_id,
+                        storage_path=str(path),
+                        world_id=candidate_world_id,
+                        category=str(row['category']),
+                        created_at=int(row['created_at']),
+                        sessions_since=int(row['sessions_since']),
+                    )
                 )
-            )
-        return candidates
+            eligible.sort(key=lambda candidate: (candidate.created_at, candidate.artifact_id))
+            if pressure['triggered']:
+                delete_count = len(eligible) * STALE_BACKUP_AUTO_DELETE_PERCENT // 100
+                candidates.extend(eligible[:delete_count])
+        return candidates, pressure_by_world
 
     def log_candidates(self, *, world_id: str | None, operation_id: str) -> list[LogCandidate]:
         """Find expired files for closed, normal runtime sessions only."""
@@ -619,13 +603,11 @@ class CleanupService:
 
     def _plan(self, *, scope: str, world_id: str | None, operation_id: str) -> dict[str, Any]:
         if scope == 'stale_backups':
-            tombstone, pressure = self.stale_backup_candidates(
+            delete, pressure = self.stale_backup_candidates(
                 world_id=world_id, operation_id=operation_id
             )
-            purge = self.stale_tombstone_candidates(world_id=world_id, operation_id=operation_id)
             return {
-                'tombstone': tombstone,
-                'purge': purge,
+                'delete': delete,
                 'pressure': pressure,
                 'policies': {
                     item_world_id: self.cleanup_policy(item_world_id)['version']
@@ -663,8 +645,7 @@ class CleanupService:
         if scope == 'stale_backups':
             snapshot.update(
                 {
-                    'tombstone': [artifact_data(item) for item in plan['tombstone']],
-                    'purge': [artifact_data(item) for item in plan['purge']],
+                    'delete': [artifact_data(item) for item in plan['delete']],
                     'pressure': {
                         item_world_id: {
                             'threshold_pct': pressure['threshold_pct'],
@@ -687,7 +668,7 @@ class CleanupService:
         canonical = json.dumps(snapshot, sort_keys=True, separators=(',', ':'))
         return sha256(canonical.encode('utf-8')).hexdigest()
 
-    def _tombstone_stale_backups(
+    def _delete_stale_backups(
         self, candidates: list[CleanupCandidate], *, operation_id: str
     ) -> list[str]:
         if not candidates:
@@ -697,19 +678,25 @@ class CleanupService:
         try:
             current, _ = self.stale_backup_candidates(world_id=None, operation_id=operation_id)
             current_by_id = {candidate.artifact_id: candidate for candidate in current}
-            applied: list[str] = []
-            now = int(self._clock.now())
+            deleted: list[str] = []
             for candidate in candidates:
                 latest = current_by_id.get(candidate.artifact_id)
                 if latest != candidate:
                     raise RetentionError('CLEANUP_PREVIEW_REQUIRED_OR_STALE')
+                if candidate.world_id is None:
+                    raise RetentionError('BACKUP_PATH_UNSAFE')
+                path = self._require_backup_path(candidate.world_id, candidate.storage_path)
+                path.unlink(missing_ok=True)
                 cursor = connection.execute(
                     """
-                    UPDATE backup_artifacts
-                    SET deleted_at = ?, deleted_by = 'system', stale_tombstoned_at = ?
-                    WHERE artifact_id = ? AND deleted_at IS NULL
-                      AND stale_tombstoned_at IS NULL
+                    DELETE FROM backup_artifacts
+                    WHERE artifact_id = ? AND world_id = ?
                       AND category IN ('session_end', 'manual', 'emergency', 'pre_restore')
+                      AND suspect = 0
+                      AND (
+                          deleted_at IS NULL
+                          OR (deleted_by = 'system' AND stale_tombstoned_at IS NOT NULL)
+                      )
                       AND NOT EXISTS (
                           SELECT 1 FROM restore_history
                           WHERE source_artifact_id = backup_artifacts.artifact_id
@@ -720,12 +707,12 @@ class CleanupService:
                           WHERE artifact_id = backup_artifacts.artifact_id
                       )
                     """,
-                    (now, now, candidate.artifact_id),
+                    (candidate.artifact_id, candidate.world_id),
                 )
                 if cursor.rowcount != 1:
                     raise RetentionError('CLEANUP_PREVIEW_REQUIRED_OR_STALE')
                 self._audit.write(
-                    event_type='cleanup.backup_stale_tombstoned',
+                    event_type='cleanup.backup_stale_deleted',
                     actor=self._audit.system(),
                     operation_id=operation_id,
                     world_id=candidate.world_id,
@@ -736,69 +723,9 @@ class CleanupService:
                     },
                     connection=connection,
                 )
-                applied.append(candidate.artifact_id)
+                deleted.append(candidate.artifact_id)
             connection.commit()
-            return applied
-        except Exception:
-            connection.rollback()
-            raise
-
-    def _purge_stale_backups(
-        self, candidates: list[CleanupCandidate], *, operation_id: str
-    ) -> list[str]:
-        if not candidates:
-            return []
-        connection = self._store.writer()
-        connection.execute('BEGIN IMMEDIATE')
-        try:
-            current = self.stale_tombstone_candidates(world_id=None, operation_id=operation_id)
-            current_by_id = {candidate.artifact_id: candidate for candidate in current}
-            purged: list[str] = []
-            for candidate in candidates:
-                if current_by_id.get(candidate.artifact_id) != candidate:
-                    raise RetentionError('CLEANUP_PREVIEW_REQUIRED_OR_STALE')
-                if candidate.world_id is None:
-                    raise RetentionError('BACKUP_PATH_UNSAFE')
-                if self._artifact_is_referenced(connection, candidate.artifact_id):
-                    raise RetentionError('BACKUP_RETENTION_GUARD')
-                path = self._require_backup_path(candidate.world_id, candidate.storage_path)
-                path.unlink(missing_ok=True)
-                cursor = connection.execute(
-                    """
-                    DELETE FROM backup_artifacts
-                    WHERE artifact_id = ? AND stale_tombstoned_at IS NOT NULL
-                      AND stale_tombstoned_at <= ?
-                      AND NOT EXISTS (
-                          SELECT 1 FROM restore_history
-                          WHERE source_artifact_id = backup_artifacts.artifact_id
-                             OR pre_restore_artifact_id = backup_artifacts.artifact_id
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM sync_records
-                          WHERE artifact_id = backup_artifacts.artifact_id
-                      )
-                    """,
-                    (
-                        candidate.artifact_id,
-                        int(self._clock.now()) - CLEANUP_TOMBSTONE_GRACE_DAYS * DAY,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise RetentionError('CLEANUP_PREVIEW_REQUIRED_OR_STALE')
-                self._audit.write(
-                    event_type='cleanup.backup_hard_deleted',
-                    actor=self._audit.system(),
-                    operation_id=operation_id,
-                    world_id=candidate.world_id,
-                    payload={
-                        'artifact_id': candidate.artifact_id,
-                        'category': candidate.category,
-                    },
-                    connection=connection,
-                )
-                purged.append(candidate.artifact_id)
-            connection.commit()
-            return purged
+            return deleted
         except Exception:
             connection.rollback()
             raise
@@ -866,18 +793,13 @@ class CleanupService:
         if scheduled_policy is None or scheduled_policy['world_id'] != world_id:
             raise RetentionError('CLEANUP_SCHEDULE_UNRESOLVED')
 
-        tombstone_candidates, pressure = self.stale_backup_candidates(
-            world_id=world_id, operation_id=operation_id
-        )
-        purge_candidates = self.stale_tombstone_candidates(
+        delete_candidates, pressure = self.stale_backup_candidates(
             world_id=world_id, operation_id=operation_id
         )
         log_candidates = self.log_candidates(world_id=world_id, operation_id=operation_id)
-        tombstone_candidates = tombstone_candidates[:CLEANUP_BLAST_RADIUS_CAP]
-        purge_candidates = purge_candidates[:CLEANUP_BLAST_RADIUS_CAP]
+        delete_candidates = delete_candidates[:CLEANUP_BLAST_RADIUS_CAP]
         log_candidates = log_candidates[:CLEANUP_BLAST_RADIUS_CAP]
-        tombstoned = self._tombstone_stale_backups(tombstone_candidates, operation_id=operation_id)
-        purged = self._purge_stale_backups(purge_candidates, operation_id=operation_id)
+        deleted = self._delete_stale_backups(delete_candidates, operation_id=operation_id)
         deleted_logs = self._delete_expired_logs(
             log_candidates, operation_id=operation_id, world_id=world_id
         )
@@ -885,8 +807,7 @@ class CleanupService:
             'mode': 'scheduled',
             'scope': 'stale_backups_and_logs',
             'storage_pressure': pressure,
-            'tombstoned_artifact_ids': tombstoned,
-            'purged_artifact_ids': purged,
+            'deleted_artifact_ids': deleted,
             'deleted_log_count': len(deleted_logs),
         }
 
@@ -923,8 +844,7 @@ class CleanupService:
             raise RetentionError('CLEANUP_OPERATION_REQUIRED')
         try:
             plan: dict[str, Any] = {}
-            tombstone_target_ids: list[str] = []
-            purge_target_ids: list[str] = []
+            stale_backup_target_ids: list[str] = []
             log_target_ids: list[dict[str, str]] = []
             if scope == 'backups':
                 candidates = self.backup_candidates(
@@ -943,9 +863,8 @@ class CleanupService:
             elif scope in {'stale_backups', 'logs'}:
                 plan = self._plan(scope=scope, world_id=world_id, operation_id=op_id)
                 if scope == 'stale_backups':
-                    target_count = len(plan['tombstone']) + len(plan['purge'])
-                    tombstone_target_ids = [item.artifact_id for item in plan['tombstone']]
-                    purge_target_ids = [item.artifact_id for item in plan['purge']]
+                    target_count = len(plan['delete'])
+                    stale_backup_target_ids = [item.artifact_id for item in plan['delete']]
                 else:
                     target_count = len(plan['logs'])
                     log_target_ids = [
@@ -1019,8 +938,7 @@ class CleanupService:
                 elif scope == 'stale_backups':
                     result.update(
                         {
-                            'tombstone_targets': tombstone_target_ids,
-                            'purge_targets': purge_target_ids,
+                            'delete_targets': stale_backup_target_ids,
                             'storage_pressure': plan['pressure'],
                         }
                     )
@@ -1041,17 +959,13 @@ class CleanupService:
                         'target_count': target_count,
                     }
                 elif scope == 'stale_backups':
-                    tombstoned = self._tombstone_stale_backups(
-                        plan['tombstone'], operation_id=op_id
-                    )
-                    purged = self._purge_stale_backups(plan['purge'], operation_id=op_id)
+                    deleted = self._delete_stale_backups(plan['delete'], operation_id=op_id)
                     result = {
                         'mode': 'wet_run',
                         'scope': scope,
                         'world_id': world_id,
-                        'tombstoned_artifact_ids': tombstoned,
-                        'purged_artifact_ids': purged,
-                        'target_count': len(tombstoned) + len(purged),
+                        'deleted_artifact_ids': deleted,
+                        'target_count': len(deleted),
                     }
                 else:
                     deleted_logs = self._delete_expired_logs(

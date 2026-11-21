@@ -213,6 +213,77 @@ def test_world_routes_require_auth_and_admin_role(world_api_app):
     assert forbidden.get_json()["error"]["code"] == "AUTH_FORBIDDEN"
 
 
+def test_world_runtime_edit_grant_does_not_require_step_up(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    admin_client, admin_headers = _admin_client(world_api_app)
+    seed_world(container.store, world_id="delegated-runtime-world")
+    user_session = _add_regular_user(container)
+    grant = admin_client.post(
+        "/api/permissions",
+        json={
+            "user_id": "world-api-user",
+            "action_category": "world.runtime.edit",
+            "world_id": "delegated-runtime-world",
+        },
+        headers={"X-CSRF-Token": admin_headers},
+    )
+    assert grant.status_code == 201
+
+    user_client = world_api_app.test_client()
+    user_client.set_cookie("mcmanager_session", user_session.token)
+    user_client.get("/api/session")
+    csrf = user_client.get_cookie("csrf_token").value
+    response = user_client.patch(
+        "/api/worlds/delegated-runtime-world/runtime-config",
+        json={"port": 25570, "version": 1},
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "delegated-runtime-edit",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json["data"]["operation"]["status"] == "Queued"
+
+
+def test_world_restore_and_cleanup_grants_use_documented_categories(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    admin_client, admin_headers = _admin_client(world_api_app)
+    seed_world(container.store, world_id="delegated-world-policy")
+    user_session = _add_regular_user(container)
+    for category in ("world.restore.restore", "world.cleanup"):
+        grant = admin_client.post(
+            "/api/permissions",
+            json={
+                "user_id": "world-api-user",
+                "action_category": category,
+                "world_id": "delegated-world-policy",
+            },
+            headers={"X-CSRF-Token": admin_headers},
+        )
+        assert grant.status_code == 201
+
+    user_client = world_api_app.test_client()
+    user_client.set_cookie("mcmanager_session", user_session.token)
+    user_client.get("/api/session")
+    csrf = user_client.get_cookie("csrf_token").value
+
+    policy = user_client.get("/api/worlds/delegated-world-policy/cleanup-policy")
+    assert policy.status_code == 200
+
+    _elevate(world_api_app, user_client)
+    restore = user_client.post(
+        "/api/worlds/delegated-world-policy/restores",
+        json={"source_path": "/missing/backup.zip"},
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "delegated-restore",
+        },
+    )
+    assert restore.status_code == 404
+    assert restore.json["error"]["code"] == "BACKUP_ARTIFACT_NOT_FOUND"
+
+
 @pytest.mark.parametrize(
     ("op_type", "status"),
     [
@@ -492,6 +563,15 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     assert detail.status_code == 200
     assert "capabilities" in detail.get_json()["data"]
     assert detail.get_json()["data"]["last_backup"] is None
+    assert container.store.reader().execute(
+        "SELECT state FROM world_instances WHERE world_id = ?", (created_world_id,)
+    ).fetchone()["state"] == "eula_required"
+    created_world = container.worlds._world(created_world_id)
+    created_directory = container.worlds._world_dir(created_world)
+    assert created_directory.name == created_world_id
+    assert created_directory.parent == (root / "worlds").resolve()
+    assert created_directory.is_dir()
+    assert not (created_directory / "eula.txt").exists()
 
     renamed = client.patch(
         f"/api/worlds/{created_world_id}",
@@ -500,6 +580,20 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     )
     assert renamed.status_code == 200
     assert renamed.get_json()["data"]["world"]["display_name"] == "Renamed via API"
+    assert container.worlds._world_dir(
+        container.worlds._world(created_world_id)
+    ) == created_directory
+
+    _elevate(world_api_app, client)
+    created_eula = client.post(
+        f"/api/worlds/{created_world_id}/eula/accept",
+        json={"accepted": True},
+        headers=headers,
+    )
+    assert created_eula.status_code == 200
+    assert (created_directory / "eula.txt").read_text(encoding="utf-8").endswith(
+        "eula=true\n"
+    )
 
     runtime = client.get(f"/api/worlds/{created_world_id}/runtime-config")
     assert runtime.status_code == 200

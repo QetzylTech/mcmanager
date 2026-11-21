@@ -58,6 +58,19 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+def _retention_error_code(exc: RetentionError) -> str:
+    message = str(exc)
+    for code in (
+        "BACKUP_RETENTION_GUARD",
+        "BACKUP_PATH_UNSAFE",
+        "CLEANUP_PATH_UNSAFE",
+        "CLEANUP_STORAGE_USAGE_INVALID",
+    ):
+        if code in message:
+            return code
+    return "BACKUP_RETENTION_GUARD"
+
+
 def _container() -> Any:
     return current_app.extensions["mcmanager_container"]
 
@@ -354,7 +367,7 @@ def delete_backup(artifact_id: str) -> Any:
     except KeyError:
         return error("BACKUP_ARTIFACT_NOT_FOUND", "Backup artifact not found.")
     except RetentionError as exc:
-        return error("BACKUP_RETENTION_GUARD", str(exc))
+        return error(_retention_error_code(exc), str(exc))
     return _enqueue(
         OperationType.CLEANUP,
         artifact["world_id"],

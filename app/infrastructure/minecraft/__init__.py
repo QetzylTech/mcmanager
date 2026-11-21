@@ -20,7 +20,6 @@ from app.infrastructure.minecraft.gate import (
     validate_launch,
 )
 from app.infrastructure.minecraft.java_compatibility import (
-    JavaDetection,
     compatibility_record,
     detect_java,
     java_compatible,
@@ -45,6 +44,7 @@ from app.infrastructure.minecraft.readiness import (
     port_is_bound,
     target_level_for,
 )
+from app.ports.minecraft import JavaDetection
 
 __all__ = [
     'CAPABILITY_MATRIX',

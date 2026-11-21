@@ -37,6 +37,11 @@ def _create_operation(store, clock, world_id: str, op_type: OperationType):
     )
 
 
+def _cleanup_service(store, clock, **kwargs) -> CleanupService:
+    kwargs.setdefault('filesystem', LocalFilesystem())
+    return CleanupService(store, clock, **kwargs)
+
+
 def _seed_artifacts(store, clock, tmp_path, world_id: str, specs, *, create_files=True):
     backup_operation = _create_operation(store, clock, world_id, OperationType.BACKUP)
     connection = store.writer()
@@ -78,7 +83,7 @@ def test_cleanup_floor_boundaries_and_newest_three_are_per_category(store, clock
     for index, age_days in enumerate((6, 5, 4, 3)):
         specs.append((f'emergency_{index}', 'emergency', age_days * DAY))
     paths = _seed_artifacts(store, clock, tmp_path, world_id, specs)
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
 
     with pytest.raises(RetentionError, match='age floor'):
         cleanup.backup_candidates(older_than_days=2)
@@ -114,7 +119,7 @@ def test_cleanup_three_day_cutoff_is_strict_and_one_second_older_is_eligible(
         ],
     )
 
-    candidates = CleanupService(store, clock).backup_candidates(older_than_days=3)
+    candidates = _cleanup_service(store, clock).backup_candidates(older_than_days=3)
 
     assert [candidate.artifact_id for candidate in candidates] == ['cutoff_oldest']
 
@@ -129,7 +134,7 @@ def test_dry_and_wet_runs_are_durable_operations_bound_to_exact_preview(store, c
         [(f'preview_{index}', 'manual', (10 - index) * DAY) for index in range(5)],
     )
     operations = OperationService(store, clock)
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
     preview_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
 
     preview = cleanup.evaluate_and_execute_cleanup(
@@ -192,14 +197,14 @@ def test_wet_run_deletes_only_confirmed_preview_targets_after_service_recreation
         [(f'confirmed_{index}', 'manual', (10 - index) * DAY) for index in range(5)],
     )
     preview_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
-    preview = CleanupService(store, clock).evaluate_and_execute_cleanup(
+    preview = _cleanup_service(store, clock).evaluate_and_execute_cleanup(
         op_id=preview_operation['op_id'],
         world_id=world_id,
         dry_run=True,
     )
     wet_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
 
-    result = CleanupService(store, clock).evaluate_and_execute_cleanup(
+    result = _cleanup_service(store, clock).evaluate_and_execute_cleanup(
         op_id=wet_operation['op_id'],
         world_id=world_id,
         dry_run=False,
@@ -244,7 +249,7 @@ def test_cleanup_blast_radius_confirmation_boundary(
     ]
     _seed_artifacts(store, clock, tmp_path, world_id, specs, create_files=False)
     preview_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
-    preview = CleanupService(store, clock).evaluate_and_execute_cleanup(
+    preview = _cleanup_service(store, clock).evaluate_and_execute_cleanup(
         op_id=preview_operation['op_id'],
         world_id=world_id,
         dry_run=True,
@@ -253,7 +258,7 @@ def test_cleanup_blast_radius_confirmation_boundary(
 
     if requires_confirmation:
         with pytest.raises(RetentionError, match='CLEANUP_BLAST_RADIUS'):
-            CleanupService(store, clock).execute_backup_cleanup(
+            _cleanup_service(store, clock).execute_backup_cleanup(
                 [
                     CleanupCandidate(f'untrusted-{index}', 'unused', world_id, 'manual', 0)
                     for index in range(candidate_count)
@@ -261,7 +266,7 @@ def test_cleanup_blast_radius_confirmation_boundary(
             )
         unconfirmed_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
         with pytest.raises(RetentionError, match='CLEANUP_BLAST_RADIUS'):
-            CleanupService(store, clock).evaluate_and_execute_cleanup(
+            _cleanup_service(store, clock).evaluate_and_execute_cleanup(
                 op_id=unconfirmed_operation['op_id'],
                 world_id=world_id,
                 dry_run=False,
@@ -273,7 +278,7 @@ def test_cleanup_blast_radius_confirmation_boundary(
         wet_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
         elevated_confirmation = False
 
-    result = CleanupService(store, clock).evaluate_and_execute_cleanup(
+    result = _cleanup_service(store, clock).evaluate_and_execute_cleanup(
         op_id=wet_operation['op_id'],
         world_id=world_id,
         dry_run=False,
@@ -294,7 +299,7 @@ def test_stale_backup_candidates_require_pressure_age_sessions_and_category_floo
         clock,
         tmp_path,
         world_id,
-        [(f'manual_{index}', 'manual', (10 - index) * DAY) for index in range(4)]
+        [(f'manual_{index}', 'manual', (10 - index) * DAY) for index in range(8)]
         + [(f'scheduled_{index}', 'scheduled', (10 - index) * DAY) for index in range(4)],
     )
     connection = store.writer()
@@ -333,7 +338,7 @@ def test_stale_backup_candidates_require_pressure_age_sessions_and_category_floo
     )
 
     assert pressure[world_id]['triggered'] is True
-    assert [candidate.artifact_id for candidate in pressured] == ['manual_0']
+    assert [candidate.artifact_id for candidate in pressured] == ['manual_0', 'manual_1']
     assert all(path.is_file() for path in paths.values())
     preview = cleanup.evaluate_and_execute_cleanup(
         op_id=operation['op_id'],
@@ -350,20 +355,37 @@ def test_stale_backup_candidates_require_pressure_age_sessions_and_category_floo
         dry_run_operation_id=operation['op_id'],
     )
 
-    assert preview['tombstone_targets'] == ['manual_0']
-    assert result['tombstoned_artifact_ids'] == ['manual_0']
-    assert paths['manual_0'].is_file()
-    tombstone = (
+    assert preview['delete_targets'] == ['manual_0', 'manual_1']
+    assert result['deleted_artifact_ids'] == ['manual_0', 'manual_1']
+    assert not paths['manual_0'].exists()
+    assert not paths['manual_1'].exists()
+    assert (
         store.reader()
-        .execute(
-            "SELECT deleted_at, stale_tombstoned_at FROM backup_artifacts WHERE artifact_id = 'manual_0'"
-        )
-        .fetchone()
+        .execute("SELECT 1 FROM backup_artifacts WHERE artifact_id IN ('manual_0', 'manual_1')")
+        .fetchall()
+        == []
     )
-    assert tombstone['deleted_at'] == tombstone['stale_tombstoned_at']
+
+    next_preview_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
+    next_preview = cleanup.evaluate_and_execute_cleanup(
+        op_id=next_preview_operation['op_id'],
+        world_id=world_id,
+        dry_run=True,
+        scope='stale_backups',
+    )
+    assert next_preview['delete_targets'] == ['manual_2']
+    next_wet_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
+    next_result = cleanup.evaluate_and_execute_cleanup(
+        op_id=next_wet_operation['op_id'],
+        world_id=world_id,
+        dry_run=False,
+        scope='stale_backups',
+        dry_run_operation_id=next_preview_operation['op_id'],
+    )
+    assert next_result['deleted_artifact_ids'] == ['manual_2']
 
 
-def test_stale_backup_tombstones_then_purges_only_after_grace_even_without_pressure(
+def test_stale_backup_cleanup_deletes_half_of_legacy_tombstones_without_grace(
     store, clock, tmp_path, monkeypatch
 ):
     world_id = _seed_world(store)
@@ -373,20 +395,39 @@ def test_stale_backup_tombstones_then_purges_only_after_grace_even_without_press
         clock,
         tmp_path,
         world_id,
-        [('old_manual', 'manual', 5 * DAY)],
+        [('oldest_manual', 'manual', 8 * DAY), ('newer_manual', 'manual', 7 * DAY)],
     )
     connection = store.writer()
     connection.execute(
         """
         UPDATE backup_artifacts
-        SET deleted_at = ?, stale_tombstoned_at = ?
-        WHERE artifact_id = 'old_manual'
+        SET deleted_at = ?, deleted_by = 'system', stale_tombstoned_at = ?
+        WHERE artifact_id IN ('oldest_manual', 'newer_manual')
         """,
-        (now - 4 * DAY, now - 4 * DAY),
+        (now - 1, now - 1),
     )
+    for index in range(7):
+        ended_at = now - 100 + index
+        connection.execute(
+            """
+            INSERT INTO runtime_sessions (
+                session_id, world_id, started_at, ended_at, end_reason,
+                rcon_secret_id, port_used, java_runtime_id, launch_args_snapshot,
+                created_at
+            ) VALUES (?, ?, ?, ?, 'graceful_stop', 'sec_admin', ?, 'java', '{}', ?)
+            """,
+            (
+                f'legacy_session_{index}',
+                world_id,
+                ended_at - 10,
+                ended_at,
+                25565 + index,
+                ended_at,
+            ),
+        )
     connection.commit()
 
-    cleanup = CleanupService(store, clock, filesystem=FixedUsageFilesystem(used=50))
+    cleanup = CleanupService(store, clock, filesystem=FixedUsageFilesystem(used=90))
     monkeypatch.setattr(cleanup, '_backup_root', lambda _world_id: tmp_path)
     preview_operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
     preview = cleanup.evaluate_and_execute_cleanup(
@@ -405,13 +446,14 @@ def test_stale_backup_tombstones_then_purges_only_after_grace_even_without_press
         dry_run_operation_id=preview_operation['op_id'],
     )
 
-    assert preview['purge_targets'] == ['old_manual']
-    assert preview['storage_pressure'][world_id]['triggered'] is False
-    assert result['purged_artifact_ids'] == ['old_manual']
-    assert not paths['old_manual'].exists()
+    assert preview['delete_targets'] == ['oldest_manual']
+    assert preview['storage_pressure'][world_id]['triggered'] is True
+    assert result['deleted_artifact_ids'] == ['oldest_manual']
+    assert not paths['oldest_manual'].exists()
+    assert paths['newer_manual'].exists()
     assert (
         store.reader()
-        .execute("SELECT 1 FROM backup_artifacts WHERE artifact_id = 'old_manual'")
+        .execute("SELECT 1 FROM backup_artifacts WHERE artifact_id = 'oldest_manual'")
         .fetchone()
         is None
     )
@@ -512,7 +554,7 @@ def test_scheduled_backup_cap_prunes_old_unreferenced_backups_only(
     )
     store.writer().commit()
     OperationService(store, clock).transition(restore_operation['op_id'], OperationStatus.COMPLETED)
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
     monkeypatch.setattr(cleanup, '_backup_root', lambda _world_id: tmp_path)
     operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
 
@@ -546,7 +588,7 @@ def test_scheduled_backup_cap_prunes_old_unreferenced_backups_only(
     }
 
 
-def test_scheduled_cleanup_purges_matured_backups_below_pressure(
+def test_scheduled_cleanup_deletes_half_of_eligible_stale_backups_under_pressure(
     store, clock, tmp_path, monkeypatch
 ):
     world_id = _seed_world(store)
@@ -556,16 +598,16 @@ def test_scheduled_cleanup_purges_matured_backups_below_pressure(
         clock,
         tmp_path,
         world_id,
-        [('scheduled_purge', 'manual', 8 * DAY)],
+        [('scheduled_oldest', 'manual', 8 * DAY), ('scheduled_newer', 'manual', 7 * DAY)],
     )
     connection = store.writer()
     connection.execute(
         """
         UPDATE backup_artifacts
-        SET deleted_at = ?, stale_tombstoned_at = ?
-        WHERE artifact_id = 'scheduled_purge'
+        SET deleted_at = ?, deleted_by = 'system', stale_tombstoned_at = ?
+        WHERE artifact_id IN ('scheduled_oldest', 'scheduled_newer')
         """,
-        (now - 4 * DAY, now - 4 * DAY),
+        (now - 1, now - 1),
     )
     connection.execute(
         """
@@ -589,8 +631,27 @@ def test_scheduled_cleanup_purges_matured_backups_below_pressure(
         """,
         (world_id, now, now),
     )
+    for index in range(7):
+        ended_at = now - 100 + index
+        connection.execute(
+            """
+            INSERT INTO runtime_sessions (
+                session_id, world_id, started_at, ended_at, end_reason,
+                rcon_secret_id, port_used, java_runtime_id, launch_args_snapshot,
+                created_at
+            ) VALUES (?, ?, ?, ?, 'graceful_stop', 'sec_admin', ?, 'java', '{}', ?)
+            """,
+            (
+                f'scheduled_session_{index}',
+                world_id,
+                ended_at - 10,
+                ended_at,
+                25565 + index,
+                ended_at,
+            ),
+        )
     connection.commit()
-    cleanup = CleanupService(store, clock, filesystem=FixedUsageFilesystem(used=50))
+    cleanup = CleanupService(store, clock, filesystem=FixedUsageFilesystem(used=90))
     monkeypatch.setattr(cleanup, '_backup_root', lambda _world_id: tmp_path)
     operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
 
@@ -600,9 +661,9 @@ def test_scheduled_cleanup_purges_matured_backups_below_pressure(
         schedule_id='scheduled_cleanup',
     )
 
-    assert result['purged_artifact_ids'] == ['scheduled_purge']
-    assert result['tombstoned_artifact_ids'] == []
-    assert not paths['scheduled_purge'].exists()
+    assert result['deleted_artifact_ids'] == ['scheduled_oldest']
+    assert not paths['scheduled_oldest'].exists()
+    assert paths['scheduled_newer'].exists()
 
 
 def test_log_cleanup_defaults_to_forever_and_only_selects_rotated_graceful_logs(
@@ -648,7 +709,7 @@ def test_log_cleanup_defaults_to_forever_and_only_selects_rotated_graceful_logs(
         path_time = now - 4 * DAY
         os.utime(path, (path_time, path_time))
 
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
     monkeypatch.setattr(cleanup, '_log_root', lambda _world_id: session_dir)
     operation = _create_operation(store, clock, world_id, OperationType.CLEANUP)
     assert cleanup.log_candidates(world_id=world_id, operation_id=operation['op_id']) == []

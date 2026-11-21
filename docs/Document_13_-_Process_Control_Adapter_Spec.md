@@ -122,10 +122,10 @@ A tiny program (Python or compiled per-OS) behaving like a Minecraft server for 
 - Prints startup banner lines to stdout (incl. configurable "ready" marker — advisory evidence only, never the sole readiness signal, per §4.1).
 - Listens on a TCP port (echo or minimal RCON-frame responder) so readiness probes are real socket probes.
 - Writes `tick` lines at a configurable rate to stdout (log-ingestion benchmark source, Doc 11).
-- Responds to: stdin `stop` (graceful exit 0), `SIGTERM`/`CTRL_BREAK` (graceful-ish exit), SIGKILL/TerminateProcess (crash exit); `--crash-after=N` mode for deterministic crash tests.
+- Responds to: stdin `stop` (graceful exit 0), `SIGTERM`/`CTRL_BREAK` (graceful-ish exit), SIGKILL/TerminateProcess (crash exit); `--crash-after-ms=N` mode for deterministic millisecond crash tests.
 - **Doc 14 extensions** (for Minecraft-adapter integration tests, Doc 11):
   - `--eula={not_present|unaccepted|accepted}`: writes/omits `eula.txt` accordingly; refuses to stay up unless EulaState `accepted` — deterministic EULA-gate testing.
-  - `--save-slow`: `save-all` responses delayed (async-flush simulation) so save-completion detection is testable.
+  - `--save-slow-ms=N`: `save-all` responses delayed by N milliseconds (async-flush simulation) so save-completion detection is testable.
   - `--ignore-save-on`: accepts `save-off` but never restores autosave on `save-on` — exercises save-coordination recovery paths (Doc 8, Doc 14 §10).
 
 ### 6.3 Conformance tests (run per adapter per OS in CI)
@@ -135,7 +135,7 @@ A tiny program (Python or compiled per-OS) behaving like a Minecraft server for 
 | C1 | spawn → probe → poll | `spawn()` creates live process; `probe()` finds it; `poll()` reports `running` |
 | C2 | graceful stop via stdin | world exits 0, `ExitClass.graceful` |
 | C3 | forced kill | `terminate(graceful_deadline_s=0)` kills the tree; `ExitClass.forced` |
-| C4 | crash detection | `--crash-after=2s` (no stop) → `ExitClass.crashed`, nonzero/abnormal exit |
+| C4 | crash detection | `--crash-after-ms=2000` (no stop) → `ExitClass.crashed`, nonzero/abnormal exit |
 | C5 | tail + replay | capture N lines; `tail(since_after=N-3)` replays last 3; `buffer_trimmed` after overflow |
 | C6 | orphan containment | fake_server spawns a grandchild helper; kill the group → grandchild also dead (POSIX group/job semantics) |
 | C7 | PID-reuse guard | fake PID collides with a recycled process → probe reports `reconciled_missing`, no signal sent to innocent process |

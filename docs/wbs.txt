@@ -112,8 +112,9 @@ WP 1.5: Minecraft Server Adapters & Readiness Hierarchy
 WP 1.6: Adapter Conformance Test Suite & Fake Server Harness
   - File Scope: tests/adapters/fake_server/, tests/adapters/test_conformance.py
   - Deliverables: Standalone fake_server program supporting the documented
-    --crash-after, --save-slow, and --eula modes (with millisecond variants
-    available for focused tests); C1–C14 automated conformance test suite.
+    --crash-after-ms, --save-slow-ms, and --eula modes, with legacy
+    --crash-after and --save-slow options retained only as compatibility
+    aliases; C1–C14 automated conformance test suite.
   - Acceptance Criteria: 100% pass rate on C1–C14 suite across POSIX and Windows.
 
 ================================================================================
@@ -217,7 +218,8 @@ WP 4.4: Offsite Sync Engine
   - File Scope: app/services/sync.py
   - Deliverables: Async offsite sync worker; transient-failure retries with
     three total attempts and waits of 30s then 60s (no third wait); global
-    two-transfer concurrency and daily transfer caps; sync_attempts timeline.
+    two-transfer concurrency and 50-GiB daily transfer reservation/cap;
+    sync_attempts timeline.
   - Acceptance Criteria: Failed network syncs retry according to backoff policy 
     without blocking local backup completion; daily cap halts further syncs when hit.
 

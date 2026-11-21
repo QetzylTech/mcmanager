@@ -31,6 +31,10 @@ def _backup_service(store, clock, coordinator=None) -> BackupService:
     )
 
 
+def _cleanup_service(store, clock) -> CleanupService:
+    return CleanupService(store, clock, filesystem=LocalFilesystem())
+
+
 def _seed_world(store, *, state: str = 'off') -> str:
     now = 1_700_000_000
     connection = store.writer()
@@ -474,7 +478,7 @@ def test_failed_restore_verification_rolls_back_and_marks_source_suspect(store, 
 
 def test_cleanup_rejects_age_and_keep_values_below_safety_floors(store, clock):
     _seed_world(store)
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
 
     with pytest.raises(RetentionError):
         cleanup.backup_candidates(older_than_days=2)
@@ -520,7 +524,7 @@ def test_cleanup_dry_run_is_an_operation_preview_without_deleting_artifacts(stor
         store, clock, world_id, OperationType.CLEANUP, data={'dry_run': True}
     )
     response = evaluator(
-        CleanupService(store, clock),
+        _cleanup_service(store, clock),
         op_id=cleanup_operation['op_id'],
         world_id=world_id,
         dry_run=True,
@@ -573,7 +577,7 @@ def test_cleanup_wet_run_follows_preview_and_records_operation_result(store, clo
             ),
         )
     connection.commit()
-    cleanup = CleanupService(store, clock)
+    cleanup = _cleanup_service(store, clock)
     preview_op = _create_operation(
         store, clock, world_id, OperationType.CLEANUP, data={'dry_run': True}
     )
@@ -659,7 +663,7 @@ def test_cleanup_wet_execution_enforces_blast_radius_before_deletion(store, cloc
 
     with pytest.raises(Exception, match='CLEANUP_BLAST_RADIUS'):
         evaluator(
-            CleanupService(store, clock),
+            _cleanup_service(store, clock),
             op_id=cleanup_operation['op_id'],
             world_id=world_id,
             dry_run=False,

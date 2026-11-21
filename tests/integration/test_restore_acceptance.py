@@ -378,10 +378,18 @@ def test_failed_start_probe_marks_source_suspect_and_compensates(
         'SELECT compensates_operation_id FROM operations WHERE op_id = ?',
         (result.rollback_operation_id,),
     ).fetchone()
+    corrective_history = store.reader().execute(
+        """
+        SELECT outcome FROM restore_history
+        WHERE rollback_of_restore_id = ?
+        """,
+        (result.restore_id,),
+    ).fetchone()
     assert result.outcome == 'reverted'
     assert result.rollback_operation_id is not None
     assert compensation['compensates_operation_id'] == restore_operation['op_id']
-    assert original_history['outcome'] == 'reverted'
+    assert original_history['outcome'] == 'success'
+    assert corrective_history['outcome'] == 'reverted'
     assert source['suspect'] == 1
     assert (world_dir / 'level.dat').read_bytes() == b'original'
 
@@ -440,13 +448,18 @@ def test_failed_compensation_records_failure_and_leaves_world_in_error(
     ).fetchone()
     rollback = store.reader().execute(
         """
-        SELECT status, error_code FROM operations
+        SELECT op_id, status, error_code FROM operations
         WHERE op_type = ? AND op_id <> ?
         ORDER BY created_at DESC LIMIT 1
         """,
         (OperationType.RESTORE.value, restore_operation['op_id']),
     ).fetchone()
-    assert history['outcome'] == 'failed'
+    rollback_history = store.reader().execute(
+        'SELECT outcome FROM restore_history WHERE operation_id = ?',
+        (rollback['op_id'],),
+    ).fetchone()
+    assert history['outcome'] == 'success'
+    assert rollback_history['outcome'] == 'failed'
     assert state['state'] == 'error'
     assert rollback['status'] == OperationStatus.FAILED.value
     assert rollback['error_code'] == 'RESTORE_REVERT_FAILED'

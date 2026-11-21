@@ -21,6 +21,7 @@ from app.services.manager_lifecycle import ManagerLifecycleService
 from app.services.operations import OperationInput, OperationService
 from app.services.restore import RestorePreconditionError, RestoreService
 from app.services.sync import SyncError, SyncService
+from app.services.world_paths import resolve_world_directory
 
 
 class CatalogOperationDispatcher:
@@ -250,12 +251,10 @@ class CatalogOperationDispatcher:
         return dict(row)
 
     def _world_directory(self, world: dict[str, Any]) -> Path:
-        if world["addressing_strategy"] == "path":
-            candidate = Path(world["addressing_value"])
-            if candidate.is_absolute():
-                return candidate
         settings = self._configuration.resolve_effective(world["world_id"])
-        return Path(str(settings["minecraft_root_path"] or "worlds")) / str(world["display_name"])
+        return resolve_world_directory(
+            world, str(settings["minecraft_root_path"] or "worlds")
+        )
 
     def _backup_directory(self, world_id: str) -> Path:
         settings = self._configuration.resolve_effective(world_id)

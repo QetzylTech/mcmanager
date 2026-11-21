@@ -35,7 +35,7 @@ Focus: Backup Engine, Restore & Compensating Rollback, Retention Cleanup, Offsit
 ================================================================================
 
 MODULE 1: NATIVE BACKUP ENGINE & RCON COORDINATION
-File Scope: src/mcmanager/services/backup.py & src/mcmanager/infrastructure/backup_engine.py
+File Scope: app/services/backup.py & app/infrastructure/backup_engine.py
 
 ```python
 import os
@@ -123,7 +123,7 @@ class BackupService:
 
 ================================================================================
 MODULE 2: RESTORE ENGINE & AUTOMATIC COMPENSATING ROLLBACK
-File Scope: src/mcmanager/services/restore.py
+File Scope: app/services/restore.py
 
 ```python
 class RestoreService:
@@ -180,7 +180,7 @@ class RestoreService:
 
 ================================================================================
 MODULE 3: RETENTION CLEANUP SWEEPER & PHYSICAL DELETION BOUNDARY
-File Scope: src/mcmanager/services/cleanup.py
+File Scope: app/services/cleanup.py
 
 ```python
 class CleanupService:
@@ -237,7 +237,7 @@ class CleanupService:
 
 ================================================================================
 MODULE 4: OFFSITE SYNC ENGINE & EXPONENTIAL BACKOFF
-File Scope: src/mcmanager/services/sync.py
+File Scope: app/services/sync.py
 
 ```python
 class OffsiteSyncService:

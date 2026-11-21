@@ -222,8 +222,8 @@ reviews may expose additional concrete deltas.
 
 | Work item | Code still needed | Existing tracking |
 |---|---|---|
-| Stale-backup and log cleanup | Implement and verify the approved `stale_backups` and `logs` policy: eligibility, pressure-gated tombstones, 3-day grace/purge, protected references, rotated-log retention, previews, and scheduled execution. Never select world directories or world records. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
-| Complete operator workflows | Authenticated documentation, manager log browsing, sync-target CRUD, guarded `server.properties` editing, and per-world and manager-wide cleanup-policy editing now have implementations. Manager restore/restart/update/rollback UI remains blocked on those backend contracts. Browser acceptance for the new UI work remains outstanding. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
+| Stale-backup and log cleanup | Review and verify approved `stale_backups` and `logs` policy: stale eligibility, oldest-first deletion of floor(50%) of eligible stale backups on each pressured run, protected references, rotated-log retention, previews, and scheduled execution. No stale-backup tombstone or grace period. Never select world directories or world records. | KB-G5-CLEANUP-POLICY, KB-G5-CLEANUP-SCOPES, KB-G5-3 |
+| Complete operator workflows | Authenticated documentation, manager log browsing, sync-target CRUD, guarded `server.properties` editing, and per-world and manager-wide cleanup-policy editing now have implementations. A real-browser setup/login flow passes; broader browser acceptance remains outstanding. Manager restore/restart/update/rollback UI remains blocked on those backend contracts. | KB-G5-6; KB-G5-API-CONTRACT; KB-G5-8 |
 | Manager lifecycle | Manager Backup is implemented as a durable operation and ZIP+SHA `manager_config` artifact. Implement manager restore, restart, update, and rollback only after defining the recovery, host-supervisor, trusted-update, and data-compatibility contracts; those routes remain `NOT_IMPLEMENTED`. | KB-G5-8 |
 | API contract implementation | Guarded server-properties editing, per-client permission-grant enforcement, diagnostics telemetry, release-version metadata, global cleanup-policy routes, sync-target CRUD, and documentation/log APIs now have implementations. Complete full contract parity; settings-visibility response policy needs a product decision. Manager and stale/log cleanup behavior stay on their owning cards. | KB-G5-API-CONTRACT; owning feature cards |
 | Production proxy trust | Nginx configuration and `trusted_proxy_hops` support now exist. Keep hop count opt-in and matched to the actual trusted proxy chain; no additional proxy code is currently identified. | KB-G5-10 |
@@ -387,6 +387,15 @@ is integrated and reviewed.
   failed-migration rollback assertions.
 - **Adjacent Gate 2 note:** `tests\integration\test_gate2_realignment.py`
   was 8 passed / 4 failed in configuration/API expectations outside WP 2.1.
+- **Latest Gate 2/schema verification — 2026-11-21:** migrations 006–007 now
+  enforce append-only restore outcomes, sequential sync attempts, and the
+  configurable global sync cap. The combined migration, Gate 2, restore, sync,
+  and API selection passed; the full run passed **567 passed, 0 failed,
+  3 skipped**. A focused Gate 2/schema/auth selection passed **45 tests**;
+  authentication checks cover Argon2id storage, lockout, step-up expiry and
+  password re-entry, and password-change session revocation. Remaining Gate 2
+  work is complete 28-table parity, not execution of the historical DDL
+  examples in `gate2_pseudocode.txt`.
 
 ### KB-G0-2 — Centralize and map API error codes
 
@@ -535,6 +544,11 @@ is integrated and reviewed.
   changes, FileEdit recovery, and ConfigEdit EULA response metadata. Follow-up
   EULA idempotency replay tests passed (2) and scoped Ruff passed after adding
   same-key operation replay and single-acceptance audit assertions.
+- **Current implementation follow-up — 2026-11-21:** CreateWorld now provisions
+  and persists a stable world-ID directory, enters `eula_required`, and never
+  accepts EULA implicitly. Rename preserves the provisioned path. The focused
+  world-management, lifecycle, configuration, and migration selection passed
+  (71 tests); the browser workflow suite passed (7 tests).
 
 ### KB-G5-4 — Implement settings, schedules, runtime, and administration APIs
 
@@ -549,6 +563,10 @@ is integrated and reviewed.
   `tests/integration/test_scheduler_service.py` passed (25); scoped Ruff,
   compile, and diff checks passed. Manager backup/restore/restart/update/
   rollback endpoints are a separate KB-G5-8 deliverable.
+- **Current implementation follow-up — 2026-11-21:** Global settings now
+  expose the configurable world-start concurrency limit (default 3; `NULL` or
+  `0` means unlimited), with API validation and operator UI input handling.
+  Settings and migration regressions passed in the 71-test focused selection.
 
 ### KB-DOC-STATUS — Reconcile current status and verification evidence
 
@@ -675,6 +693,21 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   one-time dispatch, and durable non-replayed conflict records. Scoped Ruff
   passed. The broad suite passed (420 passed, 3 skipped, 1 deselected).
 
+### KB-G3-6 — Bound concurrent independent world starts
+
+- **WBS:** WP 3.1
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Depends on:** KB-G3-2 (Done)
+- **Acceptance:** independent Start Operations dispatch concurrently up to the
+  configured manager-wide limit (default 3); `NULL` or `0` means unlimited;
+  queued starts remain durable, one failed world does not block others, and
+  SQLite transactions remain isolated across worker threads.
+- **Evidence:** the lifecycle integration test drives six fake worlds through
+  readiness, checks the default-three admission, a limit of one, and unlimited
+  dispatch; a persistence test verifies per-thread writer isolation. The
+  focused world/configuration/migration selection passed (71 tests); the final
+  full suite passed (577 passed, 3 skipped in 420.06s on Windows).
+
 ### KB-G5-2 — Make operation routes durably asynchronous
 
 - **WBS:** WP 5.1
@@ -750,6 +783,31 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   an operation nor an audit row. Focused Gate 2, Gate 3 audit, and
   operation-engine suites passed (94); scoped Ruff and mypy passed for the
   configuration service, route, and response helpers.
+
+### KB-G5-11 — Add the dedicated security acceptance suite
+
+- **WBS/Docs:** Document 11 §§1.2, 2, and 4.3; Documents 7 and 8 §9
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Depends on:** KB-G5-1, KB-G5-4, KB-G5-5 (Done)
+- **Acceptance:** dedicated security coverage for direct-route authz,
+  privilege escalation, CSRF/step-up expiry, throttling/lockout, Argon2id and
+  session rotation, encrypted secrets and response redaction, security
+  headers/non-loopback cookie behavior, last-Superadmin protection, and audit
+  immutability.
+- **Evidence:** focused local security suite passed (53) on Windows. The
+  hosted workflow at commit `071711da582e8305e4a33feb9974204cb89e1e93` passed
+  on Windows/Python 3.11.9 and Ubuntu/Python 3.11.18: **61 passed on each
+  platform** (2026-11-20).
+
+### KB-G1-6 — Run C1–C14 on a POSIX host
+
+- **WBS:** WP 1.6
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Acceptance:** run `tests/adapters/test_conformance.py` on a supported POSIX
+  OS and attach the complete result; fix any platform-specific failures.
+- **Evidence:** `.github/workflows/adapter-conformance.yml` passed at commit
+  `071711da582e8305e4a33feb9974204cb89e1e93` on Ubuntu/Python 3.13.18 and
+  Windows/Python 3.13.17: **30 passed on each platform** (2026-11-20).
 
 ## Review
 
@@ -837,30 +895,6 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Remaining:** run the symlink checks on a supported host and record live
   RCON/NAS integration evidence; the Windows skips and focused fake/local
   tests do not satisfy these acceptance items.
-
-### KB-G5-11 — Add the dedicated security acceptance suite
-
-- **WBS/Docs:** Document 11 §§1.2, 2, and 4.3; Documents 7 and 8 §9
-- **Priority:** P1 · **Owner:** Copilot agent Security-CI · **Updated:** 2026-11-07
-- **Depends on:** KB-G5-1, KB-G5-4, KB-G5-5 (Done)
-- **Status:** Review
-- **Acceptance:** dedicated security coverage for direct-route authz,
-  privilege escalation, CSRF/step-up expiry, throttling/lockout, Argon2id and
-  session rotation, encrypted secrets and response redaction, security
-  headers/non-loopback cookie behavior, last-Superadmin protection, and audit
-  immutability.
-- **Evidence:** `python -m pytest --no-cov -q
-  --basetemp=dev_artifacts/scratch/verify-security-final
-  tests/integration/test_gate5_acceptance.py tests/integration/test_auth.py
-  tests/integration/test_secrets.py tests/integration/test_audit.py
-  tests/integration/test_document10_catalog_apis.py` passed (53) on Windows.
-  Scoped Ruff and `git -c core.whitespace=cr-at-eol diff --check` passed.
-  Coverage includes HTTPS rejection without cookie issuance, Secure cookies,
-  CSP frame restrictions, API no-store, HTTP login lockout, last-Superadmin
-  protection, sync-secret redaction, Argon2id, session rotation, and immutable
-  audits. `.github/workflows/security.yml` runs this set in its own job.
-- **Remaining:** The Ubuntu and Python 3.11 matrix legs need a hosted run;
-  local verification used Windows / Python 3.13.
 
 ### KB-G1-LOG-REPLAY — Make live-log delivery recoverable
 
@@ -958,6 +992,19 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   property schema types/functions through `app.ports.minecraft`; the focused
   server-properties boundary and persistence-port selection passed 31 tests
   with `--no-cov`. Broader architecture work remains open under `KB-D12-2`.
+- **Follow-up — 2026-11-21:** the full suite found `CleanupService` imported
+  `LocalFilesystem` directly as a fallback. The service now requires a
+  `FilesystemPort`; `bootstrap.py` constructs the adapter and injects it.
+  Cleanup-focused direct test construction now injects `LocalFilesystem`
+  explicitly. Dependency-boundary, cleanup, Gate 4, phase-4, and isolated
+  shutdown-warning checks passed (**40 passed**); scoped Ruff, Black, isort,
+  and CRLF-aware diff checks passed.
+- **Follow-up — 2026-11-21:** Java catalog verification now calls the
+  `MinecraftServerPort` through the composition container; the port-boundary
+  regression and related unit selection passed (**29 passed**). SQLite readers
+  are now isolated per thread rather than shared across worker threads; the
+  schema-migration concurrency tests and real-browser startup pass without the
+  prior reader `InterfaceError`.
 
 ### KB-G8-SYNC-CAP — Resolve sync concurrency and retry contract
 
@@ -980,13 +1027,23 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   Retry wording and three-attempt behavior are aligned and tested.
   `tests/integration/test_sync_gate4.py` passed (9 tests), but it does not yet
   prove admission across three simultaneous `dispatch_sync` calls.
+- **Implementation follow-up — 2026-11-21:** Document 8 marks the cap
+  configurable, so `global_settings.sync_global_concurrency_cap` is now a
+  positive-integer, audited setting with default 2, migration 007, and
+  `/api/settings` read/update support. Dispatch enforces the active configured
+  cap; database work is serialized without serializing uploads. Blocking
+  transfer tests cover a rejected extra dispatch and slot release; the
+  configuration, sync, schema, and Gate 2 focused selection passed (**42
+  passed**), and scoped Ruff passed. The full current suite and Chromium
+  setup/login E2E also pass; see KB-G0-7 and KB-D11-TEST-PYRAMID.
 
 ## To Do
 
 ### KB-REC-01 — Freeze the reconciliation baseline
 
 - **WBS/Docs:** `old doc/Audits/NEXT_STEPS.md` R0; Document 11
-- **Priority:** P0 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Priority:** P0 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Status:** Review
 - **Depends on:** —
 - **Acceptance:** record the exact commit hash and clean/dirty-tree state;
   install the repository's declared test dependencies; run collection and a
@@ -1017,11 +1074,36 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Environment:** local verification used `.venv-phase4` with Python
   3.13.18. Hosted Python 3.11/3.13 matrix, POSIX conformance, and live-server
   acceptance remain external.
+- **Baseline capture — 2026-11-21:** commit
+  `071711da582e8305e4a33feb9974204cb89e1e93`, Windows/Python 3.13.14; initial
+  worktree was dirty only in the cleanup API/error/test/workboard changes from
+  this task. `app/data/manager.db` and `app/data/secrets.key` are ignored by
+  `.gitignore` and neither is tracked; only names/metadata were inspected.
+  `python -m pytest --no-cov -q` raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21.txt`: **531 passed,
+  1 failed, 3 skipped** in 393.37s. The sole failure was the dependency-boundary
+  test finding `CleanupService`'s concrete `LocalFilesystem` fallback. That
+  dependency has since been moved to explicit composition-root injection; a
+  focused 40-test run passes. The full rerun after this fix passed **532
+  passed, 0 failed, 3 skipped** with `--no-cov` in 395.10s; one shutdown
+  thread warning and one queued-operation dispatch error were still logged.
+  Raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21_after_boundary_fix.txt`.
+  Follow-up isolated the warning to the performance acceptance benchmark,
+  which closed SQLite directly while app workers were still running. The
+  benchmark now calls the app shutdown hook in `finally`, and its regression
+  test verifies all workers have stopped. The smoke test passes with thread
+  warnings promoted to errors (1 test, 300.40s). The coverage-enabled full
+  run after this fix passed (532 passed, 3 skipped) with 80.27% coverage;
+  the exact post-fix `--no-cov` rerun passed **532 passed, 0 failed,
+  3 skipped** in 410.22s, with no warning summary. Raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21_post_lifecycle_fix.txt`.
 
 ### KB-REC-02 — Normalize known specification conflicts
 
 - **WBS/Docs:** Documents 5, 8, 10, 12; `old doc/Audits/NEXT_STEPS.md` R1
-- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Status:** Review
 - **Depends on:** —
 - **Acceptance:** make one reviewable change set that (1) defines
   `app/docs/` as shipped documentation and excludes repository planning docs
@@ -1033,6 +1115,18 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   documents and tests as contracts change.
 - **DoD:** each decision has a source reference, implementation/test impact,
   and no implementation card claims compliance merely from route shape.
+- **Evidence — 2026-11-21:** Document 12 now distinguishes app-only runtime
+  dependencies from development tools, marks `app/config.py` as planned, and
+  defines `app/docs/` as shipped content. `manager_content._documentation_root`
+  confirms the runtime API reads only `app/docs/`. Documents 8 and the WBS
+  agree on the two-transfer cap, three attempts, 30s/60s waits, and 50-GiB
+  daily reservation cap; Document 10 now describes the additional page,
+  cleanup-policy, and supervisor routes. Documents 12–14 and the WBS align
+  fake-server option names with the harness; legacy aliases remain explicitly
+  identified. Gate 2–5 pseudocode paths were normalized, while Gate 1 remains
+  a historical/superseded example. The edited documentation was reviewed
+  against `app/requirements.txt`, `app/services/sync.py`,
+  `app/web/api/manager_content.py`, and existing route/fake-server behavior.
 
 ### KB-REC-03 — Verify API contract parity in bounded route groups
 
@@ -1063,6 +1157,14 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   Group results by table and keep feature behavior on its owning card.
 - **DoD:** name-level parity is not accepted as table-level evidence; each
   migration rule has a named test or an explicit approved deviation.
+- **Implementation evidence — 2026-11-21:** migration 006 enforces immutable
+  `restore_history` rows and sequential `sync_attempts.attempt_number`
+  inserts; rollback now records a corrective restore outcome instead of
+  rewriting history. Migration 007 adds the audited global sync cap. Focused
+  migration, restore, sync, and Gate 2 tests passed, and the full suite passed
+  on Windows/Python 3.13.14. The complete 28-table parity inventory and
+  migration history review remain open; the tagged Gate 2 pseudocode remains
+  historical and its sample SQL was not applied.
 
 ### KB-REC-05 — Seed stable requirement traceability
 
@@ -1089,11 +1191,13 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 ### KB-G0-7 — Restore full-suite test acceptance
 
 - **WBS/Docs:** Document 11; AUD-2026-11-19-07
-- **Priority:** P0 · **Owner:** Unassigned · **Updated:** 2026-11-19
+- **Priority:** P0 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Status:** Review
 - **Depends on:** —
 - **Acceptance:** rerun the full suite with `pytest --no-cov` on the current
-  tree and retain the exact command/output; triage and record the current
-  shutdown warnings. The 2026-11-19 test failures, including shell,
+  tree and retain the exact command/output; triage and record current
+  background-worker and SQLite resource warnings. The 2026-11-19 test failures,
+  including shell,
   diagnostics, dependency-boundary, and realtime slow-client failures, are
   historical and must not be listed as current. Coverage-floor work remains
   on `KB-D11-COVERAGE`.
@@ -1110,52 +1214,116 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   missed the configured 80% floor, so release acceptance remains open.
   Exact summary is retained in `Audits/verification_log_2026-11-20.md`; raw
   console output and a clean `--no-cov` full-suite run are still required.
+- **Current run — 2026-11-21:** `python -m pytest --no-cov -q` on
+  Windows/Python 3.13.14 reported **531 passed, 1 failed, 3 skipped**, exit 1.
+  The sole failure exposed the concrete filesystem import in `CleanupService`;
+  that boundary is fixed and its focused suite passes (40 tests). One
+  `PytestUnhandledThreadExceptionWarning` also reported the metrics publisher
+  reading after the SQLite store closed. The named restore test passes alone
+  with that warning promoted to an error. The subsequent full rerun reproduced
+  it; warning triage below identifies the performance benchmark as the
+  lifecycle leak and records its fix.
+- **Rerun — 2026-11-21:** after injecting `FilesystemPort` from the composition
+  root, `python -m pytest --no-cov -q` passed **532 tests, 0 failed, 3 skipped**
+  in 395.10s. The metrics-publisher warning recurred, and an operation worker
+  logged `PersistenceError: store not open`; shutdown lifecycle triage remains
+  open. Raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21_after_boundary_fix.txt`.
+- **Warning triage — 2026-11-21:** the performance acceptance benchmark was
+  closing its SQLite store directly, leaving its six app workers running.
+  `benchmarks/performance_acceptance.py` now invokes the app shutdown hook in a
+  `finally` block. Its regression test asserts that every worker has stopped;
+  that test passed alone with `PytestUnhandledThreadExceptionWarning` treated
+  as an error (1 passed, 300.40s). A pre-fix multi-file reproduction yielded
+  87 passed and one setup error at
+  `test_backup_catalog_auth_shapes_and_durable_operation`; the leftover
+  benchmark workers were reported there. A subsequent coverage-enabled full
+  run passed **532 tests, 0 failed, 3 skipped** with 286 SQLite
+  `ResourceWarning`s in 411.08s; the worker shutdown errors did not recur.
+  Raw output and coverage data are retained at
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_post_lifecycle_fix.txt`
+  and
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_post_lifecycle_fix.coverage`.
+  The exact `python -m pytest --no-cov -q` rerun passed **532 tests, 0 failed,
+  3 skipped** in 410.22s, with no warning summary; raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21_post_lifecycle_fix.txt`.
+  The 286 SQLite `ResourceWarning`s appeared only in the coverage run and are
+  recorded without suppression.
+- **Latest merged-agent run — 2026-11-21:** Windows/Python 3.13.14,
+  `python -m pytest -q`: **568 passed, 0 failed, 3 skipped**, 297 warnings,
+  in 404.36s. Coverage was 80.97%; the configured 80% floor passed, but the
+  Document 11 85% floor did not. The run did not reproduce the browser-startup
+  SQLite reader errors after per-thread reader isolation. Raw test and coverage
+  summaries are retained at
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes.txt`
+  and
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes_coverage.txt`.
+- **Final no-coverage rerun — 2026-11-21:** Windows/Python 3.13.14,
+  `python -m pytest --no-cov -q`: **568 passed, 0 failed, 3 skipped** in
+  394.96s; no warning summary. Raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21_merged_agent_changes.txt`.
+- **Open-task follow-up — 2026-11-21:** test fixtures now close the raw SQLite
+  store in a finalizer, and the five coverage-smoke containers register store
+  cleanup. This reduced the full coverage run's SQLite `ResourceWarning`s from
+  297 to **0** without suppression. The coverage run passed **573 tests, 0
+  failed, 3 skipped**, at **81.67%** in 405.11s; the full `--no-cov` rerun
+  passed **573 tests, 0 failed, 3 skipped** in 391.90s, also with no warning
+  summary. Raw output is retained at
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_followup_tests.txt`
+  and `dev_artifacts/reports/audit_fullsuite_no_cov_2026-11-21_followup_tests.txt`.
+  The full suite now has 576 collected cases; focused properties, SQLite, and
+  history API tests passed with `ResourceWarning` treated as an error.
 
 ### KB-G5-CLEANUP-POLICY — Approve safe stale-backup and log cleanup policy
 
 - **WBS/Docs:** Document 10 cleanup scopes; Documents 5 and 8
 - **Priority:** P1 · **Owner:** Unassigned
-- **Status:** In Progress
+- **Status:** Done
 - **Acceptance:** obtain explicit product-owner decisions for backup eligibility,
-  storage trigger, session threshold, tombstone grace, references, log retention,
-  and protected log categories; document safeguards and execution requirements.
+  storage trigger and batch size/repetition, session threshold, references, log
+  retention, and protected log categories; document safeguards and execution
+  requirements.
 - **Evidence:** user approved `stale_backups` (never worlds/records), eligible
   categories `session_end`, `manual`, `emergency`, `pre_restore`, default 3-day
-  age / 7 sessions / 90% pressure, latest/category-floor guards, 3-day
-  tombstone grace, restore/sync reference protection, and unlimited-by-default
-  logs restricted to expired rotated historical files. Documents 5–10 record
-  the policy; implementation and acceptance remain on KB-G5-CLEANUP-SCOPES.
+  age / 7 sessions / 90% pressure, latest/category-floor guards,
+  restore/sync-reference protection, and unlimited-by-default logs restricted
+  to expired rotated historical files. On each cleanup run at/above the
+  configured threshold, directly delete the oldest floor(50% of eligible stale
+  backups) per pressured world; no stale-backup tombstone or grace period.
+  Documents 5–10 record the policy.
 
 ### KB-G5-CLEANUP-SCOPES — Implement stale-backup and log cleanup
 
 - **WBS/Docs:** WP 4.3 and WP 5.1; Documents 5, 8, and 10
 - **Priority:** P1 · **Owner:** Unassigned
 - **Depends on:** KB-G5-CLEANUP-POLICY
-- **Status:** In Progress
+- **Status:** Review
+- **Owner:** Copilot current session · **Updated:** 2026-11-21
 - **Acceptance:** implement policy-backed candidate discovery, preview, and
   execution for `stale_backups` and `logs`; enforce exclusions, retention floors,
-  pressure gating, tombstone grace, reference/path/in-flight guards, and audits;
-  keep all physical deletion inside `CleanupService`. Also verify scheduled
-  execution and the stated scheduled-backup count cap.
+  pressure gating, 50% oldest-first batch selection on every pressured run,
+  reference/path/in-flight guards, and audits; keep all physical deletion inside
+  `CleanupService`. Also verify scheduled execution and the stated scheduled-
+  backup count cap. Do not tombstone stale backups or apply a grace period.
 - **Current evidence:** migration 005, cleanup policy fields, stale-backup/log
-  candidate planning, preview binding, tombstone/purge/log deletion helpers,
-  scheduled dispatch, API scopes, and the scheduled-backup cap are implemented.
-  Windows targeted acceptance passed: **97 passed** with `pytest --no-cov` across
-  cleanup, backup catalog API, scheduler, Gate 3 operation behavior, and schema
-  migrations; the Gate 5 browser suite passed (**7 passed**). Scoped Ruff, Black,
-  isort, JavaScript syntax, and CRLF-aware `git diff --check` passed. The
+  candidate planning, preview binding, direct stale-backup deletion, log
+  deletion, scheduled dispatch, API scopes, and the scheduled-backup cap are
+  implemented. The 2026-11-21 cleanup-rule change deletes the oldest floor(50%)
+  of eligible stale backups on each pressured run, with no stale tombstone or
+  grace period. Windows targeted acceptance passed: **105 passed** with
+  `pytest --no-cov` across cleanup, backup catalog API, scheduler, Gate 3
+  operation behavior, and schema migrations. The focused cleanup tests cover
+  repeated batches, retention/reference protections, and immediate deletion of
+  legacy tombstones. Scoped Ruff, Black, and isort passed. The
   repository coverage threshold fails when these targeted tests run with
   coverage enabled, so the focused pass intentionally used `--no-cov`. The
-  latest dispatcher error-code mapping was included in the 97-test and scoped
-  static-gate rerun. Keep this card In Progress until the remaining API error
-  contract is completed.
-- **Handoff:** Complete the error contract:
-  `CatalogOperationDispatcher` now maps `BACKUP_PATH_UNSAFE`,
-  `CLEANUP_PATH_UNSAFE`, and `CLEANUP_STORAGE_USAGE_INVALID`, but
-  `backup_catalogs.delete_backup` still converts every `RetentionError` to
-  `BACKUP_RETENTION_GUARD`, and the new codes are not yet registered in
-  `app/web/errors.py`. Add the narrowly scoped API/error mapping and an
-  unsafe-path regression test, then rerun the focused command:
+  latest dispatcher error-code mapping was included in the 105-test and scoped
+  static-gate rerun. The API error contract was completed 2026-11-21.
+- **Handoff completed — 2026-11-21:** Registered `BACKUP_PATH_UNSAFE`,
+  `CLEANUP_PATH_UNSAFE`, and `CLEANUP_STORAGE_USAGE_INVALID` in the API error
+  catalog and mapped `delete_backup` `RetentionError` values by their service
+  code instead of defaulting every failure to `BACKUP_RETENTION_GUARD`. Added
+  an unsafe-backup-path route regression test. Reran the focused command:
   `python -m pytest --no-cov -q tests/integration/test_cleanup_service.py
   tests/integration/test_backup_catalog_api.py
   tests/integration/test_scheduler_service.py
@@ -1188,6 +1356,12 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   this documentation card alone. AUD-2026-11-19-04 also found a concrete
   service-to-infrastructure import; the code fix is separately tracked by
   `KB-G0-BOUNDARY-REGRESSION`.
+- **Follow-up — 2026-11-21:** Java catalog verification was moved behind
+  `MinecraftServerPort` and its composition-root adapter; 29 focused unit
+  tests and scoped Ruff/isort passed. SQL access through `PersistencePort`
+  remains an accepted current boundary; planned repository/command layers
+  still need a bounded migration decision. The SSE route's direct platform
+  tail import is a separate migration candidate; no broad refactor was made.
 
 ### KB-G8-CONTRACT — Complete Document 8 service contract acceptance
 
@@ -1222,7 +1396,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 ### KB-D11-TEST-PYRAMID — Close the Document 11 test-pyramid gaps
 
 - **WBS/Docs:** Document 11 §§1–3
-- **Priority:** P1 · **Owner:** Unassigned
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Status:** In Progress
 - **Acceptance:** inventory required unit, integration, and end-to-end flows;
   measure the repository-wide test distribution against Document 11's
   approximate 70/25/5 pyramid and identify cross-cutting test-infrastructure
@@ -1232,6 +1407,14 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   service-level unit coverage and full browser E2E flows are incomplete.
   AUD-2026-11-19-06 adds the unclosed canonical real-HTTP/process flows and
   contract-to-test mapping to this inventory.
+- **Collection inventory — 2026-11-21:** `pytest --no-cov --collect-only -q`
+  collected 576 cases after the follow-up tests: 212 unit (36.8%), 334
+  integration (58.0%), and 30 adapter conformance (5.2%). A separate
+  Playwright Chromium test now exercises first-run setup, login, and the
+  operator home page (**1 passed**); the mocked browser contract suite remains
+  7 passed and is not counted as real-browser E2E. Broader HTTP/process
+  workflows, additional browser journeys, and the approximate 70/25/5
+  distribution remain open; adapter conformance remains its own layer.
 
 ### KB-D11-COVERAGE — Meet documented test coverage floors
 
@@ -1241,13 +1424,36 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   overall coverage to at least 85%; preserve meaningful assertions and record
   the repository-level coverage floor. Feature-specific coverage is owned by
   each implementation card and is not deferred to this cross-cutting gate.
-- **Current evidence:** coverage-focused additions passed 13 tests, but a
-  clean full run reached only 79.85%, below both the configured 80% floor and
-  Document 11's 85% overall requirement. Document 11 also requires an 80%
-  per-module floor, which is not enforced by the current pytest configuration.
-  The threshold mismatch and per-module enforcement remain open. Prior
-  evidence: backup catalog API coverage was recorded at 44.46%; the
-  2026-11-19 run reported 76.24% overall, with 18 of 92 modules below 80%.
+- **Current evidence:** coverage-focused additions raised several core modules,
+  but the 85% overall and per-module 80% floors remain unachieved; per-module
+  enforcement is absent from pytest configuration. Prior evidence includes
+  backup catalog API coverage at 44.46% and the 2026-11-19 run at 76.24%.
+- **Previous baseline — 2026-11-21:** clean Windows/Python 3.13.14 full coverage run:
+  **568 passed, 0 failed, 3 skipped**, 297 warnings, 80.97% overall, in
+  404.36s. The configured 80% floor passed; Document 11's 85% floor did not.
+  Thirteen of 92 measured modules remain below 80%: Minecraft properties
+  schema (65.62%), SQLite connection (76.00%), process base (73.74%), POSIX
+  process (22.89%), server-properties service (75.47%), worlds service
+  (72.97%), administration API (54.52%), backup-catalog API (62.76%),
+  catalogs API (65.83%), history API (77.30%), manager-content API (79.85%),
+  server-properties API (77.14%), and world-management API (73.88%). Raw
+  output and report are retained at
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes.txt`
+  and
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes_coverage.txt`.
+- **Latest follow-up — 2026-11-21:** after adding on-disk property validation,
+  SQLite diagnostics/lifecycle, and history-query regressions, Windows/Python
+  3.13.14 `python -m pytest -q` passed **573 tests, 0 failed, 3 skipped** at
+  **81.67%** overall, with no warning summary, in 405.11s. The coverage run
+  measured 9,275 statements and 10 modules remain below 80%: process base
+  (73.74%), POSIX process adapter (22.89%), server-properties service (75.47%),
+  worlds service (72.83%), administration API (54.52%), backup-catalog API
+  (62.76%), catalogs API (65.83%), manager-content API (79.85%),
+  server-properties API (77.14%), and world-management API (73.88%).
+  `properties_schema.py` is now 96.88%, SQLite `connection.py` 91.20%, and
+  history API 95.74%. The overall 85% floor and remaining per-module floors
+  are still open. Raw coverage output:
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_followup_tests.txt`.
 
 ### KB-D11-ISO-25010 — Complete the quality-characteristic evidence map
 
@@ -1261,6 +1467,22 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   coverage remain partial; compatibility, performance, and flexibility have
   not been verified. AUD-2026-11-19-06/-09 records the incomplete evidence map
   and missing calibrated performance acceptance.
+- **Evidence map — 2026-11-21:** Functional checks include the latest full
+  suite (567 passed, 3 skipped) but manager lifecycle and route parity remain
+  incomplete. Compatibility has hosted Windows/Ubuntu adapter conformance
+  evidence (30 each), but live Minecraft variants and POSIX process behavior
+  remain unverified. Security CI passed 61 checks on each of Ubuntu/Windows
+  for the recorded commit; live proxy validation remains open. Performance
+  has only the 300-second idle smoke; calibrated 50-client/1000-line-per-
+  second runs and reference-host/RSS evidence are missing. Interaction now has
+  one real-browser setup/login flow, but full workflows, 10-tab failover, and
+  live proxy/reconnect behavior remain unverified. Reliability still has
+  skipped symlink checks and no live RCON/NAS acceptance. Maintainability
+  remains blocked by repository static findings. Flexibility has adapter
+  conformance but no split-topology or storage-adapter substitution proof.
+  Safety has cleanup/restore guard tests, while full destructive-route parity
+  remains open. Coverage remains below both documented floors; see
+  `KB-D11-COVERAGE` and `KB-D11-TEST-PYRAMID`.
 
 ### KB-DOC-EVIDENCE-QUALITY — Reconcile status and evidence claims
 
@@ -1281,7 +1503,11 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   provenance. The 2026-11-20 audit found the workboard had been incorrectly
   archived and that `Audits/` was missing; both locations have been restored.
   Stale snapshots remain under `old doc/`, while `Audits/` now contains current
-  evidence. The full-suite/coverage outcome still needs a retained raw run.
+  evidence. Current full-suite and coverage outputs are retained under
+  `dev_artifacts/reports/` and summarized in
+  `Audits/verification_log_2026-11-20.md`. The exact provenance for the
+  historical 36-test and 97-test Gate 1 results, route/auth claim scoping, and
+  cleanup-policy API card status still need reconciliation.
 
 ### KB-G5-6 — Complete real workflows for the 17 shell modules
 
@@ -1309,6 +1535,10 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   2026-11-19 follow-up passed (11); live browser validation confirmed theme,
   notification dropdown, step-up dialog, global policy submission, and
   updated step-up/theme behavior. Broader full workflow acceptance remains open.
+- **Real-browser evidence — 2026-11-21:** Playwright Chromium setup/login
+  workflow passed (1 test) against a disposable local app fixture. This does
+  not close full operator workflow acceptance; other authenticated flows and
+  deployment/proxy behavior remain unverified.
 
 ### KB-G1-FORGE-SHUTDOWN — Diagnose Forge process exit after RCON stop
 
@@ -1406,6 +1636,25 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   newer Black, isort, or import-linter results are available. Earlier
   snapshots (Ruff 46, Black 76, isort 9, mypy 217) are historical and must not
   be used as current baselines. Document 12 §8 records the canonical commands.
+- **Fresh evidence — 2026-11-21:** repository-wide checks report Ruff **49
+  findings**, Black **61 files** needing formatting, isort **4 files** with
+  unsorted imports, and mypy **226 errors in 21 files**. Scoped Ruff, Black,
+  and isort pass for the two files changed for worker cleanup. The import-linter
+  package is installed, but invoking its console entry point exits 1 after
+  printing only `modules`; no interpretable contract report was produced.
+  Raw outputs are retained under `dev_artifacts/reports/audit_*_2026-11-21.txt`.
+- **Post-agent rerun — 2026-11-21:** `ruff check app tests` reports **22
+  errors**; `black --check app tests` reports **61 files** needing formatting;
+  `isort --check-only app tests` reports **4 files**; `mypy app` reports
+  **226 errors in 21 files** after correcting a newly introduced JavaDetection
+  re-export issue. Scoped Ruff/isort passed for the changed Python
+  files; scoped Black still flags pre-existing formatting in some touched
+  modules, and broad formatting was not applied. Logs are retained as
+  `dev_artifacts/reports/audit_ruff_2026-11-21_post_agents.txt`,
+  `audit_black_2026-11-21_post_agents.txt`,
+  `audit_isort_2026-11-21_post_agents.txt`, and
+  `audit_mypy_2026-11-21_final.txt`; the intermediate 227-error run is
+  retained as `audit_mypy_2026-11-21_post_agents.txt`.
 - **Blocker:** The remaining Black set includes protected shell/backup files;
   mypy failures include process adapters and protected API slices. These files
   and their tests are outside this card's authorized edit scope. Install the
@@ -1447,23 +1696,6 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   50-client/1Hz numbers are not a benchmark result; calibrated stream
   performance and CPU-flatness remain blocked on reference hardware.
 
-### KB-G1-6 — Run C1–C14 on a POSIX host
-
-- **WBS:** WP 1.6
-- **Priority:** P1 · **Owner:** Unassigned · **Updated:** 2026-11-08
-- **Status:** Blocked
-- **Blocked by:** Hosted Ubuntu/Windows workflow results are still pending;
-  the workflow has been configured as a two-OS matrix but has not run on
-  GitHub Actions.
-- **Acceptance:** run `tests/adapters/test_conformance.py` on a supported POSIX
-  OS and attach the complete result; fix any platform-specific failures.
-- **Evidence:** `.github/workflows/adapter-conformance.yml` now runs the same
-  suite on `ubuntu-latest` and `windows-latest`. Previous local Windows
-  evidence is supplemented by
-  `python -m pytest --no-cov -q tests\adapters\test_conformance.py` on Windows
-  (30 passed, 2026-11-08). No POSIX conformance pass is claimed until the
-  hosted Ubuntu leg completes.
-
 ### KB-PERF-01 — Calibrate and pass performance release acceptance
 
 - **WBS:** Gate 5; Document 11 §4.2
@@ -1481,7 +1713,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 ### KB-DOC-LEGACY-ARCHIVE — Clarify historical documentation status
 
 - **WBS/Docs:** Repository structure; AUD-2026-11-19-11
-- **Priority:** P3 · **Owner:** Unassigned
+- **Priority:** P3 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Status:** Review
 - **Depends on:** —
 - **Acceptance:** inventory the historical materials in `old doc/`,
   `Prototypes/`, and root-level planning/documentation files; identify the
@@ -1489,11 +1722,16 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   remaining material as authoritative, historical, or redundant. Preserve
   current numbered plan documents in `docs/`; do not move or delete files
   without an explicit decision supported by the inventory.
-- **Current evidence:** `old doc/` contains 16 files, including older
-  Document 5–9 copies and legacy architecture/implementation notes.
-  `Prototypes/` is a separate legacy reference archive. This audit did not
-  establish that every archived file is a byte-for-byte duplicate or safe to
-  delete.
+- **Current evidence — 2026-11-21:** `old doc/` contains 18 top-level files
+  and 26 recursively, including older Document 4–9 copies, prior
+  reconciliation/audit snapshots, and legacy architecture/implementation
+  notes. `Prototypes/` contains 96 files across Experiment, Legacy, and V1–V4.
+  Current authoritative plans are `docs/Document_4`–`Document_14`,
+  `docs/ARCHITECTURE.md`, `docs/WORKBOARD.md`, and the current `Audits/`
+  records. No runtime source references `old doc/` or `Prototypes/`; the
+  repository-structure test asserts that `Prototypes/` exists. All archived
+  files remain historical references; no deletion or duplicate claim is
+  authorized by this inventory.
 
 ### KB-G5-API-CONTRACT — Audit full Document 10 contract parity
 
@@ -1514,3 +1752,15 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   implementations, but lack feature-level acceptance.
   Full parity remains open; additional concrete route or service deltas may
   be discovered.
+- **Route fixes — 2026-11-21:** corrected the runtime-config PATCH step-up
+  requirement and aligned restore and world cleanup-policy grants with
+  `world.restore.restore` and `world.cleanup`. Added two integration
+  regressions; both passed, and scoped Ruff passed. This closes those identified
+  mismatches only; the full route-by-route inventory and remaining settings
+  visibility decision are still open.
+- **History-query regressions — 2026-11-21:** added authenticated API checks
+  for invalid audit/notification filters and pagination, ISO/epoch date
+  filters, multi-field audit sorting, and missing audit/notification IDs.
+  The focused API/schema/properties set passed **61 tests** with
+  `ResourceWarning` promoted to an error. This adds coverage but does not close
+  the Document 10 route-by-route inventory.

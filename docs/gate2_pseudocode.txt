@@ -22,9 +22,10 @@ Operations; AuthenticationService uses Argon2id hashes held in the encrypted
 secrets store and hashed session tokens. The API maps the implemented version
 conflict to the current error handling; Document 10's canonical codes remain
 authoritative (for example CONFIG_VERSION_CONFLICT and AUTH_STEP_UP_REQUIRED),
-not spellings invented by this sketch. Current implementation status is in
-docs/STATUS.md; historical workboard evidence is under old doc/ and is not
-an acceptance record.
+not spellings invented by this sketch. Current acceptance evidence is in
+tests/integration/test_gate2_realignment.py and
+tests/integration/test_schema_migrations.py; historical workboard evidence
+is under old doc/ and is not an acceptance record.
 
 Everything below is the superseded historical pseudocode, not a second schema
 or competing API contract. Follow Documents 6–10 and the app/ implementation.
@@ -468,8 +469,8 @@ def test_sqlite_foreign_key_enforcement(tmp_path):
     conn = factory.get_connection()
     
     # Initialize schema
-    with open("src/mcmanager/infrastructure/sqlite/schema.sql") as f:
-        conn.executescript(f.read())
+    # Historical sketch only: current code uses run_migrations(store, migrations_dir);
+    # do not use a monolithic schema.sql or execute this pseudocode.
     
     # Assert PRAGMA foreign_key_check passes cleanly
     factory.check_foreign_keys(conn)

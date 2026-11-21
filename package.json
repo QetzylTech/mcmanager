@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "test:browser:e2e": "playwright test -c tests/browser/playwright.config.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1"
+  }
+}

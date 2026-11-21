@@ -405,9 +405,10 @@
     const settings = result.data.settings;
     const inputs = Object.entries(settings).map(([key, value]) => field(key.replaceAll('_', ' '), key,
       typeof value === 'object' && value !== null ? JSON.stringify(value) : value ?? '',
-      typeof value === 'number' ? 'number' : 'text')).join('');
+      typeof value === 'number' || key === 'max_concurrent_world_starts' ? 'number' : 'text')).join('');
     root.innerHTML = message() + card('Global settings', `<form class="workflow-form" data-form="global-settings">` +
       `${inputs}<input type="hidden" name="version" value="${escapeHtml(result.data.version)}">` +
+      `<p class="muted">World starts default to 3 at a time; set 0 or leave blank for unlimited starts.</p>` +
       `<p class="muted">Structured settings values use JSON syntax.</p><button class="ui-button ui-button-blue" type="submit">Save settings</button></form>`);
   }
 
@@ -958,7 +959,12 @@
       case 'global-settings': {
         const settings = {};
         Object.entries(data).forEach(([key, value]) => {
-          if (key !== 'version') settings[key] = ['notification_defaults', 'offsite_sync_defaults'].includes(key) ? JSON.parse(value) : key === 'idle_countdown_seconds' ? Number(value) : value;
+          if (key !== 'version') {
+            if (['notification_defaults', 'offsite_sync_defaults'].includes(key)) settings[key] = JSON.parse(value);
+            else if (key === 'max_concurrent_world_starts') settings[key] = value === '' ? null : Number(value);
+            else if (['idle_countdown_seconds', 'sync_global_concurrency_cap'].includes(key)) settings[key] = value === '' ? null : Number(value);
+            else settings[key] = value;
+          }
         });
         await mutate('/api/settings', 'PATCH', { version: Number(data.version), ...settings }); break;
       }

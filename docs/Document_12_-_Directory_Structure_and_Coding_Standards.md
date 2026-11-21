@@ -8,6 +8,10 @@ Governing: layering — ARCHITECTURE (Web Application, Coding Standards); servic
 
 - Python 3.11+, Flask, SQLite (primary store — ARCHITECTURE persistence).
 - Frontend: vanilla HTML/CSS/JS served by Flask, per Doc 4/5; no separate SPA build step (low-hardware constraint). Asset bundling optional; all assets work unchunked/offline.
+- Runtime dependencies are the versions declared in `app/requirements.txt`:
+  `argon2-cffi`, `cryptography`, `Flask`, `psutil`, and `python-dotenv`.
+  Repository/development tools are separate in `requirements-dev.txt`; do not
+  add them to the app-only runtime distribution.
 - Package manager: `pip` + `app/requirements.txt` (runtime); root
   `requirements.txt` delegates to it for repository workflows, while
   `requirements-dev.txt` adds test/lint tools. No build system beyond Flask's
@@ -60,7 +64,7 @@ Only `app/migrations/` and application services may touch the live database.
 ```
 app/
 ├── __init__.py               # create_app() factory; registers blueprints; boot reconciliation hook (Doc 7 §6)
-├── config.py                 # env/instance config loading (paths, refresh rates — non-secret)
+├── config.py                 # planned config module; current env/instance loading is wired in app/__init__.py and app/bootstrap.py
 ├── bootstrap.py              # setup state machine (Manager lifecycle, Doc 6 §2.10); applied after create_app
 ├── shell/                    # PRESENTATION PLANE (ARCHITECTURE §4)
 │   ├── __init__.py
@@ -247,8 +251,8 @@ tests/
 ├── e2e/                      # Doc 11 — real server + fake server binary
 └── adapters/                 # Doc 13 conformance suite (per adapter, per OS);
                               # Doc 14 save-coordination + EULA behavior tests against the
-                              # fake server (fake gains --save-slow / --ignore-save-on modes,
-                              # Doc 14 §13)
+                              # fake server (`--save-slow-ms` / `--ignore-save-on`,
+                              # Doc 13/14 save-coordination modes)
 ```
 
 Benchmarks live in `benchmarks/` with `thresholds.json` (Doc 11).

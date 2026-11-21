@@ -9,8 +9,8 @@ and re-points the owning entity.
 
 from __future__ import annotations
 
-import uuid
 import time
+import uuid
 from pathlib import Path
 from typing import cast
 
@@ -97,9 +97,7 @@ class SqliteSecretsStore:
         if row is None:
             raise SecretsError(f'secret not found: {secret_id}')
         try:
-            plaintext = self._cipher().decrypt(
-                cast(bytes, row['encrypted_value'].encode('utf-8'))
-            )
+            plaintext = self._cipher().decrypt(cast(bytes, row['encrypted_value'].encode('utf-8')))
         except Exception as exc:  # cryptography raises InvalidToken
             raise SecretsError(f'cannot decrypt secret {secret_id}') from exc
         return plaintext.decode('utf-8')

@@ -36,6 +36,43 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _free_port_pair(used_ports: set[int]) -> int:
+    for _ in range(100):
+        candidate = _free_port()
+        if (
+            candidate + 10 > 65535
+            or candidate in used_ports
+            or candidate + 10 in used_ports
+            or candidate - 10 in used_ports
+        ):
+            continue
+        sockets = []
+        pair_is_free = True
+        try:
+            for port in (candidate, candidate + 10):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sockets.append(sock)
+                sock.bind(("127.0.0.1", port))
+        except OSError:
+            pair_is_free = False
+        finally:
+            for sock in sockets:
+                sock.close()
+        if pair_is_free and not any(
+            _port_is_listening(port) for port in (candidate, candidate + 10)
+        ):
+            return candidate
+    raise RuntimeError("could not reserve an unused server/RCON port pair")
+
+
+def _port_is_listening(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+            return True
+    except OSError:
+        return False
+
+
 def _seed_world(
     store,
     world_id: str,
@@ -46,6 +83,7 @@ def _seed_world(
     addressing_strategy: str = "port",
     addressing_value: str | None = None,
     audited_eula: bool | None = None,
+    ready_ms: int = 0,
 ) -> Path:
     now = 1_700_000_000
     world_dir = world_root / f"World {world_id}"
@@ -96,16 +134,17 @@ def _seed_world(
         """,
         (now, now),
     )
-    launch_args = json.dumps(
-        [
-            sys.executable,
-            str(_FAKE_SERVER),
-            f"--port={port}",
-            f"--rcon-port={port + 10}",
-            f"--marker=world-{world_id}",
-            eula_arg,
-        ]
-    )
+    launch_argv = [
+        sys.executable,
+        str(_FAKE_SERVER),
+        f"--port={port}",
+        f"--rcon-port={port + 10}",
+        f"--marker=world-{world_id}",
+        eula_arg,
+    ]
+    if ready_ms:
+        launch_argv.append(f"--ready-ms={ready_ms}")
+    launch_args = json.dumps(launch_argv)
     connection.execute(
         """
         INSERT INTO world_instances (
@@ -137,6 +176,56 @@ def _seed_world(
             (f"au_{world_id}", world_id, '{"accepted": true}', now),
         )
     connection.commit()
+    return world_dir
+
+
+def _insert_lifecycle_world(
+    store, world_id: str, port: int, world_root: Path, ready_ms: int
+) -> Path:
+    now = 1_700_000_000
+    world_dir = world_root / f"World {world_id}"
+    world_dir.mkdir(parents=True)
+    (world_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
+    launch_args = json.dumps(
+        [
+            sys.executable,
+            str(_FAKE_SERVER),
+            f"--port={port}",
+            f"--rcon-port={port + 10}",
+            f"--marker=world-{world_id}",
+            f"--ready-ms={ready_ms}",
+            "--eula=accepted",
+        ]
+    )
+    store.writer().execute(
+        """
+        INSERT INTO world_instances (
+            world_id, display_name, template_id, server_type, mc_version, java_runtime_id,
+            port, addressing_strategy, addressing_value, state, pre_backup_state,
+            launch_args, metadata_version, deleted_at, deleted_by, created_at, updated_at
+        ) VALUES (?, ?, 'tpl', 'vanilla', '1.21', 'java', ?, 'port',
+                  ?, 'off', NULL, ?, 1, NULL, NULL, ?, ?)
+        """,
+        (
+            world_id,
+            f"World {world_id}",
+            port,
+            str(port),
+            launch_args,
+            now,
+            now,
+        ),
+    )
+    store.writer().execute(
+        """
+        INSERT INTO audit_records (
+            audit_id, event_type, actor_type, actor_user_id,
+            actor_username_snapshot, world_id, payload, created_at
+        ) VALUES (?, 'world_eula_accepted', 'user', 'u_admin', 'admin', ?, ?, ?)
+        """,
+        (f"au_{world_id}", world_id, '{"accepted": true}', now),
+    )
+    store.writer().commit()
     return world_dir
 
 
@@ -208,6 +297,129 @@ def test_worlds_start_reaches_running_then_stop_returns_off(tmp_path):
         assert not ping_protocol("127.0.0.1", port, timeout_s=0.5)
     finally:
         container.store.close()
+
+
+def test_queued_world_starts_run_in_parallel_with_configurable_limit(tmp_path):
+    container = build_container(
+        database_path=tmp_path / "parallel.db",
+        keyfile_path=tmp_path / "parallel.key",
+        migrations_dir=_MIGRATIONS,
+    )
+    world_ids = [f"world_parallel_{index}" for index in range(6)]
+    failure_world_ids = [f"world_failure_{index}" for index in range(3)]
+    selected_ports = []
+    while len(selected_ports) < len(world_ids) + len(failure_world_ids):
+        selected_ports.append(_free_port_pair(set(selected_ports)))
+    seeded_world_ids = []
+    try:
+        root = tmp_path / "worlds"
+        _seed_world(
+            container.store,
+            world_ids[0],
+            selected_ports[0],
+            root,
+            ready_ms=2000,
+        )
+        seeded_world_ids.append(world_ids[0])
+        for world_id, port in zip(
+            world_ids[1:], selected_ports[1 : len(world_ids)], strict=True
+        ):
+            _insert_lifecycle_world(container.store, world_id, port, root, 2000)
+            seeded_world_ids.append(world_id)
+
+        operations = [
+            container.worlds.enqueue_start(
+                world_id=world_id,
+                actor_type=ActorType.USER,
+                actor_user_id="u_admin",
+                idempotency_key=f"parallel-default-{world_id}",
+            )[0]
+            for world_id in world_ids
+        ]
+        started_at = time.monotonic()
+        dispatched = container.worlds.dispatch_queued_operations()
+        elapsed = time.monotonic() - started_at
+        assert len(dispatched) == 3
+        assert elapsed < 5.5
+        assert sum(
+            _state(container.store, world_id) == WorldState.RUNNING.value
+            for world_id in world_ids
+        ) == 3
+        assert sum(
+            container.operations.get(operation["op_id"])["status"]
+            == OperationStatus.QUEUED.value
+            for operation in operations
+        ) == 3
+
+        container.store.writer().execute(
+            "UPDATE global_settings SET max_concurrent_world_starts = 1"
+        )
+        container.store.writer().commit()
+        limited_dispatched = container.worlds.dispatch_queued_operations()
+        assert len(limited_dispatched) == 1
+        assert sum(
+            _state(container.store, world_id) == WorldState.RUNNING.value
+            for world_id in world_ids
+        ) == 4
+        assert sum(
+            container.operations.get(operation["op_id"])["status"]
+            == OperationStatus.QUEUED.value
+            for operation in operations
+        ) == 2
+
+        container.store.writer().execute(
+            "UPDATE global_settings SET max_concurrent_world_starts = 0"
+        )
+        container.store.writer().commit()
+        container.worlds.dispatch_queued_operations()
+        assert all(
+            _state(container.store, world_id) == WorldState.RUNNING.value
+            for world_id in world_ids
+        )
+
+        for world_id, candidate in zip(
+            failure_world_ids, selected_ports[len(world_ids) :], strict=True
+        ):
+            _insert_lifecycle_world(container.store, world_id, candidate, root, 0)
+            seeded_world_ids.append(world_id)
+        container.store.writer().execute(
+            "UPDATE global_settings SET max_concurrent_world_starts = 0"
+        )
+        container.store.writer().commit()
+        failure_operations = [
+            container.worlds.enqueue_start(
+                world_id=world_id,
+                actor_type=ActorType.USER,
+                actor_user_id="u_admin",
+                idempotency_key=f"parallel-failure-{world_id}",
+            )[0]
+            for world_id in failure_world_ids
+        ]
+        (
+            container.worlds._world_dir(
+                container.worlds._world(failure_world_ids[0])
+            )
+            / "eula.txt"
+        ).write_text("eula=false\n", encoding="utf-8")
+        failure_dispatched = container.worlds.dispatch_queued_operations()
+        assert {operation["op_id"] for operation in failure_operations} <= set(
+            failure_dispatched
+        )
+        assert (
+            container.operations.get(failure_operations[0]["op_id"])["status"]
+            == OperationStatus.FAILED.value
+        )
+        assert all(
+            _state(container.store, world_id) == WorldState.RUNNING.value
+            for world_id in failure_world_ids[1:]
+        )
+    finally:
+        try:
+            for world_id in seeded_world_ids:
+                if _state(container.store, world_id) == WorldState.RUNNING.value:
+                    container.worlds.stop(world_id=world_id)
+        finally:
+            container.store.close()
 
 
 def test_worlds_reports_open_session_crash_and_reconciles_missing(tmp_path):

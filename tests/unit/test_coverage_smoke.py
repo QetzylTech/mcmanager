@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from flask import Flask
 
 import app.platform.paths as platform_paths
@@ -55,10 +56,12 @@ class DummyClock:
         return self._value
 
 
-def _container(tmp_path: Path):
+def _container(tmp_path: Path, request: pytest.FixtureRequest):
     db = tmp_path / 'manager.sqlite'
     keyfile = tmp_path / 'secrets.key'
-    return build_container(database_path=db, keyfile_path=keyfile, clock=DummyClock())
+    container = build_container(database_path=db, keyfile_path=keyfile, clock=DummyClock())
+    request.addfinalizer(container.store.close)
+    return container
 
 
 def _seed_world(container, world_id: str) -> None:
@@ -105,7 +108,7 @@ def _seed_user(container, user_id: str, username: str) -> None:
     container.store.writer().commit()
 
 
-def test_platform_and_bootstrap_smoke(tmp_path):
+def test_platform_and_bootstrap_smoke(tmp_path, request):
     old = os.environ.get('LOCALAPPDATA')
     try:
         os.environ['LOCALAPPDATA'] = str(tmp_path)
@@ -121,7 +124,7 @@ def test_platform_and_bootstrap_smoke(tmp_path):
         else:
             os.environ['LOCALAPPDATA'] = old
 
-    container = _container(tmp_path)
+    container = _container(tmp_path, request)
     assert container.store.path.endswith('manager.sqlite')
     assert container.process_adapter is not None
     assert container.scheduler.tick_interval_seconds > 0
@@ -203,8 +206,8 @@ def test_infra_helpers_and_gate_smoke(tmp_path):
     assert 'server-port' in CORE_MANAGER_PROPERTIES
 
 
-def test_store_secrets_and_operation_smoke(tmp_path):
-    container = _container(tmp_path)
+def test_store_secrets_and_operation_smoke(tmp_path, request):
+    container = _container(tmp_path, request)
     keyfile = tmp_path / 'secrets.key'
     assert provision_keyfile(keyfile).exists()
     secrets = SqliteSecretsStore(container.store, keyfile)
@@ -239,8 +242,8 @@ def test_store_secrets_and_operation_smoke(tmp_path):
     assert container.operations.list_incomplete() == []
 
 
-def test_backup_cleanup_and_config_smoke(tmp_path, monkeypatch):
-    container = _container(tmp_path)
+def test_backup_cleanup_and_config_smoke(tmp_path, monkeypatch, request):
+    container = _container(tmp_path, request)
     _seed_world(container, 'w1')
     _seed_user(container, 'u1', 'alice')
     source = tmp_path / 'world-src'
@@ -320,8 +323,8 @@ def test_backup_cleanup_and_config_smoke(tmp_path, monkeypatch):
     assert updated['timezone'] == 'UTC+1'
 
 
-def test_notifications_realtime_and_shell_smoke(tmp_path):
-    container = _container(tmp_path)
+def test_notifications_realtime_and_shell_smoke(tmp_path, request):
+    container = _container(tmp_path, request)
     _seed_user(container, 'u1', 'alice')
     _seed_user(container, 'u2', 'bob')
     notification_id = container.notifications.publish(
@@ -358,8 +361,8 @@ def test_notifications_realtime_and_shell_smoke(tmp_path):
     assert client.get('/api/pages/home').status_code == 200
 
 
-def test_runtime_world_and_diag_smoke(tmp_path):
-    container = _container(tmp_path)
+def test_runtime_world_and_diag_smoke(tmp_path, request):
+    container = _container(tmp_path, request)
     row = {
         'world_id': 'w1',
         'display_name': 'alpha',

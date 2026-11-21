@@ -88,6 +88,7 @@ Minecraft's official setup flow requires the operator to set `eula=false → eul
   - `unaccepted` — file present with `eula=false`
   - `accepted` — file present with `eula=true`
 - CreateWorld provisions the world directory **without** an accepted EULA: writes no `eula.txt` (or writes `eula=false`) — never `true`. New world rows enter `state = eula_required` (Doc 6 §2.3).
+- The directory is keyed by immutable `world_id` (or the explicitly supplied absolute path for path addressing) and persisted as `world_instances.world_directory`; display-name edits never move server files. Legacy rows resolve their existing path and pin it on rename.
 - The manager detects EULA state at CreateWorld and re-checks at every Start.
 - An unaccepted-EULA world sits in `eula_required`; the UI presents the EULA acceptance requirement on the world's setup surface (Doc 5) before Start is offered.
 - Acceptance is an **explicit operator action**: `POST /api/worlds/{world_id}/eula/accept` (step-up; Doc 10) records an audited ConfigEdit-type Operation (`ConfigEditEntity = eula`) and **only then** writes `eula=true`. The world returns `eula_required -> off`.
@@ -186,6 +187,8 @@ restart attempted (world was running before restore)
 
 Doc 11 gains: capability-schema tests (every declared capability cell has an implementation or an explicit `none`); EULA state-machine tests; Java-compat matrix validation tests; `server.properties` schema tests per curated version; save-coordination edge tests (each §10 bullet); backup integrity tests (interrupt/checksum/structure); restore rollback decision-tree tests.
 
-The Doc 13 fake-server binary gains EULA-file behavior and `--save-slow` / `--ignore-save-on` modes so save-coordination edge cases are integration-testable cross-platform (Doc 11).
+The Doc 13 fake-server binary gains EULA-file behavior and `--save-slow-ms` /
+`--ignore-save-on` modes so save-coordination edge cases are integration-testable
+cross-platform (Doc 11).
 
 Shortcuts: readiness levels → §3; EULA states → Doc 6 §5; capability registry + package layout → Doc 12; locked timeouts → Doc 8 §5.0; error codes → Doc 10; conformance → Doc 11.

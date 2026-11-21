@@ -57,7 +57,7 @@ from enum import Enum
 
 # ==============================================================================
 # MODULE 1: WRITE-OPTIMIZED OPERATION SERVICE & DERIVED LOCKING
-# File: src/mcmanager/services/operations.py
+# File: app/services/operations.py
 # ==============================================================================
 
 class OperationStatus(str, Enum):
@@ -215,7 +215,7 @@ class OperationService:
 
 # ==============================================================================
 # MODULE 2: RUNTIME LIFECYCLE SERVICE & RECONCILIATION
-# File: src/mcmanager/services/runtime.py
+# File: app/services/runtime.py
 # ==============================================================================
 
 class RuntimeService:
@@ -390,7 +390,7 @@ class RuntimeService:
 
 # ==============================================================================
 # MODULE 3: BACKGROUND SCHEDULER & MISSED-RUN ENGINE
-# File: src/mcmanager/services/scheduler.py
+# File: app/services/scheduler.py
 # ==============================================================================
 
 class SchedulerService:
@@ -447,7 +447,7 @@ class SchedulerService:
 
 # ==============================================================================
 # MODULE 4: TERMINAL-ONLY AUDIT & NOTIFICATION PIPELINES
-# File: src/mcmanager/services/audit.py & notifications.py
+# File: app/services/audit.py & app/services/notifications.py
 # ==============================================================================
 
 class AuditService:

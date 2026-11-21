@@ -4,23 +4,16 @@ from __future__ import annotations
 
 import re
 import subprocess
-from dataclasses import dataclass
 
 from app.domain.value_objects import ServerType
-from app.ports.minecraft import JavaCompatibility, java_compatibility_for
-from app.ports.minecraft import JAVA_COMPATIBILITY  # noqa: F401  (reference data)
+from app.ports.minecraft import (
+    JavaCompatibility,
+    JavaDetection,
+    java_compatibility_for,
+)
 
 _JAVA_VERSION_RE = re.compile(r'version "(?P<version>[^"]+)"')
 _OLD_RUNTIME_RE = re.compile(r'^(?:1\.)?(?P<major>\d+)')
-
-
-@dataclass(frozen=True)
-class JavaDetection:
-    """Resolved Java runtime info for a path."""
-
-    path: str
-    major: int
-    full_version: str
 
 
 def detect_java(path: str) -> JavaDetection | None:

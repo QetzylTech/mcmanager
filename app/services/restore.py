@@ -142,7 +142,6 @@ class RestoreService:
                 outcome='reverted',
                 rollback_of_restore_id=restore_id,
             )
-            self._update_restore_outcome(restore_id, 'reverted')
             self._set_world_state(world_id, WorldState.OFF)
             return RestoreResult(restore_id, 'reverted', rollback_op['op_id'])
         except Exception:
@@ -151,7 +150,15 @@ class RestoreService:
                 OperationStatus.FAILED,
                 error_code='RESTORE_REVERT_FAILED',
             )
-            self._update_restore_outcome(restore_id, 'failed')
+            self._record_history(
+                world_id=world_id,
+                operation_id=rollback_op['op_id'],
+                source_artifact_id=pre_backup.artifact_id,
+                pre_restore_artifact_id=pre_backup.artifact_id,
+                operator_user_id=operator_user_id,
+                outcome='failed',
+                rollback_of_restore_id=restore_id,
+            )
             self._set_world_state(world_id, WorldState.ERROR)
             raise
 
@@ -230,14 +237,6 @@ class RestoreService:
         )
         connection.commit()
         return restore_id
-
-    def _update_restore_outcome(self, restore_id: str, outcome: str) -> None:
-        connection = self._store.writer()
-        connection.execute(
-            'UPDATE restore_history SET outcome = ?, finished_at = ? WHERE restore_id = ?',
-            (outcome, int(self._clock.now()), restore_id),
-        )
-        connection.commit()
 
     def _set_world_state(self, world_id: str, state: WorldState) -> None:
         connection = self._store.writer()

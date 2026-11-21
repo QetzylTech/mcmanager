@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -185,3 +186,63 @@ def test_schedule_disabled_or_deleted_before_dispatch_is_skipped(
         .fetchone()[0]
         == 0
     )
+
+
+def test_daily_schedule_before_run_time_selects_previous_utc_occurrence() -> None:
+    now = datetime(2026, 1, 2, 21, 30, tzinfo=UTC)
+    scheduler = SchedulerService(
+        store=None,  # type: ignore[arg-type]
+        clock=type('Clock', (), {'now': lambda self: int(now.timestamp())})(),
+        operations=None,  # type: ignore[arg-type]
+    )
+    schedule = {
+        'interval_spec': json.dumps({'kind': 'daily'}),
+        'last_changed_at': int((now - timedelta(days=2)).timestamp()),
+        'time_of_day': '22:00',
+    }
+
+    expected = scheduler._expected_run_at(schedule, int(now.timestamp()))
+
+    assert expected == int(
+        (now - timedelta(days=1))
+        .replace(hour=22, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+
+
+def test_tick_propagates_dispatch_failure_and_records_failed_health(monkeypatch) -> None:
+    now = 1_700_000_000
+    failure = RuntimeError('operation queue unavailable')
+    schedule = {
+        'schedule_id': 'schedule-1',
+        'interval_spec': json.dumps({'kind': 'every_n_days', 'days': 1}),
+        'last_changed_at': now - _DAY,
+        'world_id': 'world-1',
+        'schedule_type': 'backup',
+    }
+
+    class Clock:
+        def now(self) -> int:
+            return now
+
+    class Operations:
+        def create(self, *_args, **_kwargs):
+            raise failure
+
+    scheduler = SchedulerService(None, Clock(), Operations())  # type: ignore[arg-type]
+    monkeypatch.setattr(scheduler, '_enabled_schedules', lambda: [schedule])
+    monkeypatch.setattr(scheduler, '_schedule_for_dispatch', lambda _schedule_id: schedule)
+    monkeypatch.setattr(scheduler, '_has_recorded', lambda *_args: False)
+    monkeypatch.setattr(scheduler, '_has_run_operation', lambda *_args: False)
+    monkeypatch.setattr(scheduler, '_has_schedule_conflict', lambda _world_id: False)
+
+    with pytest.raises(RuntimeError, match='operation queue unavailable') as caught:
+        scheduler.tick()
+
+    assert caught.value is failure
+    assert scheduler.tick_health == {
+        'last_tick_at': now,
+        'next_tick_at': now + scheduler.tick_interval_seconds,
+        'status': 'failed',
+        'error': 'operation queue unavailable',
+    }

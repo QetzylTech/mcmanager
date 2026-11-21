@@ -21,6 +21,7 @@ import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -69,10 +70,13 @@ from app.services.audit import AuditService
 from app.services.configuration import ConfigurationConflictError, ConfigurationService
 from app.services.operations import OperationInput, OperationService
 from app.services.realtime import LogFanout, RealtimeHub
+from app.services.world_paths import allocate_world_directory, resolve_world_directory
 
 _RCON_PORT_OFFSET = 10
 _logger = logging.getLogger(__name__)
 _world_mutation_dispatch_lock = threading.Lock()
+_world_lifecycle_dispatch_lock = threading.Lock()
+_DEFAULT_MAX_CONCURRENT_WORLD_STARTS = 3
 
 
 class WorldLifecycleError(Exception):
@@ -634,70 +638,111 @@ class WorldsService:
 
     def dispatch_queued_operations(self) -> list[str]:
         """Resume persisted world lifecycle operations from the durable queue."""
-        dispatched: list[str] = []
-        seen_worlds: set[str] = set()
-        queued = self._operations.list_queued(
-            (OperationType.START, OperationType.STOP, OperationType.KILL)
-        )
-        for operation in queued:
-            world_id = operation['world_id']
-            if world_id is not None:
-                if world_id in seen_worlds:
-                    continue
-                seen_worlds.add(world_id)
-                if self._operations.has_active_operation(
-                    world_id, exclude_op_id=operation['op_id']
+        if not _world_lifecycle_dispatch_lock.acquire(blocking=False):
+            return []
+        try:
+            dispatched: list[str] = []
+            seen_worlds: set[str] = set()
+            queued = self._operations.list_queued(
+                (OperationType.START, OperationType.STOP, OperationType.KILL)
+            )
+            max_starts = self._max_concurrent_world_starts()
+            selected: list[dict[str, Any]] = []
+            selected_starts = 0
+            for operation in queued:
+                world_id = operation['world_id']
+                if world_id is not None:
+                    if world_id in seen_worlds:
+                        continue
+                    seen_worlds.add(world_id)
+                    if self._operations.has_active_operation(
+                        world_id, exclude_op_id=operation['op_id']
+                    ):
+                        continue
+                if (
+                    operation['op_type'] == OperationType.START.value
+                    and max_starts is not None
+                    and selected_starts >= max_starts
                 ):
                     continue
-            claimed = self._operations.claim_queued(operation['op_id'])
-            if claimed is None:
-                continue
-            op_id = claimed['op_id']
-            dispatched.append(op_id)
-            try:
-                op_type = OperationType(claimed['op_type'])
-                if world_id is None:
-                    raise WorldLifecycleError(f'{op_type.value} operation is missing a world id')
-                actor_type = ActorType(claimed['actor_type'])
-                actor_user_id = claimed['actor_user_id']
-                if op_type is OperationType.START:
-                    self.start(
-                        world_id=world_id,
-                        actor_type=actor_type,
-                        actor_user_id=actor_user_id,
-                        _operation_id=op_id,
-                    )
-                elif op_type is OperationType.STOP:
-                    self.stop(
-                        world_id=world_id,
-                        actor_type=actor_type,
-                        actor_user_id=actor_user_id,
-                        _operation_id=op_id,
-                    )
-                else:
-                    self.kill(
-                        world_id=world_id,
-                        actor_type=actor_type,
-                        actor_user_id=actor_user_id,
-                        _operation_id=op_id,
-                    )
-            except Exception as exc:
-                current = self._operations.get(op_id)
-                if current is not None and current['status'] not in {
-                    OperationStatus.COMPLETED.value,
-                    OperationStatus.FAILED.value,
-                    OperationStatus.CANCELLED.value,
-                    OperationStatus.TIMED_OUT.value,
-                }:
-                    self._operations.transition(
-                        op_id,
-                        OperationStatus.FAILED,
-                        error_code='OP_EXECUTION_FAILED',
-                        message=str(exc),
-                    )
-                _logger.exception('Queued world operation failed: %s', op_id)
-        dispatched.extend(self.dispatch_queued_world_mutations())
-        return dispatched
+                claimed = self._operations.claim_queued(operation['op_id'])
+                if claimed is None:
+                    continue
+                selected.append(claimed)
+                if claimed['op_type'] == OperationType.START.value:
+                    selected_starts += 1
+
+            if selected:
+                with ThreadPoolExecutor(max_workers=len(selected)) as executor:
+                    futures = [
+                        executor.submit(self._dispatch_queued_operation, operation)
+                        for operation in selected
+                    ]
+                    for future in as_completed(futures):
+                        future.result()
+                dispatched.extend(operation['op_id'] for operation in selected)
+            dispatched.extend(self.dispatch_queued_world_mutations())
+            return dispatched
+        finally:
+            _world_lifecycle_dispatch_lock.release()
+
+    def _max_concurrent_world_starts(self) -> int | None:
+        row = self._store.reader().execute(
+            "SELECT max_concurrent_world_starts FROM global_settings "
+            "ORDER BY settings_id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return _DEFAULT_MAX_CONCURRENT_WORLD_STARTS
+        value = row["max_concurrent_world_starts"]
+        if value is not None and (type(value) is not int or value < 0):
+            raise WorldLifecycleError("Configured concurrent world start limit is invalid.")
+        return None if value == 0 else value
+
+    def _dispatch_queued_operation(self, claimed: dict[str, Any]) -> None:
+        op_id = claimed['op_id']
+        world_id = claimed['world_id']
+        try:
+            op_type = OperationType(claimed['op_type'])
+            if world_id is None:
+                raise WorldLifecycleError(f'{op_type.value} operation is missing a world id')
+            actor_type = ActorType(claimed['actor_type'])
+            actor_user_id = claimed['actor_user_id']
+            if op_type is OperationType.START:
+                self.start(
+                    world_id=world_id,
+                    actor_type=actor_type,
+                    actor_user_id=actor_user_id,
+                    _operation_id=op_id,
+                )
+            elif op_type is OperationType.STOP:
+                self.stop(
+                    world_id=world_id,
+                    actor_type=actor_type,
+                    actor_user_id=actor_user_id,
+                    _operation_id=op_id,
+                )
+            else:
+                self.kill(
+                    world_id=world_id,
+                    actor_type=actor_type,
+                    actor_user_id=actor_user_id,
+                    _operation_id=op_id,
+                )
+        except Exception as exc:
+            current = self._operations.get(op_id)
+            if current is not None and current['status'] not in {
+                OperationStatus.COMPLETED.value,
+                OperationStatus.FAILED.value,
+                OperationStatus.CANCELLED.value,
+                OperationStatus.TIMED_OUT.value,
+            }:
+                self._operations.transition(
+                    op_id,
+                    OperationStatus.FAILED,
+                    error_code='OP_EXECUTION_FAILED',
+                    message=str(exc),
+                )
+            _logger.exception('Queued world operation failed: %s', op_id)
 
     def enqueue_world_mutation(
         self,
@@ -808,6 +853,22 @@ class WorldsService:
         self, operation: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
         world = data["world"]
+        if not world.get("world_directory"):
+            try:
+                root = ConfigurationService(self._store, self._clock).resolve_effective(
+                    world["world_id"]
+                )["minecraft_root_path"]
+            except KeyError:
+                root = "worlds"
+            world["world_directory"] = str(
+                allocate_world_directory(world, str(root or "worlds"))
+            )
+        directory = Path(world["world_directory"])
+        provisioning_marker = directory.parent / (
+            f".mcmanager-{world['world_id']}.provisioning"
+        )
+        created_directory = False
+        owns_directory = False
         connection = self._store.writer()
         connection.execute("BEGIN IMMEDIATE")
         try:
@@ -815,6 +876,35 @@ class WorldsService:
                 "SELECT * FROM world_instances WHERE world_id = ?", (world["world_id"],)
             ).fetchone()
             if row is None:
+                if directory.exists():
+                    if (
+                        provisioning_marker.is_symlink()
+                        or not provisioning_marker.is_file()
+                        or provisioning_marker.read_text(encoding="utf-8")
+                        != world["world_id"]
+                    ):
+                        raise WorldConflictError(
+                            "The requested world directory already exists."
+                        )
+                    owns_directory = True
+                else:
+                    directory.parent.mkdir(parents=True, exist_ok=True)
+                    if provisioning_marker.exists():
+                        if (
+                            provisioning_marker.is_symlink()
+                            or not provisioning_marker.is_file()
+                            or provisioning_marker.read_text(encoding="utf-8")
+                            != world["world_id"]
+                        ):
+                            raise WorldConflictError(
+                                "The requested world directory is being provisioned."
+                            )
+                    else:
+                        with provisioning_marker.open("x", encoding="utf-8") as marker:
+                            marker.write(world["world_id"])
+                    owns_directory = True
+                    directory.mkdir(parents=True, exist_ok=False)
+                    created_directory = True
                 columns = tuple(world)
                 connection.execute(
                     f"INSERT INTO world_instances ({', '.join(columns)}) "
@@ -823,6 +913,15 @@ class WorldsService:
                 )
             elif any(row[key] != value for key, value in world.items()):
                 raise WorldConflictError("world create operation does not match persisted world")
+            else:
+                directory.mkdir(parents=True, exist_ok=True)
+                if (
+                    not provisioning_marker.is_symlink()
+                    and provisioning_marker.is_file()
+                    and provisioning_marker.read_text(encoding="utf-8")
+                    == world["world_id"]
+                ):
+                    owns_directory = True
             connection.execute(
                 "UPDATE operations SET world_id = ? WHERE op_id = ? AND world_id IS NULL",
                 (world["world_id"], operation["op_id"]),
@@ -830,7 +929,30 @@ class WorldsService:
             connection.commit()
         except Exception:
             connection.rollback()
+            if owns_directory:
+                try:
+                    provisioning_marker.unlink(missing_ok=True)
+                except OSError:
+                    _logger.warning(
+                        "Could not remove incomplete world provisioning marker %s",
+                        provisioning_marker,
+                    )
+                if created_directory:
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        _logger.warning(
+                            "Could not remove incomplete world directory %s", directory
+                        )
             raise
+        if owns_directory:
+            try:
+                provisioning_marker.unlink(missing_ok=True)
+            except OSError:
+                _logger.warning(
+                    "Could not remove completed world provisioning marker %s",
+                    provisioning_marker,
+                )
         return {"world_id": world["world_id"]}
 
     def _apply_queued_world_delete(
@@ -1291,18 +1413,13 @@ class WorldsService:
         )
 
     def _world_dir(self, world: dict[str, Any]) -> Path:
-        if world["addressing_strategy"] == "path":
-            candidate = Path(world["addressing_value"])
-            if candidate.is_absolute():
-                return candidate
         try:
             root = ConfigurationService(self._store, self._clock).resolve_effective(
                 world["world_id"]
             )["minecraft_root_path"]
         except KeyError:
             root = "worlds"
-        base = Path(str(root))
-        return base / str(world["display_name"])
+        return resolve_world_directory(world, str(root or "worlds"))
 
     def _log_root(self, world_id: str) -> Path:
         try:

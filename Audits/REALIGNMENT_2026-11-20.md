@@ -50,8 +50,14 @@ ledger.
 
 ## Still open or blocked
 
-- Stale-world and log cleanup remains unsupported until a product policy
-  specifies eligibility, retention, preview, safeguards, and deletion rules.
+- **Correction (2026-11-21):** The stale-world/log bullet below was inaccurate:
+  it conflated stale-backup cleanup with world cleanup and overlooked the
+  approved backup/log policy. Cleanup must never target world directories or
+  world records. The user subsequently changed the stale-backup rule: no
+  tombstones or grace period; at each cleanup run over the configured storage
+  threshold, directly delete the oldest floor(50% of eligible stale backups)
+  per pressured world. The current policy and implementation evidence are
+  tracked under `KB-G5-CLEANUP-SCOPES` in `docs/WORKBOARD.md`.
 - Manager restore, restart, update, and rollback remain `501 NOT_IMPLEMENTED`
   pending approved recovery, supervisor, trust, and compatibility contracts.
 - Full route-by-route Document 10 parity and the Document 8/9 requirement maps
