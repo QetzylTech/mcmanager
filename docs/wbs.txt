@@ -3,6 +3,11 @@
 ================================================================================
 
 SYSTEM OVERVIEW:
+Development process authority: docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md.
+Numbered product documents and docs/ARCHITECTURE.md retain precedence for
+requirements and architecture. docs/WORKBOARD.md is the current task and
+evidence tracker; this WBS is work-package and dependency context.
+
 mcmanager is a Flask-backed, cross-platform modular monolith designed to
 supervise and orchestrate independent Minecraft server instances natively
 across POSIX (Linux/macOS) and Windows operating systems.

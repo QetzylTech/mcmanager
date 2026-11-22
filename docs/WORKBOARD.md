@@ -49,6 +49,13 @@ tracks implementation and verification, not just code-writing.
 Priority: **P0** release blocker / foundational, **P1** required gate work,
 **P2** important follow-up, **P3** housekeeping.
 
+Development work is governed by
+[`AGENT_DEVELOPMENT_WORKFLOW_SPEC.md`](AGENT_DEVELOPMENT_WORKFLOW_SPEC.md).
+Numbered product documents and `ARCHITECTURE.md` retain precedence over process
+rules. Read `AGENTS.md` before changing repository files.
+
+## In Progress
+
 ## Audit transfer — 2026-11-20
 
 Current findings and verification notes are under `Audits/`; this board
@@ -307,6 +314,44 @@ is integrated and reviewed.
 | Gate 4 filesystem policy | KB-G4-VERIFY | Path containment, free-space math, tree size and mtime |
 
 ## Done
+
+### KB-WF-002 — Reconcile legacy workboard status and section placement
+
+- **WBS/Docs:** `docs/WORKBOARD.md`; workflow specification sections 7 and 14
+- **Priority:** P2 · **Owner:** Copilot migration agent · **Updated:** 2026-11-22
+- **Status:** Done
+- **Depends on:** —
+- **Acceptance:** reconcile `KB-REC-01`, `KB-REC-02`, `KB-G0-7`, `KB-G5-CLEANUP-SCOPES`, `KB-D11-TEST-PYRAMID`, and `KB-DOC-LEGACY-ARCHIVE` between explicit status fields and board sections; preserve evidence and task IDs; do not promote implementation cards based on status headings alone; rerun `python dev_tools/workflow_verify.py` with zero status/section mismatches.
+- **Evidence:** `python dev_tools/workflow_verify.py` passed with 0 status/section warnings on 2026-11-22; CRLF-aware diff validation passed. No card status was promoted or evidence rewritten.
+
+### KB-WF-001 — Integrate the agent development workflow specification
+
+- **WBS/Docs:** `docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md`; `AGENTS.md`; `Audits/README.md`; `docs/WORKBOARD.md`; `docs/wbs.txt`
+- **Priority:** P1 · **Owner:** Copilot migration agent · **Updated:** 2026-11-22
+- **Status:** Done
+- **Depends on:** —
+- **Acceptance:** update the repository entry point and audit/planning references; reconcile workflow terminology and justified workboard placements; preserve historical audits and numbered-document authority; add a migration audit and remaining-gap list; run reproducible documentation consistency and repository-boundary verification.
+- **In scope:** `AGENTS.md`, `docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md` integration references, `docs/WORKBOARD.md` reconciliation, `docs/wbs.txt`, `Audits/README.md`, one small workflow consistency check, and `Audits/WORKFLOW_MIGRATION_2026-11-22.md`.
+- **Out of scope:** application behavior, numbered product requirements, architectural contracts, audit evidence rewriting, task reacceptance, and commit authorization.
+- **Evidence:** independent audit passed with findings; CRLF-aware `git diff --check` passed; `python dev_tools/workflow_verify.py` passed authority checks and identified six legacy status/section mismatches now assigned to `KB-WF-002`; no application source or historical audit files were modified. Migration report: `Audits/WORKFLOW_MIGRATION_2026-11-22.md`.
+
+### KB-G5-CLEANUP-POLICY — Approve safe stale-backup and log cleanup policy
+
+- **WBS/Docs:** Document 10 cleanup scopes; Documents 5 and 8
+- **Priority:** P1 · **Owner:** Unassigned
+- **Status:** Done
+- **Acceptance:** obtain explicit product-owner decisions for backup eligibility,
+  storage trigger and batch size/repetition, session threshold, references, log
+  retention, and protected log categories; document safeguards and execution
+  requirements.
+- **Evidence:** user approved `stale_backups` (never worlds/records), eligible
+  categories `session_end`, `manual`, `emergency`, `pre_restore`, default 3-day
+  age / 7 sessions / 90% pressure, latest/category-floor guards,
+  restore/sync-reference protection, and unlimited-by-default logs restricted
+  to expired rotated historical files. On each cleanup run at/above the
+  configured threshold, directly delete the oldest floor(50% of eligible stale
+  backups) per pressured world; no stale-backup tombstone or grace period.
+  Documents 5–10 record the policy.
 
 ### KB-G2-ENTITY-MODEL — Reconcile Document 6 concepts with domain classes
 
@@ -824,6 +869,7 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 
 ## Review
 
+
 ### KB-G5-3 — Implement backup, restore, cleanup, and sync API catalog
 
 - **WBS:** WP 5.1
@@ -1052,6 +1098,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 
 ## To Do
 
+## Review
+
 ### KB-REC-01 — Freeze the reconciliation baseline
 
 - **WBS/Docs:** `old doc/Audits/NEXT_STEPS.md` R0; Document 11
@@ -1141,6 +1189,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   against `app/requirements.txt`, `app/services/sync.py`,
   `app/web/api/manager_content.py`, and existing route/fake-server behavior.
 
+## To Do
+
 ### KB-REC-03 — Verify API contract parity in bounded route groups
 
 - **WBS/Docs:** Document 10; historical inventory
@@ -1200,6 +1250,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Current evidence — 2026-11-20:** current IDs and statuses are recorded in
   `Audits/reconciliation_traceability.csv`; the ledger remains limited to
   audited items and does not establish a completion percentage.
+
+## Review
 
 ### KB-G0-7 — Restore full-suite test acceptance
 
@@ -1287,24 +1339,6 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   The full suite now has 576 collected cases; focused properties, SQLite, and
   history API tests passed with `ResourceWarning` treated as an error.
 
-### KB-G5-CLEANUP-POLICY — Approve safe stale-backup and log cleanup policy
-
-- **WBS/Docs:** Document 10 cleanup scopes; Documents 5 and 8
-- **Priority:** P1 · **Owner:** Unassigned
-- **Status:** Done
-- **Acceptance:** obtain explicit product-owner decisions for backup eligibility,
-  storage trigger and batch size/repetition, session threshold, references, log
-  retention, and protected log categories; document safeguards and execution
-  requirements.
-- **Evidence:** user approved `stale_backups` (never worlds/records), eligible
-  categories `session_end`, `manual`, `emergency`, `pre_restore`, default 3-day
-  age / 7 sessions / 90% pressure, latest/category-floor guards,
-  restore/sync-reference protection, and unlimited-by-default logs restricted
-  to expired rotated historical files. On each cleanup run at/above the
-  configured threshold, directly delete the oldest floor(50% of eligible stale
-  backups) per pressured world; no stale-backup tombstone or grace period.
-  Documents 5–10 record the policy.
-
 ### KB-G5-CLEANUP-SCOPES — Implement stale-backup and log cleanup
 
 - **WBS/Docs:** WP 4.3 and WP 5.1; Documents 5, 8, and 10
@@ -1347,6 +1381,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   `git -c core.whitespace=cr-at-eol diff --check`. Scheduled backups are
   explicitly categorized and enqueue a durable cleanup operation; the cap is
   three, with referenced artifacts retained even if that means exceeding it.
+
+## To Do
 
 ### KB-D12-2 — Track remaining service-layer architecture divergences
 
@@ -1406,6 +1442,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 - **Current evidence:** the conflict matrix and ConfigEdit version behavior
   have focused coverage; full Document 9 acceptance remains open.
 
+## In Progress
+
 ### KB-D11-TEST-PYRAMID — Close the Document 11 test-pyramid gaps
 
 - **WBS/Docs:** Document 11 §§1–3
@@ -1428,6 +1466,8 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   7 passed and is not counted as real-browser E2E. Broader HTTP/process
   workflows, additional browser journeys, and the approximate 70/25/5
   distribution remain open; adapter conformance remains its own layer.
+
+## To Do
 
 ### KB-D11-COVERAGE — Meet documented test coverage floors
 
@@ -1721,7 +1761,7 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   benchmark exercises these workloads, commit justified
   `benchmarks/thresholds.json` values, and pass its acceptance test.
 
-## Backlog
+## Review
 
 ### KB-DOC-LEGACY-ARCHIVE — Clarify historical documentation status
 

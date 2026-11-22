@@ -23,6 +23,10 @@ portability.
 
 Use [docs/WORKBOARD.md](docs/WORKBOARD.md) as the current implementation,
 verification, and release tracker; it is the source of truth for work status.
+Follow [docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md](docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md)
+for the development lifecycle. Numbered product documents and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) remain authoritative for product
+behavior and architecture.
 Use [Audits/](Audits/) for current audit findings, realignment records, and
 supporting verification evidence. Older audit snapshots are retained under
 [`old doc/`](old%20doc/) and must not be presented as current evidence.
