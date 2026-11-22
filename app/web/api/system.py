@@ -285,6 +285,12 @@ def world_start(world_id: str):
     except WorldConflictError as exc:
         return error('WORLD_CONFLICT', str(exc), status=409)
     except WorldLifecycleError as exc:
+        if str(exc).startswith("SERVER_ARTIFACT_INTEGRITY_FAILED:"):
+            return error(
+                "SERVER_ARTIFACT_INTEGRITY_FAILED",
+                str(exc).partition(":")[2].strip(),
+                status=409,
+            )
         return error('START_FAILED', str(exc), status=422)
     return _action_operation(
         operation,

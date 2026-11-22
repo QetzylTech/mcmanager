@@ -31,8 +31,12 @@ class SecretsStore(Protocol):
         associated_entity_type: str,
         associated_entity_id: str,
         plaintext: str,
+        commit: bool = True,
     ) -> str:
-        """Persist an encrypted secret and return the new opaque secret_id."""
+        """Persist an encrypted secret and return the new opaque secret_id.
+
+        Set ``commit=False`` when the caller owns an encompassing transaction.
+        """
 
     def read(self, secret_id: str) -> str:
         """Decrypt and return the stored secret plaintext."""
@@ -44,9 +48,11 @@ class SecretsStore(Protocol):
         new_plaintext: str,
         associated_entity_type: str,
         associated_entity_id: str,
+        commit: bool = True,
     ) -> str:
         """Insert a chained rotated secret (``rotation_of``, ``rotated_at``).
 
         Returns the new secret_id; the caller re-points the owning entity
-        (e.g. ``users.secret_id``) at it.
+        (e.g. ``users.secret_id``) at it. Set ``commit=False`` when the caller
+        owns an encompassing transaction.
         """

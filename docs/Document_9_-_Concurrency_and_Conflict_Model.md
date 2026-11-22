@@ -13,9 +13,9 @@ Four lock classes. None are literal DB row locks — SQLite's own locking is a m
 - Not reentrant: an Operation cannot nest inside another on the same world. Compensating actions (automatic restore-revert) are new Operations that wait for the original to reach terminal state first.
 
 **1.2 Global storage lock (system-wide, blocking)**
-- Scope: the entire host. Held implicitly whenever the storage guard is tripped — not a lock anyone acquires/releases; a standing precondition re-checked by every Operation type that writes to disk (Start, Backup, Restore, Sync).
-- Guard is **contextual, not a flat percentage**: compares estimated job size (world, backup artifact, restore target) against available free space minus a configurable absolute reserve (default 10 GB), with a 10% free-space bound applying only as an overflow safety net. A 10 MB world on a 1 TB drive must not be blocked at 9% free; a 500 GB world must not start at 11% free only to trip an emergency shutdown.
-- While tripped: Start and Backup blocked for *every* world — the one world-agnostic lock, because disk space is a shared host resource. Cleanup is *triggered* by the condition, never blocked by it; emergency stop always allowed.
+- Scope: the entire host. Held implicitly whenever the storage guard is tripped — not a lock anyone acquires/releases; a standing precondition re-checked by every Operation type that writes to disk (Start, Backup, Restore, Sync, Download).
+- Guard is **contextual, not a flat percentage**: compares estimated job size (world, backup artifact, restore target) against available free space minus a configurable absolute reserve (default 10 GB = 10,000,000,000 bytes), with a 10% free-space bound applying only as an overflow safety net. A 10 MB world on a 1 TB drive must not be blocked at 9% free; a 500 GB world must not start at 11% free only to trip an emergency shutdown.
+- While tripped: Start, Backup, and Download blocked for *every* world — the one world-agnostic lock, because disk space is a shared host resource. Cleanup is *triggered* by the condition, never blocked by it; emergency stop always allowed.
 
 **1.3 Cleanup scope lock (per-scope, blocking, single-flight)**
 - Scope: `backups`, `stale_backups`, or `logs` (or a world's cleanup if world-scoped). A second Cleanup against the same scope while one runs = queued single-flight (§6) — waits and auto-dispatches when the in-flight reaches terminal. One Cleanup per scope at a time; does not reject additional requests. Stale-backup deletion skips any world with in-flight Backup, Cleanup, Restore, or Sync work and revalidates the exact eligible batch, quota pressure, retention floor, and restore/sync references before deleting.
@@ -27,6 +27,11 @@ Four lock classes. None are literal DB row locks — SQLite's own locking is a m
 - Start retains its per-world derived lock (§1.1); this is an additional admission limit for independent worlds, not a second world lock.
 - The dispatcher may run up to `global_settings.max_concurrent_world_starts` Start Operations at once (default 3). Additional starts stay durably queued until a slot is available. `NULL` or `0` means unlimited. Stop/Kill remain dispatchable independently, and one start failure does not block the others.
 - The dispatcher claims the batch before running it and prevents concurrent dispatcher batches in the same manager process, so multiple worker wakeups cannot exceed the configured limit.
+
+**1.6 Server-artifact download admission (manager-wide, fixed cap)**
+- At most two Download Operations may be in `Running` concurrently across all providers. Additional downloads remain durably queued and are dispatched when a slot is released.
+- This cap is independent of the per-world lock; downloads have `world_id = NULL` and never lock a world. Re-downloading an existing artifact requires explicit force and must not overwrite an artifact with a different digest. A second active request for the same provider/version/build/kind identity is rejected with `OP_CONFLICT_IN_FLIGHT` rather than opening a second writer.
+- Each transfer rechecks the artifact-size maximum (1 GiB) and the architecture's 10 GB (10,000,000,000-byte) minimum free-space reserve before and during writes. A failed reserve check fails that Operation; it does not change completed artifacts or the catalog.
 
 ## 2 What is *not* separately lockable (and why)
 
@@ -95,6 +100,8 @@ Rule (uniform): every `ConfigEdit` Operation submits the `version` the editor la
 | Restore | Queued (single-flight) — auto-dispatches when in-flight Restore reaches terminal; off-only precondition must still hold at dispatch |
 | Cleanup | Queued (single-flight per scope) — auto-dispatches when in-flight Cleanup reaches terminal |
 | Sync | Queued per artifact (single-flight per artifact); independently cancellable even mid-`Running` |
+| Download | At most two Running globally; one active writer per canonical provider/version/build/kind identity; a conflicting active request is rejected with `OP_CONFLICT_IN_FLIGHT`; independently cancellable mid-`Running` with `.part` cleanup |
+| ServerArtifactMigration | Single-flight; another migration is rejected while one is non-terminal; no import is run implicitly at startup |
 | ConfigEdit | Rejected on stale `version` (§4) — never queued, never silently applied |
 | CreateWorld | N/A — no existing row to conflict with; port/addressing uniqueness is the only collision surface, checked at validation |
 | DeleteWorld | Rejected if world isn't `off` or has any in-flight Backup/Restore/Cleanup (§3.1) |

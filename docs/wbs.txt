@@ -17,8 +17,9 @@ across POSIX (Linux/macOS) and Windows operating systems.
 --------------------------------------------------------------------------------
 
 Team A: Systems & OS Engineering
-  - Primary Scope: Process Supervision, OS Adapters, Minecraft Server Capabilities
-  - Work Packages: WP 1.1 – WP 1.6
+  - Primary Scope: Process Supervision, OS Adapters, Minecraft Server Capabilities,
+    Server Artifact Acquisition
+  - Work Packages: WP 1.1 – WP 1.7
 
 Team B: Core Data Persistence & Security
   - Primary Scope: Relational Database Schema, Argon2id Auth, Settings Engine
@@ -121,6 +122,30 @@ WP 1.6: Adapter Conformance Test Suite & Fake Server Harness
     --crash-after and --save-slow options retained only as compatibility
     aliases; C1–C14 automated conformance test suite.
   - Acceptance Criteria: 100% pass rate on C1–C14 suite across POSIX and Windows.
+
+WP 1.7: In-App Server Artifact Catalog, Downloader & World Provisioning
+  - Ownership: Team A with Team E API/UI integration.
+  - File Scope: app/ports/server_artifacts.py,
+    app/services/server_artifacts.py, app/infrastructure/minecraft/providers/,
+    app/web/api/server_artifacts.py, World Template Catalog UI, and focused tests.
+  - Deliverables: replace the ignored external archive downloader with an
+    application-owned provider catalog and download workflow for Vanilla,
+    Paper, Purpur, Fabric, Forge, and NeoForge; durable download operations;
+    SQLite catalog with safe legacy-manifest migration, managed storage, and
+    integrity/provenance metadata. First-release CreateWorld provisioning is
+    limited to verified runnable Vanilla, Paper, and Purpur artifacts; Fabric
+    launchers and Forge/NeoForge installers are catalogued/downloadable but
+    are not prepared or provisioned.
+  - Acceptance Criteria: provider fixtures exercise catalog parsing and
+    selection without live network access; downloads use bounded concurrency,
+    retries, partial-file cleanup, checksum validation where available, and
+    atomic publication; errors and job status are explicit; CreateWorld uses a
+    explicit compatible verified local artifact and Start verifies its
+    recorded world-local SHA-256 immediately before spawn.
+    Existing archives are preserved/migrated before the external script is
+    removed. API, permissions, persistence, and bounded download limits are
+    defined in the governing documents before coding; later provider
+    preparation requires a separate approved task.
 
 ================================================================================
 WP 2.0 CORE DATA PERSISTENCE, DOMAIN MODEL & SECURITY (Team B)

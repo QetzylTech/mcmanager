@@ -70,6 +70,7 @@ from app.services.audit import AuditService
 from app.services.configuration import ConfigurationConflictError, ConfigurationService
 from app.services.operations import OperationInput, OperationService
 from app.services.realtime import LogFanout, RealtimeHub
+from app.services.server_artifacts import ServerArtifactError, ServerArtifactService
 from app.services.world_paths import allocate_world_directory, resolve_world_directory
 
 _RCON_PORT_OFFSET = 10
@@ -123,6 +124,7 @@ class WorldsService:
         logs: LogFanout | None = None,
         audit: AuditService | None = None,
         realtime: RealtimeHub | None = None,
+        server_artifacts: ServerArtifactService | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
@@ -133,6 +135,7 @@ class WorldsService:
         self._logs = logs
         self._audit = audit
         self._realtime = realtime
+        self._server_artifacts = server_artifacts
 
     # ------------------------------------------------------------------ start
 
@@ -533,6 +536,23 @@ class WorldsService:
                 detail="EULA acceptance has not been audited",
                 eula_state=EulaState.UNACCEPTED,
             )
+        if world.get("server_artifact_provenance_json"):
+            if self._server_artifacts is None:
+                return GateResult(
+                    passed=False,
+                    error_code="SERVER_ARTIFACT_INTEGRITY_FAILED",
+                    detail="Server artifact verification is unavailable.",
+                )
+            try:
+                self._server_artifacts.verify_world_artifact(
+                    world, Path(context.world_dir)
+                )
+            except ServerArtifactError as exc:
+                return GateResult(
+                    passed=False,
+                    error_code=exc.code,
+                    detail=str(exc),
+                )
         return self._minecraft.validate_launch(context)
 
     # ------------------------------------------------------------------- stop
@@ -736,10 +756,15 @@ class WorldsService:
                 OperationStatus.CANCELLED.value,
                 OperationStatus.TIMED_OUT.value,
             }:
+                error_code = (
+                    "SERVER_ARTIFACT_INTEGRITY_FAILED"
+                    if str(exc).startswith("SERVER_ARTIFACT_INTEGRITY_FAILED:")
+                    else "OP_EXECUTION_FAILED"
+                )
                 self._operations.transition(
                     op_id,
                     OperationStatus.FAILED,
-                    error_code='OP_EXECUTION_FAILED',
+                    error_code=error_code,
                     message=str(exc),
                 )
             _logger.exception('Queued world operation failed: %s', op_id)
@@ -869,14 +894,41 @@ class WorldsService:
         )
         created_directory = False
         owns_directory = False
-        connection = self._store.writer()
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            row = connection.execute(
-                "SELECT * FROM world_instances WHERE world_id = ?", (world["world_id"],)
-            ).fetchone()
-            if row is None:
-                if directory.exists():
+        created_artifact_file = False
+        existing = self._store.reader().execute(
+            "SELECT * FROM world_instances WHERE world_id = ?", (world["world_id"],)
+        ).fetchone()
+        if existing is not None:
+            if any(existing[key] != value for key, value in world.items()):
+                raise WorldConflictError(
+                    "world create operation does not match persisted world"
+                )
+            directory.mkdir(parents=True, exist_ok=True)
+            if world.get("server_artifact_id") is not None:
+                if self._server_artifacts is None:
+                    raise WorldLifecycleError("Server artifact service is unavailable.")
+                self._server_artifacts.verify_world_artifact(world, directory)
+            owns_directory = (
+                not provisioning_marker.is_symlink()
+                and provisioning_marker.is_file()
+                and provisioning_marker.read_text(encoding="utf-8")
+                == world["world_id"]
+            )
+        else:
+            if directory.exists():
+                if (
+                    provisioning_marker.is_symlink()
+                    or not provisioning_marker.is_file()
+                    or provisioning_marker.read_text(encoding="utf-8")
+                    != world["world_id"]
+                ):
+                    raise WorldConflictError(
+                        "The requested world directory already exists."
+                    )
+                owns_directory = True
+            else:
+                directory.parent.mkdir(parents=True, exist_ok=True)
+                if provisioning_marker.exists():
                     if (
                         provisioning_marker.is_symlink()
                         or not provisioning_marker.is_file()
@@ -884,27 +936,40 @@ class WorldsService:
                         != world["world_id"]
                     ):
                         raise WorldConflictError(
-                            "The requested world directory already exists."
+                            "The requested world directory is being provisioned."
                         )
-                    owns_directory = True
                 else:
-                    directory.parent.mkdir(parents=True, exist_ok=True)
-                    if provisioning_marker.exists():
-                        if (
-                            provisioning_marker.is_symlink()
-                            or not provisioning_marker.is_file()
-                            or provisioning_marker.read_text(encoding="utf-8")
-                            != world["world_id"]
-                        ):
-                            raise WorldConflictError(
-                                "The requested world directory is being provisioned."
-                            )
-                    else:
-                        with provisioning_marker.open("x", encoding="utf-8") as marker:
-                            marker.write(world["world_id"])
-                    owns_directory = True
-                    directory.mkdir(parents=True, exist_ok=False)
-                    created_directory = True
+                    with provisioning_marker.open("x", encoding="utf-8") as marker:
+                        marker.write(world["world_id"])
+                owns_directory = True
+                directory.mkdir(parents=True, exist_ok=False)
+                created_directory = True
+            artifact_id = world.get("server_artifact_id")
+            if artifact_id is not None:
+                if self._server_artifacts is None:
+                    raise WorldLifecycleError("Server artifact service is unavailable.")
+                artifact_file = directory / "server.jar"
+                had_artifact_file = artifact_file.exists()
+                provenance = self._server_artifacts.provision_world_artifact(
+                    artifact_id, directory, operation_id=operation["op_id"]
+                )
+                created_artifact_file = not had_artifact_file
+                expected_provenance = json.loads(
+                    world["server_artifact_provenance_json"]
+                )
+                if provenance != expected_provenance:
+                    raise ServerArtifactError(
+                        "SERVER_ARTIFACT_INTEGRITY_FAILED",
+                        "World creation provenance does not match the selected artifact.",
+                    )
+
+        connection = self._store.writer()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = connection.execute(
+                "SELECT * FROM world_instances WHERE world_id = ?", (world["world_id"],)
+            ).fetchone()
+            if row is None:
                 columns = tuple(world)
                 connection.execute(
                     f"INSERT INTO world_instances ({', '.join(columns)}) "
@@ -912,16 +977,9 @@ class WorldsService:
                     tuple(world[column] for column in columns),
                 )
             elif any(row[key] != value for key, value in world.items()):
-                raise WorldConflictError("world create operation does not match persisted world")
-            else:
-                directory.mkdir(parents=True, exist_ok=True)
-                if (
-                    not provisioning_marker.is_symlink()
-                    and provisioning_marker.is_file()
-                    and provisioning_marker.read_text(encoding="utf-8")
-                    == world["world_id"]
-                ):
-                    owns_directory = True
+                raise WorldConflictError(
+                    "world create operation does not match persisted world"
+                )
             connection.execute(
                 "UPDATE operations SET world_id = ? WHERE op_id = ? AND world_id IS NULL",
                 (world["world_id"], operation["op_id"]),
@@ -937,6 +995,10 @@ class WorldsService:
                         "Could not remove incomplete world provisioning marker %s",
                         provisioning_marker,
                     )
+                if created_artifact_file:
+                    artifact_file = directory / "server.jar"
+                    if artifact_file.is_file() and not artifact_file.is_symlink():
+                        artifact_file.unlink(missing_ok=True)
                 if created_directory:
                     try:
                         directory.rmdir()
@@ -1398,7 +1460,35 @@ class WorldsService:
                 parsed_override = parsed
 
         launch_args = parsed_override if parsed_override is not None else self._launch_args(world)
-        jar = self._find_jar(world_dir) if parsed_override is None else ""
+        if world.get("server_artifact_provenance_json"):
+            if self._server_artifacts is None:
+                raise WorldLifecycleError("SERVER_ARTIFACT_INTEGRITY_FAILED: verifier unavailable.")
+            jar_path = world_dir / "server.jar"
+            try:
+                provenance = json.loads(world["server_artifact_provenance_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise WorldLifecycleError(
+                    "SERVER_ARTIFACT_INTEGRITY_FAILED: provenance is invalid."
+                ) from exc
+            if (
+                not isinstance(provenance, dict)
+                or provenance.get("provider") not in {"vanilla", "paper", "purpur"}
+                or provenance.get("artifact_kind") != "runnable_server"
+                or provenance.get("runtime_relative_path") != "server.jar"
+                or jar_path.is_symlink()
+            ):
+                raise WorldLifecycleError(
+                    "SERVER_ARTIFACT_INTEGRITY_FAILED: runtime server path is unsafe."
+                )
+            if parsed_override is not None and not self._launch_override_targets(
+                parsed_override, jar_path
+            ):
+                raise WorldLifecycleError(
+                    "SERVER_ARTIFACT_INTEGRITY_FAILED: launch override must use server.jar."
+                )
+            jar = str(jar_path)
+        else:
+            jar = self._find_jar(world_dir) if parsed_override is None else ""
         return LaunchContext(
             world_id=world["world_id"],
             server_type=ServerType(world["server_type"]),
@@ -1411,6 +1501,22 @@ class WorldsService:
             rcon_port=int(world["port"]) + _RCON_PORT_OFFSET,
             launch_args=launch_args,
         )
+
+    @staticmethod
+    def _launch_override_targets(argv: list[str], server_jar: Path) -> bool:
+        try:
+            index = argv.index("-jar")
+        except ValueError:
+            return False
+        if index + 1 >= len(argv):
+            return False
+        target = Path(argv[index + 1])
+        if not target.is_absolute():
+            target = server_jar.parent / target
+        try:
+            return target.resolve() == server_jar.resolve()
+        except (OSError, RuntimeError):
+            return False
 
     def _world_dir(self, world: dict[str, Any]) -> Path:
         try:

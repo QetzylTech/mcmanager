@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
@@ -46,6 +48,7 @@ _CANCELLABLE_TYPES = {
     OperationType.CLEANUP.value,
     OperationType.SYNC.value,
     OperationType.DELETE_WORLD.value,
+    OperationType.DOWNLOAD.value,
 }
 
 
@@ -661,6 +664,55 @@ class OperationService:
         self._publish_terminal(updated) if terminal else self._publish_status(updated, status)
         return updated
 
+    def persist_download_promotion(
+        self, op_id: str, *, relative_path: str, size_bytes: int, sha256: str
+    ) -> dict[str, Any]:
+        """Persist the verified file identity before its atomic filesystem promotion."""
+        if (
+            not relative_path
+            or Path(relative_path).is_absolute()
+            or any(part in {"", ".", ".."} for part in Path(relative_path).parts)
+            or type(size_bytes) is not int
+            or size_bytes <= 0
+            or not re.fullmatch(r"[a-fA-F0-9]{64}", sha256)
+        ):
+            raise ValueError('download promotion checkpoint is invalid')
+        connection = self._store.writer()
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute(
+                'SELECT op_type, status, data_json FROM operations WHERE op_id = ?',
+                (op_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row['op_type'] != OperationType.DOWNLOAD.value
+                or row['status'] != OperationStatus.RUNNING.value
+            ):
+                raise OperationStateError(
+                    f'download operation is not running: {op_id}'
+                )
+            data = json.loads(row['data_json'] or '{}')
+            data['promotion'] = {
+                'relative_path': relative_path,
+                'size_bytes': size_bytes,
+                'sha256': sha256,
+            }
+            connection.execute(
+                'UPDATE operations SET data_json = ?, updated_at = ? WHERE op_id = ?',
+                (json.dumps(data), int(self._clock.now()), op_id),
+            )
+            updated = dict(
+                connection.execute(
+                    'SELECT * FROM operations WHERE op_id = ?', (op_id,)
+                ).fetchone()
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return updated
+
     def update_progress_in_memory(
         self, op_id: str, *, progress_pct: int, step_name: str
     ) -> None:
@@ -938,7 +990,8 @@ class OperationService:
                 OperationStatus.VALIDATING.value,
             } or (
                 current_status == OperationStatus.RUNNING.value
-                and current['op_type'] == OperationType.SYNC.value
+                and current['op_type']
+                in {OperationType.SYNC.value, OperationType.DOWNLOAD.value}
             )
             if current['op_type'] not in _CANCELLABLE_TYPES or not cancellable_status:
                 raise OperationNotCancellableError(op_id)

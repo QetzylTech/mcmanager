@@ -116,7 +116,7 @@ Applies to every multi-admin-editable config table.
 - All state changes = durable Operations; terminal transitions and security/config events append audits, while intermediate checkpoints stay in memory and broadcast over SSE; restart-safe where practical (Doc 6/8).
 - Runtime status **never** from a single log line. State resolver = process state + health probes + startup signals + operation checkpoints + crash markers. Log strings advisory (Doc 13). Readiness per Doc 14 hierarchy; listening port alone ≠ `running` (ruling 13).
 - Queue/reject/preempt (Doc 9): Backup/Restore/Cleanup duplicates queued single-flight (auto-dispatch, position via live stream — never rejected, never polled); Start duplicates ignored; DeleteWorld/ConfigEdit conflicts rejected. Priority between waiting ops contextual (manual/safety-critical first).
-- Storage guards contextual (job size + configurable absolute reserve, default 10 GB; 10% free-space only as overflow safety net) — never a flat 10% rule.
+- Storage guards contextual (job size + configurable absolute reserve, default 10 GB = 10,000,000,000 bytes; 10% free-space only as overflow safety net) — never a flat 10% rule.
 - Runtime config (java, launch args, port) editable only while `state = off`; write immediate, effect deferred to next boot by construction.
 
 ## 11 Web Application

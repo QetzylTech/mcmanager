@@ -95,6 +95,8 @@ def run_migrations(store: SqliteStore, migrations_dir: str | Path) -> None:
     pending = [item for item in _migration_files(directory) if item[0] not in applied]
 
     for version, name, path in pending:
+        if version == 9:
+            _validate_server_artifact_templates(connection)
         _apply_one(connection, version, name, path)
 
     _sweep_foreign_keys(connection)
@@ -107,6 +109,28 @@ def _sweep_foreign_keys(connection: sqlite3.Connection) -> None:
         rows = '\n'.join(str(tuple(row)) for row in violations[:20])
         raise PersistenceError(
             f'foreign_key_check failed with {len(violations)} violation(s):\n{rows}'
+        )
+
+
+def _validate_server_artifact_templates(connection: sqlite3.Connection) -> None:
+    """Reject malformed legacy templates before migration 009 derives constraints."""
+    allowed_providers = ('vanilla', 'paper', 'purpur', 'fabric', 'forge', 'neoforge')
+    placeholders = ','.join('?' for _ in allowed_providers)
+    row = connection.execute(
+        f"""
+        SELECT template_id, category, default_version
+        FROM templates
+        WHERE lower(trim(category)) NOT IN ({placeholders})
+           OR trim(default_version) = ''
+        ORDER BY template_id
+        LIMIT 1
+        """,
+        allowed_providers,
+    ).fetchone()
+    if row is not None:
+        raise PersistenceError(
+            'migration 009 cannot derive artifact compatibility for template '
+            f'{row["template_id"]!r}: unsupported provider or empty Minecraft version'
         )
 
 

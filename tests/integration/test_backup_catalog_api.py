@@ -15,6 +15,7 @@ from app import create_app
 from app.domain.value_objects import ActorType, OperationStatus, OperationType
 from app.services.backup import BackupResult
 from app.services.cleanup import RetentionError
+from app.services.configuration import ConfigurationConflictError
 from app.services.operations import OperationInput
 from app.services.worlds import WorldsService
 from app.web.middleware import session_csrf_token
@@ -632,3 +633,471 @@ def test_backup_delete_enqueues_idempotent_cleanup_and_audits(backup_api_app, mo
     )
     assert regular_force.status_code == 403
     assert regular_force.json["error"]["code"] == "AUTH_FORBIDDEN"
+
+
+def test_backup_inventory_detail_and_world_cleanup_policy_contract(backup_api_app, monkeypatch):
+    app, tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    first = _seed_artifact(app, tmp_path / "backups", "inventory_first")
+    second = _seed_artifact(app, tmp_path / "backups", "inventory_second")
+
+    listing = admin.get("/api/backups", query_string={"limit": "1", "offset": "0"})
+    assert listing.status_code == 200
+    assert listing.json["meta"]["pagination"] == {"limit": 1, "offset": 0, "total": 2}
+    assert len(listing.json["data"]["backups"]) == 1
+
+    world_listing = admin.get(
+        "/api/worlds/api_world/backups",
+        query_string={"category": "manual", "limit": "50"},
+    )
+    assert world_listing.status_code == 200
+    assert {row["artifact_id"] for row in world_listing.json["data"]["backups"]} >= {
+        "inventory_first",
+        "inventory_second",
+    }
+    invalid_filter = admin.get("/api/backups", query_string={"deleted": "sometimes"})
+    assert invalid_filter.status_code == 400
+    assert invalid_filter.json["error"]["code"] == "VALIDATION_ERROR"
+
+    detail = admin.get("/api/backups/inventory_first")
+    assert detail.status_code == 200
+    assert detail.json["data"]["backup"]["artifact_id"] == "inventory_first"
+    missing = admin.get("/api/backups/not-present")
+    assert missing.status_code == 404
+    assert missing.json["error"]["code"] == "BACKUP_ARTIFACT_NOT_FOUND"
+    assert first.is_file()
+    assert second.is_file()
+
+    inherited = admin.get("/api/worlds/api_world/cleanup-policy")
+    assert inherited.status_code == 200
+    assert inherited.json["data"]["inherited"] is True
+    assert inherited.json["data"]["version"] == 0
+
+    overridden = admin.patch(
+        "/api/worlds/api_world/cleanup-policy",
+        json={
+            "version": 0,
+            "age_rule_days": 5,
+            "space_rule_pct": 75,
+            "count_rules": {"manual": 4},
+            "stale_session_threshold": 9,
+            "log_retention_days": 30,
+        },
+        headers=headers,
+    )
+    assert overridden.status_code == 200
+    assert overridden.json["data"]["inherited"] is False
+    policy = overridden.json["data"]["cleanup_policy"]
+    assert policy["scope"] == "world"
+    assert policy["world_id"] == "api_world"
+    assert policy["age_rule_days"] == 5
+    assert policy["count_rules"] == {"manual": 4}
+
+    stale = admin.patch(
+        "/api/worlds/api_world/cleanup-policy",
+        json={"version": 0, "age_rule_days": 6},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+    invalid = admin.patch(
+        "/api/worlds/api_world/cleanup-policy",
+        json={"version": policy["version"], "count_rules": {"manual": 1}},
+        headers=headers,
+    )
+    assert invalid.status_code == 400
+    assert invalid.json["error"]["code"] == "VALIDATION_ERROR"
+
+    missing_world = admin.get("/api/worlds/missing-world/cleanup-policy")
+    assert missing_world.status_code == 404
+    assert missing_world.json["error"]["code"] == "WORLD_NOT_FOUND"
+
+
+def test_world_sync_target_override_falls_back_to_global_after_disable_and_delete(
+    backup_api_app, monkeypatch
+):
+    app, _tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    global_created = admin.post(
+        "/api/sync/targets",
+        json={
+            "scope": "global",
+            "target_type": "nas",
+            "config": {"path": "/mnt/global-backups"},
+            "credential": "global-sync-credential",
+        },
+        headers=headers,
+    )
+    assert global_created.status_code == 201
+    global_target = global_created.json["data"]["sync_target"]
+
+    world_created = admin.post(
+        "/api/sync/targets",
+        json={
+            "scope": "world",
+            "world_id": "api_world",
+            "target_type": "nas",
+            "config": {"path": "/mnt/world-backups"},
+            "credential": "world-sync-credential",
+        },
+        headers=headers,
+    )
+    assert world_created.status_code == 201
+    world_target = world_created.json["data"]["sync_target"]
+
+    targets = admin.get("/api/sync/targets", query_string={"world_id": "api_world"})
+    assert targets.status_code == 200
+    by_id = {target["sync_target_id"]: target for target in targets.json["data"]["sync_targets"]}
+    assert by_id[world_target["sync_target_id"]]["effective"] is True
+    assert by_id[global_target["sync_target_id"]]["effective"] is False
+    assert "world-sync-credential" not in str(targets.json)
+
+    disabled = admin.patch(
+        f"/api/sync/targets/{world_target['sync_target_id']}",
+        json={"version": world_target["version"], "enabled": False},
+        headers=headers,
+    )
+    assert disabled.status_code == 200
+    assert disabled.json["data"]["sync_target"]["enabled"] is False
+    after_disable = admin.get("/api/sync/targets", query_string={"world_id": "api_world"})
+    disabled_targets = {
+        target["sync_target_id"]: target for target in after_disable.json["data"]["sync_targets"]
+    }
+    assert disabled_targets[global_target["sync_target_id"]]["effective"] is True
+    assert disabled_targets[world_target["sync_target_id"]]["effective"] is False
+
+    deleted = admin.delete(
+        f"/api/sync/targets/{world_target['sync_target_id']}",
+        headers=headers,
+    )
+    assert deleted.status_code == 200
+    after_delete = admin.get("/api/sync/targets", query_string={"world_id": "api_world"})
+    remaining = after_delete.json["data"]["sync_targets"]
+    assert [target["sync_target_id"] for target in remaining] == [global_target["sync_target_id"]]
+    assert remaining[0]["effective"] is True
+    deleted_row = (
+        container.store.reader()
+        .execute(
+            "SELECT enabled, deleted_at FROM sync_targets WHERE sync_target_id = ?",
+            (world_target["sync_target_id"],),
+        )
+        .fetchone()
+    )
+    assert deleted_row["enabled"] == 0
+    assert deleted_row["deleted_at"] is not None
+
+
+def test_sync_target_update_changes_configuration_and_rotates_credential(
+    backup_api_app, monkeypatch
+):
+    app, _tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    created = admin.post(
+        "/api/sync/targets",
+        json={
+            "scope": "global",
+            "target_type": "nas",
+            "config": {"path": "/mnt/old"},
+            "credential": "old-sync-credential",
+            "name": "Old archive",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    target = created.json["data"]["sync_target"]
+    assert container.secrets.read(target["secret_id"]) == "old-sync-credential"
+
+    updated = admin.patch(
+        f"/api/sync/targets/{target['sync_target_id']}",
+        json={
+            "version": target["version"],
+            "config": {"path": "/mnt/new"},
+            "credential": "new-sync-credential",
+            "name": "New archive",
+            "enabled": False,
+        },
+        headers=headers,
+    )
+
+    assert updated.status_code == 200
+    result = updated.json["data"]["sync_target"]
+    assert result["version"] == target["version"] + 1
+    assert result["config"] == {"name": "New archive", "path": "/mnt/new"}
+    assert result["name"] == "New archive"
+    assert result["enabled"] is False
+    assert result["secret_id"] != target["secret_id"]
+    assert container.secrets.read(result["secret_id"]) == "new-sync-credential"
+    assert "new-sync-credential" not in str(updated.json)
+    assert updated.json["data"]["operation"]["status"] == OperationStatus.COMPLETED.value
+
+    moved = admin.patch(
+        f"/api/sync/targets/{target['sync_target_id']}",
+        json={
+            "version": result["version"],
+            "scope": "world",
+            "world_id": "api_world",
+            "name": None,
+        },
+        headers=headers,
+    )
+    assert moved.status_code == 200
+    moved_target = moved.json["data"]["sync_target"]
+    assert moved_target["scope"] == "world"
+    assert moved_target["world_id"] == "api_world"
+    assert moved_target["config"] == {"path": "/mnt/new"}
+    assert moved_target["name"] == target["sync_target_id"]
+
+
+def test_sync_target_update_rejects_stale_and_invalid_fields(backup_api_app, monkeypatch):
+    app, _tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+
+    created = admin.post(
+        "/api/sync/targets",
+        json={
+            "scope": "global",
+            "target_type": "nas",
+            "config": {"path": "/mnt/archive"},
+            "credential": "sync-credential",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    target_id = created.json["data"]["sync_target"]["sync_target_id"]
+
+    invalid_updates = (
+        ({"version": 1}, "VALIDATION_ERROR"),
+        ({"version": 1, "scope": "world", "world_id": "missing_world"}, "VALIDATION_ERROR"),
+        ({"version": 1, "target_type": "unknown"}, "VALIDATION_ERROR"),
+        ({"version": 1, "config": []}, "VALIDATION_ERROR"),
+        ({"version": 1, "name": " "}, "VALIDATION_ERROR"),
+        ({"version": 1, "enabled": "false"}, "VALIDATION_ERROR"),
+        ({"version": 1, "credential": " "}, "VALIDATION_ERROR"),
+    )
+    for payload, expected_code in invalid_updates:
+        response = admin.patch(
+            f"/api/sync/targets/{target_id}",
+            json=payload,
+            headers=headers,
+        )
+        assert response.status_code == 400
+        assert response.json["error"]["code"] == expected_code
+
+    stale = admin.patch(
+        f"/api/sync/targets/{target_id}",
+        json={"version": 2, "enabled": False},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+    missing = admin.patch(
+        "/api/sync/targets/missing_target",
+        json={"version": 1, "enabled": False},
+        headers=headers,
+    )
+    assert missing.status_code == 404
+    assert missing.json["error"]["code"] == "NOT_FOUND"
+
+    def fail_rotation(*_args, **_kwargs):
+        raise RuntimeError("secret store unavailable")
+
+    monkeypatch.setattr(container.secrets, "rotate", fail_rotation)
+    rotation_failed = admin.patch(
+        f"/api/sync/targets/{target_id}",
+        json={"version": 1, "credential": "replacement-credential"},
+        headers=headers,
+    )
+    assert rotation_failed.status_code == 500
+    assert rotation_failed.json["error"]["code"] == "SYNC_TARGET_CREDENTIAL_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "message", "status_code", "error_code"),
+    [
+        (
+            ConfigurationConflictError,
+            "CONFIG_VERSION_CONFLICT",
+            409,
+            "CONFIG_VERSION_CONFLICT",
+        ),
+        (KeyError, "missing target", 404, "NOT_FOUND"),
+        (ValueError, "invalid target configuration", 400, "VALIDATION_ERROR"),
+    ],
+)
+def test_sync_target_update_returns_configuration_failures(
+    backup_api_app,
+    monkeypatch,
+    failure_type,
+    message,
+    status_code,
+    error_code,
+):
+    app, _tmp_path = backup_api_app
+    admin, headers = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    monkeypatch.setattr(container.auth, "require_step_up", lambda _session: None)
+    created = admin.post(
+        "/api/sync/targets",
+        json={
+            "scope": "global",
+            "target_type": "nas",
+            "config": {"path": "/mnt/archive"},
+            "credential": "sync-credential",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    target_id = created.json["data"]["sync_target"]["sync_target_id"]
+
+    def fail_update(*_args, **_kwargs):
+        raise failure_type(message)
+
+    monkeypatch.setattr(container.configuration, "update_versioned_with_operation", fail_update)
+    response = admin.patch(
+        f"/api/sync/targets/{target_id}",
+        json={"version": 1, "enabled": False},
+        headers=headers,
+    )
+
+    assert response.status_code == status_code
+    assert response.json["error"]["code"] == error_code
+
+
+def test_sync_config_validation_rejects_nested_secrets_and_oversized_values():
+    import pytest
+
+    from app.web.api.backup_catalogs import _validate_sync_config
+
+    assert _validate_sync_config(
+        {"name": "Archive", "path": "D:/archives", "label": "Résumé"},
+        "nas",
+    ) == '{"name":"Archive","path":"D:/archives","label":"Résumé"}'
+
+    invalid_configs = (
+        ([], "nas", "config must be a JSON object"),
+        ({"name": " "}, "s3", "config.name"),
+        ({"nested": [{"auth-token": "secret"}]}, "s3", "Credentials must be submitted"),
+        ({"path": " "}, "nas", "NAS targets require"),
+        ({"payload": "x" * 16_385}, "s3", "must not exceed 16384 bytes"),
+    )
+    for config, target_type, message in invalid_configs:
+        with pytest.raises(ValueError, match=message):
+            _validate_sync_config(config, target_type)
+
+
+def test_global_cleanup_policy_create_and_preview_paths(container):
+    from flask import Flask, g
+
+    from app.ports.secrets_store import SecretType
+    from app.web.api.backup_catalogs import backup_catalogs_bp
+
+    user_id = "u_cleanup_policy_test"
+    secret_id = container.secrets.store(
+        secret_type=SecretType.USER_PASSWORD,
+        associated_entity_type="user",
+        associated_entity_id=user_id,
+        plaintext="test-password-hash",
+    )
+    now = int(container.clock.now())
+    writer = container.store.writer()
+    writer.execute(
+        "INSERT INTO users (user_id, username, display_name, secret_id, status, "
+        "failed_login_count, locked_until, created_by, deleted_at, deleted_by, created_at, updated_at) "
+        "VALUES (?, ?, NULL, ?, 'active', 0, NULL, NULL, NULL, NULL, ?, ?)",
+        (user_id, "cleanup-policy-test", secret_id, now, now),
+    )
+    writer.commit()
+
+    app = Flask("backup_catalog_coverage")
+    app.config["TESTING"] = True
+    app.extensions["mcmanager_container"] = container
+
+    @app.before_request
+    def set_current_user():
+        g.current_user_id = user_id
+
+    app.register_blueprint(backup_catalogs_bp)
+    client = app.test_client()
+
+    default_policy = client.get("/api/cleanup/policy")
+    assert default_policy.status_code == 200
+    assert default_policy.json["data"]["version"] == 0
+
+    created = client.patch(
+        "/api/cleanup/policy",
+        json={
+            "version": 0,
+            "age_rule_days": 14,
+            "space_rule_pct": 45,
+            "count_rules": {"backups": 4},
+            "stale_session_threshold": 90,
+            "log_retention_days": 30,
+        },
+    )
+    assert created.status_code == 200
+    assert created.json["data"]["cleanup_policy"]["count_rules"] == {"backups": 4}
+
+    persisted = client.get("/api/cleanup/policy")
+    assert persisted.status_code == 200
+    assert persisted.json["data"]["cleanup_policy"]["age_rule_days"] == 14
+
+    updated = client.patch(
+        "/api/cleanup/policy",
+        json={
+            "version": 1,
+            "age_rule_days": 21,
+            "space_rule_pct": 50,
+            "count_rules": {"backups": 5},
+            "stale_session_threshold": 120,
+            "log_retention_days": 60,
+        },
+    )
+    assert updated.status_code == 200
+    expected_updated_policy = {
+        "version": 2,
+        "age_rule_days": 21,
+        "space_rule_pct": 50,
+        "count_rules": {"backups": 5},
+        "stale_session_threshold": 120,
+        "log_retention_days": 60,
+    }
+    assert {
+        key: updated.json["data"]["cleanup_policy"][key] for key in expected_updated_policy
+    } == expected_updated_policy
+    persisted_update = client.get("/api/cleanup/policy")
+    assert persisted_update.status_code == 200
+    assert {
+        key: persisted_update.json["data"]["cleanup_policy"][key]
+        for key in expected_updated_policy
+    } == expected_updated_policy
+
+    stale = client.patch(
+        "/api/cleanup/policy",
+        json={"version": 0, "age_rule_days": 21},
+    )
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+    preview = client.post(
+        "/api/cleanup/dry-run",
+        json={"scope": "backups", "policy_version": 2},
+    )
+    assert preview.status_code == 202
+    assert preview.json["meta"]["op_id"]
+
+    missing_world = client.get("/api/worlds/w_missing/cleanup-preview")
+    assert missing_world.status_code == 404
+    assert missing_world.json["error"]["code"] == "WORLD_NOT_FOUND"

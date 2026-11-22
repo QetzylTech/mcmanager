@@ -9,7 +9,7 @@ import enum
 
 
 class OperationType(enum.Enum):
-    """The 11 operation types. Each world-state transition is driven by one."""
+    """Closed operation type set. Each world-state transition is driven by one."""
 
     CREATE_WORLD = 'CreateWorld'
     START = 'Start'
@@ -22,6 +22,8 @@ class OperationType(enum.Enum):
     CONFIG_EDIT = 'ConfigEdit'
     CRASH_DETECTED = 'CrashDetected'
     DELETE_WORLD = 'DeleteWorld'
+    DOWNLOAD = 'Download'
+    SERVER_ARTIFACT_MIGRATION = 'ServerArtifactMigration'
 
 
 class WorldState(enum.Enum):

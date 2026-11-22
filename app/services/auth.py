@@ -485,37 +485,50 @@ class AuthenticationService:
 
     # -- password change ---------------------------------------------------------
 
-    def change_password(self, *, user_id: str, new_password: str, by_user_id: str) -> None:
+    def change_password(
+        self, *, user_id: str, new_password: str, by_user_id: str, commit: bool = True
+    ) -> None:
         """Rotate the password secret and revoke ALL of the target's sessions.
 
         No session is issued here: minting a token for the target user would
         hand an impersonation credential to ``by_user_id`` (the Superadmin
         reset path). After a password change every old session is dead; the
         target re-authenticates and the fresh login issues a new session —
-        satisfying the Doc 8 section 9 rotation rule without escalation.
+        satisfying the Doc 8 section 9 rotation rule without escalation. Set
+        ``commit=False`` when a caller owns an encompassing transaction.
         """
         writer = self._store.writer()
-        now = int(self._clock.now())
-        new_secret = self._secrets.rotate(
-            self._password_secret(user_id),
-            new_plaintext=_HASHER.hash(new_password),
-            associated_entity_type='user',
-            associated_entity_id=user_id,
-        )
-        writer.execute(
-            'UPDATE users SET secret_id = ?, updated_at = ? WHERE user_id = ?',
-            (new_secret, now, user_id),
-        )
-        writer.execute(
-            'UPDATE client_sessions SET deleted_at = ?, deleted_by = ? '
-            'WHERE user_id = ? AND deleted_at IS NULL',
-            (now, by_user_id, user_id),
-        )
-        writer.commit()
-        self._audit.write(
-            event_type=EVENT_PASSWORD_CHANGED,
-            actor=self._audit.snapshot_for_user(
-                user_id=by_user_id, device_id=None, device_name=None, ip=None
-            ),
-            payload={'target_user_id': user_id},
-        )
+        if commit:
+            writer.execute('BEGIN IMMEDIATE')
+        try:
+            now = int(self._clock.now())
+            new_secret = self._secrets.rotate(
+                self._password_secret(user_id),
+                new_plaintext=_HASHER.hash(new_password),
+                associated_entity_type='user',
+                associated_entity_id=user_id,
+                commit=False,
+            )
+            writer.execute(
+                'UPDATE users SET secret_id = ?, updated_at = ? WHERE user_id = ?',
+                (new_secret, now, user_id),
+            )
+            writer.execute(
+                'UPDATE client_sessions SET deleted_at = ?, deleted_by = ? '
+                'WHERE user_id = ? AND deleted_at IS NULL',
+                (now, by_user_id, user_id),
+            )
+            self._audit.write(
+                event_type=EVENT_PASSWORD_CHANGED,
+                actor=self._audit.snapshot_for_user(
+                    user_id=by_user_id, device_id=None, device_name=None, ip=None
+                ),
+                payload={'target_user_id': user_id},
+                connection=writer,
+            )
+            if commit:
+                writer.commit()
+        except Exception:
+            if commit:
+                writer.rollback()
+            raise

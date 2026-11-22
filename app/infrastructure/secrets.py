@@ -67,6 +67,7 @@ class SqliteSecretsStore:
         associated_entity_type: str,
         associated_entity_id: str,
         plaintext: str,
+        commit: bool = True,
     ) -> str:
         secret_id = f'sec_{uuid.uuid4().hex[:16]}'
         token = self._cipher().encrypt(plaintext.encode('utf-8'))
@@ -86,7 +87,8 @@ class SqliteSecretsStore:
                 int(time.time()),
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
         return secret_id
 
     def read(self, secret_id: str) -> str:
@@ -109,28 +111,36 @@ class SqliteSecretsStore:
         new_plaintext: str,
         associated_entity_type: str,
         associated_entity_id: str,
+        commit: bool = True,
     ) -> str:
         connection = self._store.writer()
-        row = connection.execute(
-            'SELECT secret_type FROM secrets WHERE secret_id = ?', (secret_id,)
-        ).fetchone()
-        if row is None:
-            raise SecretsError(f'secret not found: {secret_id}')
-        secret_type = SecretType(row['secret_type'])
-        connection.execute(
-            'UPDATE secrets SET rotated_at = ? WHERE secret_id = ?',
-            (int(time.time()), secret_id),
-        )
-        connection.commit()
-        new_id = self.store(
-            secret_type=secret_type,
-            associated_entity_type=associated_entity_type,
-            associated_entity_id=associated_entity_id,
-            plaintext=new_plaintext,
-        )
-        connection.execute(
-            'UPDATE secrets SET rotation_of = ? WHERE secret_id = ?',
-            (secret_id, new_id),
-        )
-        connection.commit()
-        return new_id
+        if commit:
+            connection.execute('BEGIN IMMEDIATE')
+        try:
+            row = connection.execute(
+                'SELECT secret_type FROM secrets WHERE secret_id = ?', (secret_id,)
+            ).fetchone()
+            if row is None:
+                raise SecretsError(f'secret not found: {secret_id}')
+            secret_type = SecretType(row['secret_type'])
+            connection.execute(
+                'UPDATE secrets SET rotated_at = ? WHERE secret_id = ?',
+                (int(time.time()), secret_id),
+            )
+            new_id = self.store(
+                secret_type=secret_type,
+                associated_entity_type=associated_entity_type,
+                associated_entity_id=associated_entity_id,
+                plaintext=new_plaintext,
+                commit=False,
+            )
+            connection.execute(
+                'UPDATE secrets SET rotation_of = ? WHERE secret_id = ?', (secret_id, new_id)
+            )
+            if commit:
+                connection.commit()
+            return new_id
+        except Exception:
+            if commit:
+                connection.rollback()
+            raise

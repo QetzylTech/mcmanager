@@ -299,6 +299,41 @@ def test_worlds_start_reaches_running_then_stop_returns_off(tmp_path):
         container.store.close()
 
 
+def test_world_kill_forces_off_and_terminalizes_forced_stop(tmp_path):
+    port = _free_port()
+    container = build_container(
+        database_path=tmp_path / "kill-lifecycle.db",
+        keyfile_path=tmp_path / "kill-lifecycle.key",
+        migrations_dir=_MIGRATIONS,
+    )
+    try:
+        _seed_world(container.store, "world_kill", port, tmp_path / "worlds")
+        session_id = container.worlds.start(world_id="world_kill")
+        assert _wait_for(
+            lambda: _state(container.store, "world_kill") == WorldState.RUNNING.value
+        )
+
+        op_id = container.worlds.kill(world_id="world_kill")
+
+        assert _state(container.store, "world_kill") == WorldState.OFF.value
+        operation = container.operations.get(op_id)
+        assert operation["status"] == OperationStatus.COMPLETED.value
+        session = (
+            container.store.reader()
+            .execute(
+                "SELECT end_reason, ended_at FROM runtime_sessions "
+                "WHERE world_id = ? AND session_id = ?",
+                ("world_kill", session_id),
+            )
+            .fetchone()
+        )
+        assert session["end_reason"] == EndReason.FORCED_STOP.value
+        assert session["ended_at"] is not None
+        assert container.worlds.supervisor_interval_seconds() == 15.0
+    finally:
+        container.store.close()
+
+
 def test_queued_world_starts_run_in_parallel_with_configurable_limit(tmp_path):
     container = build_container(
         database_path=tmp_path / "parallel.db",
@@ -1018,3 +1053,383 @@ def test_absolute_path_addressing_uses_world_directory(tmp_path):
         container.worlds.stop(world_id="world_path")
     finally:
         container.store.close()
+
+
+def test_queued_world_create_delete_and_replay(tmp_path):
+    port = _free_port()
+    container = build_container(
+        database_path=tmp_path / "queued-create-delete.db",
+        keyfile_path=tmp_path / "queued-create-delete.key",
+        migrations_dir=_MIGRATIONS,
+    )
+    try:
+        _seed_world(container.store, "world_template", port, tmp_path / "worlds")
+        created_port = _free_port()
+        now = int(container.clock.now())
+        world_directory = tmp_path / "worlds" / "World world_created"
+        world = {
+            "world_id": "world_created",
+            "display_name": "World created",
+            "template_id": "tpl",
+            "server_type": "vanilla",
+            "mc_version": "1.21",
+            "java_runtime_id": "java",
+            "port": created_port,
+            "addressing_strategy": "port",
+            "addressing_value": str(created_port),
+            "state": WorldState.EULA_REQUIRED.value,
+            "pre_backup_state": None,
+            "launch_args": None,
+            "world_directory": str(world_directory),
+            "metadata_version": 1,
+            "deleted_at": None,
+            "deleted_by": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        create, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CREATE_WORLD,
+            world_id=None,
+            actor_user_id="u_admin",
+            idempotency_key="create-world-queued",
+            data={"world_action": "create", "world": world},
+        )
+        assert replayed is False
+        assert create["op_id"] in container.worlds.dispatch_queued_world_mutations()
+
+        created = (
+            container.store.reader()
+            .execute(
+                "SELECT world_id, state, world_directory, deleted_at "
+                "FROM world_instances WHERE world_id = ?",
+                ("world_created",),
+            )
+            .fetchone()
+        )
+        assert created["state"] == WorldState.EULA_REQUIRED.value
+        assert created["deleted_at"] is None
+        assert Path(created["world_directory"]) == world_directory
+        assert world_directory.is_dir()
+        assert not (world_directory.parent / ".mcmanager-world_created.provisioning").exists()
+        assert (
+            container.operations.get(create["op_id"])["status"]
+            == OperationStatus.COMPLETED.value
+        )
+
+        accepted, replayed = container.worlds.accept_eula(
+            world_id="world_created",
+            actor_user_id="u_admin",
+            accepted=True,
+            idempotency_key="accept-created-world-eula",
+        )
+        assert replayed is False
+        assert accepted["status"] == OperationStatus.COMPLETED.value
+        delete_preview = (
+            container.store.reader()
+            .execute(
+                "SELECT state, metadata_version FROM world_instances WHERE world_id = ?",
+                ("world_created",),
+            )
+            .fetchone()
+        )
+        assert delete_preview["state"] == WorldState.OFF.value
+
+        delete, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.DELETE_WORLD,
+            world_id="world_created",
+            actor_user_id="u_admin",
+            idempotency_key="delete-world-queued",
+            data={
+                "world_action": "delete",
+                "preview_version": delete_preview["metadata_version"],
+            },
+        )
+        assert replayed is False
+        assert delete["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        deleted = (
+            container.store.reader()
+            .execute(
+                "SELECT deleted_at, deleted_by, metadata_version "
+                "FROM world_instances WHERE world_id = ?",
+                ("world_created",),
+            )
+            .fetchone()
+        )
+        assert deleted["deleted_at"] is not None
+        assert deleted["deleted_by"] == "u_admin"
+        assert deleted["metadata_version"] == 2
+
+        replay, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.DELETE_WORLD,
+            world_id="world_created",
+            actor_user_id="u_admin",
+            idempotency_key="delete-world-queued-replay",
+            data={
+                "world_action": "delete",
+                "preview_version": delete_preview["metadata_version"],
+            },
+        )
+        assert replayed is False
+        assert replay["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        assert (
+            container.operations.get(replay["op_id"])["status"]
+            == OperationStatus.COMPLETED.value
+        )
+    finally:
+        container.store.close()
+
+
+def test_queued_runtime_config_and_file_edit_branches(tmp_path):
+    port = _free_port()
+    container = build_container(
+        database_path=tmp_path / "queued-config-edit.db",
+        keyfile_path=tmp_path / "queued-config-edit.key",
+        migrations_dir=_MIGRATIONS,
+    )
+    try:
+        world_dir = _seed_world(
+            container.store,
+            "world_config_edit",
+            port,
+            tmp_path / "worlds",
+        )
+
+        runtime, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CONFIG_EDIT,
+            world_id="world_config_edit",
+            actor_user_id="u_admin",
+            idempotency_key="rename-world-config",
+            data={
+                "world_action": "runtime_config",
+                "queued_runtime_config": True,
+                "expected_version": 1,
+                "before": {"display_name": "World world_config_edit"},
+                "after": {"display_name": "Renamed world"},
+            },
+        )
+        assert replayed is False
+        assert runtime["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        renamed = container.worlds._world("world_config_edit")
+        assert renamed["display_name"] == "Renamed world"
+        assert renamed["metadata_version"] == 2
+
+        replay, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CONFIG_EDIT,
+            world_id="world_config_edit",
+            actor_user_id="u_admin",
+            idempotency_key="rename-world-config-replay",
+            data={
+                "world_action": "runtime_config",
+                "queued_runtime_config": True,
+                "expected_version": 1,
+                "before": {"display_name": "World world_config_edit"},
+                "after": {"display_name": "Renamed world"},
+            },
+        )
+        assert replayed is False
+        assert replay["op_id"] in container.worlds.dispatch_queued_world_mutations()
+
+        source = world_dir / "source.txt"
+        source.write_text("copy me\n", encoding="utf-8")
+        copy, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CONFIG_EDIT,
+            world_id="world_config_edit",
+            actor_user_id="u_admin",
+            idempotency_key="copy-world-file",
+            data={
+                "world_action": "file_edit",
+                "queued_file_edit": True,
+                "action": "copy",
+                "from": "source.txt",
+                "to": "copied.txt",
+                "world_root": str(world_dir),
+            },
+        )
+        assert replayed is False
+        assert copy["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        assert (world_dir / "copied.txt").read_text(encoding="utf-8") == "copy me\n"
+
+        same_copy, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CONFIG_EDIT,
+            world_id="world_config_edit",
+            actor_user_id="u_admin",
+            idempotency_key="copy-world-file-same",
+            data={
+                "world_action": "file_edit",
+                "queued_file_edit": True,
+                "action": "copy",
+                "from": "source.txt",
+                "to": "copied.txt",
+                "world_root": str(world_dir),
+            },
+        )
+        assert replayed is False
+        assert same_copy["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        assert (
+            container.operations.get(same_copy["op_id"])["status"]
+            == OperationStatus.COMPLETED.value
+        )
+
+        move, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CONFIG_EDIT,
+            world_id="world_config_edit",
+            actor_user_id="u_admin",
+            idempotency_key="move-world-file",
+            data={
+                "world_action": "file_edit",
+                "queued_file_edit": True,
+                "action": "rename",
+                "from": "source.txt",
+                "to": "renamed.txt",
+                "world_root": str(world_dir),
+            },
+        )
+        assert replayed is False
+        assert move["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        assert not source.exists()
+        assert (world_dir / "renamed.txt").read_text(encoding="utf-8") == "copy me\n"
+
+        absolute, replayed = container.worlds.enqueue_world_mutation(
+            op_type=OperationType.CONFIG_EDIT,
+            world_id="world_config_edit",
+            actor_user_id="u_admin",
+            idempotency_key="reject-absolute-world-file",
+            data={
+                "world_action": "file_edit",
+                "queued_file_edit": True,
+                "action": "copy",
+                "from": str(tmp_path / "outside.txt"),
+                "to": "copied.txt",
+                "world_root": str(world_dir),
+            },
+        )
+        assert replayed is False
+        assert absolute["op_id"] in container.worlds.dispatch_queued_world_mutations()
+        assert (
+            container.operations.get(absolute["op_id"])["status"]
+            == OperationStatus.FAILED.value
+        )
+        assert (
+            container.operations.get(absolute["op_id"])["error_code"]
+            == "OP_EXECUTION_FAILED"
+        )
+    finally:
+        container.store.close()
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_state"),
+    [
+        (WorldState.QUEUED, WorldState.OFF),
+        (WorldState.RUNNING, WorldState.CRASHED),
+        (WorldState.OFF, WorldState.OFF),
+        (WorldState.CRASHED, WorldState.CRASHED),
+    ],
+)
+def test_reconcile_fails_interrupted_start_for_persisted_states(
+    tmp_path, state, expected_state
+):
+    container = build_container(
+        database_path=tmp_path / f"interrupted-{state.value}.db",
+        keyfile_path=tmp_path / f"interrupted-{state.value}.key",
+        migrations_dir=_MIGRATIONS,
+    )
+    try:
+        _seed_world(
+            container.store,
+            f"world_interrupted_{state.value}",
+            _free_port(),
+            tmp_path / "worlds",
+        )
+        world_id = f"world_interrupted_{state.value}"
+        operation = container.operations.create(
+            OperationInput(
+                op_type=OperationType.START,
+                actor_type=ActorType.SYSTEM,
+                world_id=world_id,
+            ),
+            initial_status=OperationStatus.RUNNING,
+        )
+        container.store.writer().execute(
+            "UPDATE world_instances SET state = ? WHERE world_id = ?",
+            (state.value, world_id),
+        )
+        container.store.writer().commit()
+
+        assert container.worlds.reconcile() == []
+        assert _state(container.store, world_id) == expected_state.value
+        assert (
+            container.operations.get(operation["op_id"])["status"]
+            == OperationStatus.FAILED.value
+        )
+        assert (
+            container.operations.get(operation["op_id"])["error_code"]
+            == "manager_restart_incomplete"
+        )
+    finally:
+        container.store.close()
+def test_queued_world_create_failure_cleans_owned_provisioning_artifacts(container, tmp_path):
+    import sqlite3
+
+    import pytest
+
+    world_id = "w_provision_failure"
+    world_directory = tmp_path / "worlds" / world_id
+    provisioning_marker = world_directory.parent / f".mcmanager-{world_id}.provisioning"
+
+    with pytest.raises(sqlite3.OperationalError, match="no column named"):
+        container.worlds._apply_queued_world_create(
+            {"op_id": "op_provision_failure"},
+            {
+                "world": {
+                    "world_id": world_id,
+                    "world_directory": str(world_directory),
+                    "invalid_column": "force insert failure",
+                }
+            },
+        )
+
+    assert not world_directory.exists()
+    assert not provisioning_marker.exists()
+
+
+def test_queued_world_create_refuses_unowned_directories_and_markers(container, tmp_path):
+    import pytest
+
+    from app.services.worlds import WorldConflictError
+
+    existing_directory = tmp_path / "existing" / "w_existing"
+    existing_directory.mkdir(parents=True)
+    with pytest.raises(WorldConflictError, match="directory already exists"):
+        container.worlds._apply_queued_world_create(
+            {"op_id": "op_existing_directory"},
+            {
+                "world": {
+                    "world_id": "w_existing",
+                    "world_directory": str(existing_directory),
+                }
+            },
+        )
+    existing_marker = existing_directory.parent / ".mcmanager-w_existing.provisioning"
+    assert not existing_marker.exists()
+
+    world_id = "w_other_provisioner"
+    world_directory = tmp_path / "provisioning" / world_id
+    world_directory.parent.mkdir()
+    provisioning_marker = world_directory.parent / f".mcmanager-{world_id}.provisioning"
+    provisioning_marker.write_text("another-world", encoding="utf-8")
+    with pytest.raises(WorldConflictError, match="being provisioned"):
+        container.worlds._apply_queued_world_create(
+            {"op_id": "op_other_provisioner"},
+            {
+                "world": {
+                    "world_id": world_id,
+                    "world_directory": str(world_directory),
+                }
+            },
+        )
+
+    assert existing_directory.is_dir()
+    assert not world_directory.exists()
+    assert provisioning_marker.read_text(encoding="utf-8") == "another-world"

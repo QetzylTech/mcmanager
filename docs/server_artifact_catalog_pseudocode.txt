@@ -1,0 +1,263 @@
+SERVER ARTIFACT CATALOG AND DOWNLOADER — PLANNED PSEUDOCODE
+
+Status: target behavior only. This describes the requested in-app replacement
+for app/data/serverjars/minecraft_server_archive.py; it is not implemented.
+Governing plan: docs/SERVER_ARTIFACT_CATALOG_PLAN.md
+
+OBSERVED EXTERNAL UTILITY INTERFACE
+
+The replacement baseline is the local utility's current behavior:
+
+  --providers <one-or-more>  Defaults to all six supported providers.
+  --all-builds               Enumerates provider builds where exposed;
+                             otherwise use each provider's default selection.
+  --force                    Re-download an existing target; otherwise skip
+                             it and record present-file metadata if needed.
+  --workers N                Defaults to 8; accepts 1 through 64.
+  --output PATH              Defaults to "MinecraftArchive" relative to the
+                             process working directory.
+
+The utility queues provider downloads concurrently, processes each result,
+reports the number of failures, and exits nonzero when any provider/download
+failed. A failed transfer removes its ".part" file and retries up to three
+attempts with 1-second then 2-second waits. An interrupted run leaves completed
+artifacts and manifest entries available for a later invocation; it does not
+provide HTTP range-resume for an incomplete file. The application replacement
+must preserve supported provider choices and transparent failure outcomes,
+while replacing the unsafe working-directory default with a manager-controlled
+root. Approved app defaults: two concurrent downloads, 50 catalog results per
+page, one GiB maximum artifact size, three total attempts with 1-second then
+2-second waits, and the architecture's 10 GB (10,000,000,000-byte) minimum
+free-space reserve.
+Latest/recommended builds are the default; all-build discovery is explicit and
+paginated. Re-download requires an explicit force flag.
+
+PROVIDER CAPABILITIES TO PRESERVE
+
+Vanilla:
+  Fetch Mojang's version manifest.
+  Default catalog scope selects release versions; explicit all-build scope
+  may include other version types.
+  Fetch selected version metadata and use the declared server download URL,
+  filename, and upstream SHA-1.
+
+Purpur:
+  Fetch the supported version list and per-version builds.
+  Default selection uses the latest build; explicit all-build scope enumerates
+  the builds returned by the provider.
+
+Paper:
+  Fetch the Paper v3 project, versions, and build metadata.
+  Default selection prefers the latest stable build, falling back only to a
+  documented available build; all-build scope enumerates returned builds.
+
+Fabric:
+  Fetch game, loader, and installer metadata.
+  Default selection uses the preferred stable loader/installer; explicit
+  all-build scope may enumerate supported loaders.
+  Mark the result as a server launcher, not a fully installed runtime.
+
+Forge:
+  Fetch promotions and select recommended/latest builds according to the
+  approved selection policy.
+  Mark the downloaded result as an installer; do not launch it as the server.
+
+NeoForge:
+  Fetch Maven version metadata, map supported builds to Minecraft versions,
+  and select the approved latest/all-build scope.
+  Prefer an explicit provider Minecraft-version field. For supported
+  M.m.build versions without one, map to 1.M.m (for example 21.4.34 -> 1.21.4);
+  never subtract 20 from M. Reject malformed or unsupported version forms.
+  Mark the downloaded result as an installer; do not launch it as the server.
+
+First-release provisioning scope:
+  Accept only verified runnable Vanilla, Paper, or Purpur artifacts for
+  CreateWorld. Fabric launchers and Forge/NeoForge installers may be catalogued
+  and downloaded but are not prepared or provisioned. A later preparation
+  feature requires its own approved plan.
+
+CATALOG DISCOVERY
+
+function discover(provider, scope):
+  adapter = registered_provider(provider)
+  if adapter is absent:
+    return explicit unsupported-provider error
+
+  response = adapter.fetch_catalog(
+    scope = "latest" by default or explicit "all",
+    page_size = 50,
+    cursor = optional
+  )
+  validate response shape and required version/build identifiers
+  reject invalid identifiers and any URL not permitted by provider policy
+  for each candidate:
+    emit ArtifactDescriptor(
+      descriptor_id = SHA-256(canonical provider/version/build/kind/checksum
+        metadata identity),
+      provider, mc_version, build, artifact_kind,
+      source URL,
+      advertised size when supplied,
+      upstream checksums when supplied,
+      provider metadata
+    )
+  return descriptors
+
+DOWNLOAD JOB
+
+function request_download(actor, descriptor_id, provider, mc_version, build,
+                          artifact_kind, force):
+  require server_artifact.manage or baseline Admin/Superadmin access
+  re-fetch/revalidate provider descriptor and require descriptor_id to match
+  resolve source URL only from the provider adapter; never accept client URL
+  if a verified matching artifact exists and force is false:
+    return that catalog record without creating a Download Operation
+  resolve target beneath <manager-data-root>/serverjars
+  reject path traversal, unsafe redirects, artifact size over 1 GiB,
+    free space below the architecture's 10 GB (10,000,000,000-byte) reserve,
+    and unsupported
+    provider/kind
+  derive stable artifact_id from canonical provider/version/build/kind/SHA-256
+    identity; do not overwrite a different digest or identity record
+  create durable Download Operation with actor and descriptor provenance
+  enqueue operation with at most two active downloads
+  return operation identity and current status
+
+function execute_download(operation):
+  for attempt from 1 through 3:
+    create a unique temporary file ending in ".part" under target directory
+    stream HTTPS response in bounded chunks into temporary file
+    enforce 1 GiB response limit and record progress checkpoints
+    recheck free-space reserve while streaming
+    if response is empty or upstream checksum is available and mismatches:
+      fail this attempt
+    compute local SHA-256
+    persist the content-addressed final relative path, byte size, local SHA-256,
+      and verified upstream checksums in the Operation before promotion
+    atomically promote temporary file to final path
+    transactionally insert SQLite catalog metadata with relative path, source, provider,
+      game version, build, artifact kind, size, SHA-256, upstream hashes,
+      and download timestamp
+    complete operation and append audit record
+    return success
+
+    on retryable failure:
+      remove only this attempt's temporary file
+      wait 1 second after attempt 1 and 2 seconds after attempt 2 unless
+      cancelled or on the final attempt
+
+  fail operation with explicit provider/network/integrity error
+  never return success-shaped status for a failed provider or download
+
+function cancel_or_recover_download(operation):
+  stop scheduling new chunks/work for a cancelled operation
+  close response and remove only its temporary ".part" file
+  on manager restart, reconcile non-terminal downloads:
+    if catalog row and final file match the Operation's recorded size/hash:
+      complete the Operation
+    else if promoted final file matches the persisted path, size, and hash:
+      transactionally insert its catalog row and complete the Operation
+    else:
+      remove only this Operation's .part or uncommitted final file
+      fail with SERVER_ARTIFACT_DOWNLOAD_INTERRUPTED; retry requires a new
+        Operation
+
+LEGACY CATALOG MIGRATION OPERATION
+
+function request_legacy_migration(actor):
+  require Admin+ and step-up confirmation
+  create durable ServerArtifactMigration Operation
+  source_root = <application-root>/data/serverjars
+  destination_root = <configured-manager-data-root>/serverjars
+  preserve the source manifest byte-for-byte under source_root before processing
+  resolve manifest candidates only beneath source_root; never follow stored
+    absolute paths
+  if source_root differs from destination_root:
+    copy each verified candidate through a unique .part in destination_root,
+      recheck SHA-256, and atomically publish without overwriting different
+      content; leave every source file untouched
+  stage verified rows in SQLite and record each unresolved entry/orphan with
+    a sanitized name, contained relative path when available, reason code,
+    and digest/size evidence
+  atomically publish only after validation
+  rollback only new staging data on failure; never delete source files
+
+WORLD PROVISIONING
+
+function create_world(template, server_artifact_id):
+  validate template and world creation preconditions
+  require explicit server_artifact_id and resolve it to a verified local entry
+  require provider, Minecraft version, build, artifact kind, and server type
+    to match the selected template's compatibility contract
+  require a runnable Vanilla, Paper, or Purpur artifact
+  reject launchers/installers with SERVER_ARTIFACT_NOT_RUNNABLE
+  create stable world-ID directory
+  copy/provision the verified server artifact to a world-ID-scoped staging
+    directory as "server.jar", without mutating the shared catalog artifact
+  require the effective launch command to execute that exact contained file;
+    a custom full-argv override must use "-jar <world-directory>/server.jar"
+  persist server_artifact_id and an immutable provenance snapshot on the world
+    (provider, game version, build, kind, source SHA-256, source checksum,
+     runtime_relative_path = "server.jar", and runtime server-file SHA-256)
+  create world in the documented EULA-required state
+  fail and clean up only newly-created partial world files if provisioning fails
+  on retry, follow Document 10: same idempotency key and operation type replay
+    the original Operation; a new request must use a new key
+  recover an existing provisioned target only when its hash matches the
+    recorded expected hash; never copy twice or accept an unverified target
+
+  return world creation result
+
+START-TIME INTEGRITY CHECK
+
+function validate_world_server_before_spawn(world):
+  if world has catalog provenance:
+    configured_file = resolve provenance.runtime_relative_path beneath the
+      world directory; require it to equal the world-local "server.jar"
+    require effective launch command to reference this exact file as its -jar
+      target; reject custom argv that bypasses it
+  else:
+    configured_file = resolve the existing legacy configured server path
+      inside the world directory
+  require configured_file to exist, be non-empty, and be a runnable server
+    artifact
+  if world has catalog provenance:
+    compute SHA-256 immediately before spawn
+    compare with the runtime server-file SHA-256 in the snapshot
+    if digest differs:
+      fail Start with SERVER_ARTIFACT_INTEGRITY_FAILED
+      do not spawn; terminalize the Operation and append the audit event
+  else:
+    apply the existing legacy non-empty-file check and surface that provenance
+      is unverified; do not trust or import a legacy manifest path
+
+LEGACY MANIFEST MIGRATION
+
+function migrate_legacy_manifest(manifest, configured_root):
+  preserve the original manifest byte-for-byte as a rollback backup
+  parse entries without opening or following any stored absolute path
+  for each entry:
+    validate provider/version/build/kind, filename, size, and SHA-256
+    search only within configured_root for a unique contained file matching
+      filename, size, and digest
+    if absent, ambiguous, malformed, escaped, or digest-mismatched:
+      record unresolved reason; keep all files untouched
+    else:
+      derive content-aware stable artifact_id and add to staging catalog
+      deduplicate only when canonical identity and digest are identical
+      retain different-digest collisions as distinct artifacts; never overwrite
+  inventory unreferenced files as preserved orphans for explicit review
+  validate staging catalog, then atomically publish it
+  on failure, leave old catalog active; rollback deletes staging data only
+  retain archive, original manifest, and backup through acceptance
+
+CUTOVER
+
+function remove_external_downloader():
+  require provider-parity tests, migration reconciliation, world-provisioning
+    acceptance, and rollback evidence to pass
+  preserve valid jar/installer/launcher files and migrate safe manifest entries
+  remove the specific external downloader script
+  verify the app and deployment no longer invoke or document that script
+
+Never delete the existing archive as part of removing the script.
+Never perform live provider downloads in deterministic automated tests.

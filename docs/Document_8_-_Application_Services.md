@@ -8,7 +8,7 @@ Concrete service behavior from Doc 6/7 — who does what, in what order, with re
 
 | Service | Capabilities | Delegates | Touches |
 |---|---|---|---|
-| WorldService | Registry:CRUD, Create:Template, Delete:Tombstone, Rename:Metadata(ConfigEdit), Enforce:ConfigOffOnly | Process:Runtime, Data:Backup/Restore/Cleanup | `world_instances`, `world_settings`, `templates`(R), `java_runtimes`(R) |
+| WorldService | Registry:CRUD, Create:Template, Create:ArtifactProvisioning (planned), Delete:Tombstone, Rename:Metadata(ConfigEdit), Enforce:ConfigOffOnly | Process:Runtime, Data:Backup/Restore/Cleanup, Artifact:ServerArtifactService (planned) | `world_instances`, `world_settings`, `templates`(R), `java_runtimes`(R) |
 | RuntimeService | Start, Stop, Kill, Session:Open/Close, RCON:RotatePerSession, Health:Probe, Crash:Detect, State:Resolve | Operation wrapper:OperationService/Scheduler | `world_instances`, `runtime_sessions`, `secrets`(RCON only) |
 | OperationService | Op:Create/Status/Checkpoint/Idempotency/Timeout/Cancel, in-memory progress broadcast, milestone-only persistence, Lock:ReleaseAtTerminal (Doc 9 §1.1) | Domain action:owning service | `operations` |
 | BackupService | Backup:Capture/RegisterArtifact/ResumeAutosave, RCON:NotifyPlayers, Sync:TriggerFollowOn, ManagerBackup(world_id=NULL) | When:Scheduler/User, Transfer:SyncService | `backup_artifacts`, `operations`(checkpoints), `runtime_sessions`(R) |
@@ -22,6 +22,7 @@ Concrete service behavior from Doc 6/7 — who does what, in what order, with re
 | AuditService | Audit:Write terminal operations, security/auth events, and ConfigEdit diffs (actor/device snapshot at write, Doc 6 §0.1) | — | `audit_records` (insert-only; no UPDATE/DELETE ever) |
 | FileManagerService | Files:Guarded CRUD, Confirmation:Elevated, Audit:Entry | — | world filesystem (via adapter), `audit_records`(write) |
 | TemplateService / JavaRuntimeService | Template:CRUD+Deprecate, JavaRuntime:CRUD+Deprecate, Launches:DataDriven(category free-text) | — | `templates`, `java_runtimes` |
+| ServerArtifactService (planned) | Catalog:Discover/Refresh, Download:Queue/Verify/Retry/Cancel, Artifact:Resolve/Provision, LegacyManifest:Migrate/Rollback | Provider adapters via `ServerArtifactProviderPort`; OperationService | durable Operations, SQLite catalog/migration records, managed artifact files, world directory |
 | ConfigurationService | Config:GuardedEdits(server.properties), ConfigEdit:Orchestrate(never silent), Settings:3-TierInheritance, Version:OptimisticCheck (Doc 9 §4) | Executing the ops themselves | `world_instances`(metadata), `world_settings`, `global_settings`, `schedules`, `cleanup_policies`, `roles`, `permissions`, `role_assignments`, `sync_targets`, `templates`(write via logged ConfigEdit) |
 | MetricsService | Metrics:Cadence(null/15s-cache/1Hz), Snapshot:CacheForFirstPaint | — | none persisted (reads `world_instances`/`runtime_sessions`, broadcasts) |
 
@@ -36,6 +37,8 @@ Standard shape for all: authorize → validate preconditions → create Operatio
 | Operation Type | Preconditions | Domain Service | Terminal Success State |
 |---|---|---|---|
 | CreateWorld | valid Template, non-conflicting port/addressing, authorization | WorldService | provisioned, world-ID-keyed directory and new `world_instances` row, `state = eula_required`; never accepts EULA implicitly |
+| Download | supported provider descriptor, artifact not already available unless forced, artifact size <= 1 GiB, storage reserve satisfied | ServerArtifactService | checksum-verified artifact atomically published with SQLite catalog row |
+| ServerArtifactMigration | Superadmin/Admin+ step-up, explicit request, valid legacy manifest/archive paths under configured root | ServerArtifactService | staged catalog validated and atomically published; migration outcome retained |
 | Start | world `off`, storage guard passes, not in 10s cooldown, **EULA accepted** (Doc 14 §5 — `eula_required` rejects `EULA_NOT_ACCEPTED`, no Operation) | RuntimeService | `state = running`, new `runtime_sessions` row |
 | Stop | world != `off`, password verified | RuntimeService | `state = off`, `runtime_sessions.ended_at` set |
 | Kill | world `running`/`stopping` (escalation), password step-up + elevated confirmation | RuntimeService | same as Stop, `end_reason = forced_stop` |
@@ -60,7 +63,9 @@ Standard shape for all: authorize → validate preconditions → create Operatio
 - **Crash detection:** probe observes unexpected exit → create Op(CrashDetected, actor=system) → state=crashed, close RuntimeSession(end_reason=crashed) → audit → notify(WorldCrashed).
 - **ConfigEdit:** PATCH with version → authz → **compare submitted version vs current; stale → 409 CONFIG_VERSION_CONFLICT, no Operation** (Doc 9 §4) → create Op → apply write (deleted_at/revoked marker if applicable) → checkpoint(Completed) → audit with before/after diff in payload.
 - **Kill:** POST (step-up + elevated confirmation) → authz → create Op(Kill) — **atomically cancels in-flight Stop (`superseded_by_kill`), becomes sole in-flight op** → forced terminate via platform adapter (process group / job object) → checkpoint(Completed) + close RuntimeSession(forced_stop) → audit → notify.
-- **CreateWorld:** POST /api/worlds → authz(create_world) → create Op → dispatch → validate template + port/addressing uniqueness → provision the stable world-ID (or explicit absolute custom) directory + registry row (`state=eula_required`, `world_directory` persisted) → checkpoint(Completed) → audit. The directory contains no accepted EULA; only the explicit audited EULA action may write `eula=true`.
+- **CreateWorld:** POST /api/worlds → authz(create_world) → require explicit `server_artifact_id` → create Op → dispatch → validate template compatibility, runnable Vanilla/Paper/Purpur kind, artifact integrity, and port/addressing uniqueness → provision into a world-ID-scoped temporary directory → verify copied SHA-256 → atomically publish directory + registry row (`state=eula_required`, `world_directory`, artifact ID, immutable provenance persisted) → checkpoint(Completed) → audit. The directory contains no accepted EULA; only the explicit audited EULA action may write `eula=true`. Same idempotency key and operation type replays the original Operation per Document 10.
+- **Server artifact download:** authorize `server_artifact.manage` → validate descriptor, provider URL/redirect policy, explicit force semantics, 1 GiB maximum and 10 GB (10,000,000,000-byte) reserve → create durable Download Operation → queue under the two-download limit → stream to a unique `.part`, with at most three total attempts and 1s/2s backoff → verify upstream checksum when available and local SHA-256 → persist final relative path/size/hash in the Operation → atomically promote the file → transactionally publish SQLite catalog metadata → complete/audit. Filesystem rename and SQLite commit are recovered as separate durable steps: restart reconciliation completes a matching promoted file from the saved checkpoint or removes only that Operation's unpublished temporary/final file. Running cancellation closes the transfer and removes only its `.part` file. Catalog discovery defaults to latest/recommended; all-build discovery is explicit and paginated at 50 results.
+- **Legacy artifact migration:** require Admin+ and step-up → create durable ServerArtifactMigration Operation → byte-preserve manifest backup under the legacy `<application-root>/data/serverjars` source root → resolve candidates only beneath that source root by unique filename/size/SHA-256 match → if configured destination `<manager-data-root>/serverjars` differs, copy verified files through `.part`, recheck digest, then atomically publish → stage catalog rows plus durable per-entry unresolved/orphan records → validate and atomically publish SQLite catalog → retain migration result and rollback evidence. Source manifest, archive, and files are never deleted by migration.
 - **DeleteWorld:** POST (step-up + preview hash) → authz → precondition: state=off, no in-flight Backup/Restore/Cleanup → else 409, no Operation → create Op → tombstone world_instances, soft-delete schedules/cleanup_policies → remove world files → checkpoint(Completed) → audit → notify.
 
 ## 3 Query responsibilities
@@ -97,7 +102,8 @@ Ship as defaults in `global_settings`; globally overridable only where the table
 | Sync global concurrency cap | **2 simultaneous transfers** | §7; configurable via `global_settings.sync_global_concurrency_cap` (Doc 10 `/api/settings`) |
 | Sync daily transfer cap | **50 GiB** | global reserved/transferred-byte cap per UTC day; hitting it raises `SYNC_CAP_EXCEEDED`; implementation-tuned shipped value |
 | MetricsCadence | null / **15s** cache / **1Hz** stream | locked, not part of global settings |
-| Storage guard default reserve | **10 GB** absolute | + 10% free-space bound as overflow safety net (Doc 9 §1.2); configurable |
+| Storage guard default reserve | **10 GB = 10,000,000,000 bytes** absolute | + 10% free-space bound as overflow safety net (Doc 9 §1.2); configurable |
+| Server artifact download | **2 concurrent; 1 GiB max per artifact; 3 attempts** | explicit all-build paging (50/page); 1s/2s retry waits; force required to re-download |
 | Step-up window | **10min** | Doc 6 §2.14; configurable |
 | Log line buffer | **5000 lines** per world | ring buffer (Doc 13 §3.3); configurable when `VERBOSE_LOGGING=true`; deployed `VERBOSE_LOGGING=false` processes essential channels only |
 | `VERBOSE_LOGGING` | **false** deployed default | non-secret `.env` flag; false suppresses debug, filters raw Minecraft output, and omits step-level backup/restore and sync traces; true enables full canonical-channel ingestion |
@@ -121,6 +127,8 @@ Referenced by Doc 13 (C9/C10), Doc 10 (`OP_TIMEOUT`, `AUTH_THROTTLED`), Doc 11 (
 | Operation Type | Auto-retry? | Timeout (locked §5.0) | Cancellable? |
 |---|---|---|---|
 | CreateWorld | No | Short (dir/registry setup) — default 120s | While `Queued`/`Validating` only |
+| Download | No automatic retry across terminal Operations; bounded attempts within the Operation | Provider-timeout per request; total duration bounded by retry policy | Through `Running`; close response and remove only its `.part` file |
+| ServerArtifactMigration | No | Bounded by local file scan/catalog staging | While `Queued`/`Validating` only; once staging starts it runs to a terminal outcome with rollback on failure |
 | Start | No (duplicate-start guard + 10s cooldown; failed start needs new explicit action) | **120s** readiness (configurable) | No — mid-launch interruption is a Kill |
 | Stop | No | **60s** before escalating to Kill | No |
 | Kill | No | **10s** process-level | No |
@@ -140,9 +148,11 @@ Referenced by Doc 13 (C9/C10), Doc 10 (`OP_TIMEOUT`, `AUTH_THROTTLED`), Doc 11 (
   artifact remains unchanged, and the NAS adapter removes any unpublished
   temporary upload before returning.
 
-- General rule: `Cancelled` only reachable from `Queued`/`Validating`. Nothing cancellable once `Running` — real-world side effects can't be safely unwound. Kill is the safe way to interrupt a `running` world; in-flight Backup/Restore must run to terminal.
+- **Running Download cancellation:** explicitly supported as a cooperative exception. Stop the active HTTP stream, close the response/file, remove only that Operation's `.part` file, leave completed catalog artifacts untouched, then persist `Cancelled` and one terminal audit. Failure to clean the partial file must be surfaced in operation details and logs; it must not be reported as a successful cleanup.
+
+- General rule: `Cancelled` only reachable from `Queued`/`Validating`. Nothing cancellable once `Running` unless a type-specific safe rollback is explicitly defined. Kill is the safe way to interrupt a `running` world; in-flight Backup/Restore must run to terminal.
 - **Kill is the single exception to "nothing is cancellable once `Running`":** dispatching Kill atomically cancels in-flight `Stop` (`error_code = 'superseded_by_kill'`) and becomes sole in-flight Operation, keeping the derived world lock unambiguous (Doc 9 §6, Doc 6 §2.4). Kill's own runtime-process interruption is its `Running` work and is not cancelled.
-- Sync is the deliberate exception to both general rules (auto-retry, cancel-while-Running) — network transfer failures/aborts carry no irreversibility risk; the thing being moved already exists safely elsewhere.
+- Sync and Download are the deliberate exceptions to the general running-cancel rule: the source remains durable elsewhere and cancellation removes only an unpublished transfer temporary. Running Download cancellation does not trigger an automatic retry.
 
 ## 6 Concurrency & conflict
 

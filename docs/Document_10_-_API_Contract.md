@@ -65,13 +65,14 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 | `backup.view/delete`, `backup.sync.view` | Backup catalog, deletion, and sync history |
 | `cleanup.view/manage`, `sync.view/retry/manage` | Manager-wide cleanup and sync catalogs/actions |
 | `schedule.view/edit`, `template.view/edit`, `runtime.view/edit` | Schedules, templates, and Java runtimes |
+| `server_artifact.view/manage` | Provider catalog, artifact metadata, download operations; `manage` required for downloads |
 | `settings.view/edit`, `manager.backup/restore/restart`, `system.view` | Manager settings/actions, diagnostics, and metrics |
 
 ### Worlds
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/worlds` | any | filters `state`, `server_type`, `mc_version`, `search` (display_name), `include_deleted=false` |
-| POST | `/api/worlds` | A | O CreateWorld; body: template_id, display_name, port, addressing_strategy/value, java_runtime_id, launch_args; provisions a stable world-ID directory and returns a world in `eula_required` until explicit acceptance |
+| POST | `/api/worlds` | A | O CreateWorld; body: template_id, required `server_artifact_id`, display_name, port, addressing_strategy/value, java_runtime_id, launch_args; validates template compatibility and runnable artifact, provisions a stable world-ID directory with immutable artifact provenance, returns `eula_required` until explicit acceptance |
 | GET | `/api/worlds/{world_id}` | any | detail incl. live state, **resolved capability record** (Doc 14 §2/§8), last backup summary; deleted → 404 |
 | PATCH | `/api/worlds/{world_id}` | A | RenameWorld `{display_name, version}` (metadata ConfigEdit, version per Doc 9 §4); allowed concurrently with Backup/Restore/Cleanup |
 | POST | `/api/worlds/{world_id}/delete-preview` | A | returns a short-lived, session-bound scope token; required by DeleteWorld |
@@ -91,8 +92,62 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 |---|---|---|---|
 | GET | `/api/operations` | any | filters `world_id`, `op_type`, `status`, `actor_user_id`; sort `-created_at` |
 | GET | `/api/operations/{op_id}` | any | incl. `checkpoint`, `error_code`, `message`, `data_json` |
-| POST | `/api/operations/{op_id}/cancel` | A | O from `Queued`/`Validating` for cancellable types; a `Running` Sync may also be cooperatively cancelled; else 409 `OP_NOT_CANCELLABLE` |
+| POST | `/api/operations/{op_id}/cancel` | A or matching manage grant | O from `Queued`/`Validating` for cancellable types; Running Sync and Download may also be cooperatively cancelled; Download cancellation removes only its `.part` file; else 409 `OP_NOT_CANCELLABLE` |
 | GET | `/api/worlds/{world_id}/operations` | any | world-scoped shorthand |
+
+### Server artifact catalog
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/server-artifacts/providers` | `server_artifact.view` or A/S | supported provider and artifact-kind metadata |
+| GET | `/api/server-artifacts/discover` | `server_artifact.view` or A/S | bounded provider metadata read; latest/recommended by default; `scope=all` is explicit and paginated with a maximum page size of 50; no Operation is created |
+| GET | `/api/server-artifacts` | `server_artifact.view` or A/S | local verified catalog lookup; does not make provider requests |
+| GET | `/api/server-artifacts/{server_artifact_id}` | `server_artifact.view` or A/S | verified catalog entry and provenance metadata; no absolute filesystem path |
+| POST | `/api/server-artifacts/downloads` | `server_artifact.manage` or A/S | body `{descriptor_id, provider, mc_version, build, artifact_kind, force?}`; existing verified item without force returns 200; otherwise O Download; maximum 1 GiB, at most two concurrent transfers |
+| POST | `/api/server-artifact-migrations` | A/S + step-up | O ServerArtifactMigration; body `{}`; source/destination roots are configuration-owned; never run automatically at startup |
+| GET | `/api/server-artifact-migrations/{op_id}` | A/S | migration run result and paginated per-entry unresolved/orphan records |
+
+**Artifact API schemas:** Provider values are the closed set `vanilla`,
+`paper`, `purpur`, `fabric`, `forge`, `neoforge`; `artifact_kind` is
+`runnable_server`, `launcher`, or `installer`. Discovery accepts
+`provider` (required), `scope=latest|all` (default `latest`), `limit` (default
+50, maximum 50), and an opaque `cursor`. Its `data.items[]` descriptors contain
+`provider`, `mc_version`, `build`, `artifact_kind`, optional
+`advertised_size_bytes`, optional `upstream_checksums`, and an opaque
+`descriptor_id`; `meta.pagination` contains `limit`, `next_cursor`, and
+`has_more`. No provider URL or filesystem path is accepted from or returned
+to the client. A Download request includes the `descriptor_id` and matching
+`provider`, `mc_version`, `build`, and `artifact_kind`; `force` is optional
+boolean, default false. The server recomputes/revalidates the descriptor and
+resolves the URL using its provider adapter; stale or mismatched descriptors
+are rejected. Without force, an existing verified artifact is returned
+without creating a Download Operation. With force, a new transfer is made
+without overwriting bytes/catalog rows with a different digest. The 202
+response includes `meta.op_id` and
+`data.operation = {op_id, op_type, status, checkpoint}`; after completion,
+`operations.data_json` contains the resulting `server_artifact_id` and verified
+size/hash fields; the client fetches the catalog record by that ID. Generic
+operation GET/SSE returns subsequent progress and terminal status.
+
+Catalog records expose only `server_artifact_id`, `provider`, `mc_version`,
+`build`, `artifact_kind`, `size_bytes`, `sha256`, `upstream_checksums`,
+`verified_at`, `downloaded_at`, and `status`; `source_url` and absolute storage
+paths remain server-side.
+
+Template `compatibility_constraints` is JSON with shape
+`{providers: string[], mc_versions: string[], builds?: string[]}`. Provider
+values use the artifact-provider closed set; arrays are non-empty, duplicate-
+free strings. Omitted `builds` means any build matching the provider and exact
+Minecraft version. CreateWorld rejects an artifact outside this set before
+creating an Operation.
+
+Migration detail returns `data.run` with `op_id`, outcome, source-manifest
+SHA-256, unresolved/orphan counts, and rollback status, plus `data.entries[]`
+with `entry_id`, `entry_kind`, `source_index`, sanitized `source_name`,
+contained `relative_path` when available, `outcome`, `reason_code`,
+`candidate_count`, `size_bytes`, `sha256`, and imported artifact ID snapshot.
+Entries are paginated with an opaque cursor and a maximum page size of 50.
+Unresolved and orphan entries are retained for operator review; this endpoint
+is read-only and never authorizes file actions.
 
 ### Backups & restores
 | Method | Path | Access | Notes |
@@ -157,8 +212,8 @@ global grant. Superadmin-only routes remain role-only and cannot be delegated.
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/api/templates` | any | filters `category`, `deprecated=false` |
-| POST | `/api/templates` | A | O ConfigEdit template create |
-| PATCH | `/api/templates/{template_id}` | A | O ConfigEdit; requires `version`; 409 stale |
+| POST | `/api/templates` | A | O ConfigEdit; body includes `compatibility_constraints` |
+| PATCH | `/api/templates/{template_id}` | A | O ConfigEdit; requires `version`; may update `compatibility_constraints`; 409 stale |
 | DELETE | `/api/templates/{template_id}` | A | O ConfigEdit **deprecate** flow (never hard-delete once referenced) |
 | GET | `/api/java-runtimes` | A | list with `status` |
 | POST | `/api/java-runtimes` | A | O ConfigEdit register (path, label) |
@@ -318,6 +373,7 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `FORBIDDEN` | 403 | any | Authenticated but denied (always audit-logged) |
 | `HTTPS_REQUIRED` | 403 | non-loopback HTTP | Remote connections must use HTTPS |
 | `FORBIDDEN_LAST_SUPERADMIN` | 409 | user mgmt | Last-active-Superadmin guard |
+| `USER_CONFLICT` | 409 | user mgmt | Username already belongs to a live user |
 | `NOT_FOUND` | 404 | any | Generic (`*_NOT_FOUND` preferred) |
 | `WORLD_NOT_FOUND` | 404 | worlds | Unknown/deleted world_id |
 | `WORLD_DELETED` | 409 | worlds | Action on tombstoned world |
@@ -330,14 +386,22 @@ Canonical, additive-only. `operations.error_code` values appear here so UI "expl
 | `EULA_NOT_ACCEPTED` | 409 | start | World EULA not accepted (`eula_required`); operator must accept via explicit audited route (Doc 14 §5) |
 | `JAVA_INCOMPATIBLE` | 409 | start/create | Resolved Java major outside the server type/version's supported range (Doc 14 §4/§7); rejected before spawn, never discover-after-launch |
 | `OP_NOT_FOUND` | 404 | operations | Unknown op_id |
-| `OP_NOT_CANCELLABLE` | 409 | cancel | Type/status not cancellable (only Sync is cancellable from `Running`) |
+| `OP_NOT_CANCELLABLE` | 409 | cancel | Type/status not cancellable (only Sync and Download are cancellable from `Running`) |
 | `OP_ALREADY_TERMINAL` | 409 | cancel/transition | Terminal ops immutable |
 | `OP_CONFLICT_IN_FLIGHT` | 409 | reject-path ops | In-flight op blocks this type (Doc 9 matrix) |
 | `OP_QUEUED` | 202 | queue-path ops | Not an error: queued single-flight; `meta.queue_position` |
 | `OP_SUPERSEDED_BY_KILL` | n/a (transition) | kill | In-flight Stop cancelled atomically by Kill |
 | `OP_MANAGER_RESTART_INCOMPLETE` | 409 | reconcile | Op failed at restart reconciliation |
 | `OP_TIMEOUT` | n/a (terminal) | ops | Locked timeout reached |
-| `STORAGE_GUARD_TRIPPED` | 409 | start/backup/restore/sync | Contextual storage guard active; `details.reserve_bytes` |
+| `STORAGE_GUARD_TRIPPED` | 409 | start/backup/restore/sync/download | Contextual storage guard active; `details.reserve_bytes` |
+| `SERVER_ARTIFACT_NOT_FOUND` | 404 | artifact/world create | Unknown or unavailable catalog artifact |
+| `SERVER_ARTIFACT_DESCRIPTOR_STALE` | 409 | download | Descriptor no longer matches current provider metadata |
+| `SERVER_ARTIFACT_NOT_RUNNABLE` | 409 | world create/start | Installer/launcher or unsupported provider cannot be provisioned as a runnable server |
+| `SERVER_ARTIFACT_INCOMPATIBLE` | 409 | world create | Artifact provider/version/build violates the selected template compatibility constraints |
+| `SERVER_ARTIFACT_TOO_LARGE` | 413 | download | Provider response exceeds the 1 GiB artifact maximum |
+| `SERVER_ARTIFACT_INTEGRITY_FAILED` | n/a (terminal) | start/create/download | Local SHA-256 or available upstream checksum does not match; artifact is not spawned/provisioned |
+| `SERVER_ARTIFACT_DOWNLOAD_INTERRUPTED` | n/a (terminal) | restart reconciliation | Download was incomplete at restart; `.part` file removed, explicit retry is required |
+| `SERVER_ARTIFACT_MIGRATION_FAILED` | n/a (terminal) | migration | Migration could not stage or atomically publish its catalog; per-entry unresolved items are retained in a successful migration result |
 | `BACKUP_ARTIFACT_NOT_FOUND` | 404 | backups | Unknown artifact_id |
 | `BACKUP_INVALID_CHECKSUM` | 409 | restore validate | Checksum mismatch |
 | `BACKUP_RETENTION_GUARD` | 409 | delete backup | Floor/last-viable-artifact guard; `?force` SA-only |

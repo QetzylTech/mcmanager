@@ -61,6 +61,7 @@ def _requires_step_up() -> bool:
         or path == "/api/supervisor/tick"
         or path == "/api/cleanup/policy"
         or path == "/api/cleanup/execute"
+        or (method == "POST" and path == "/api/server-artifact-migrations")
         or (method == "DELETE" and path.startswith("/api/backups/") and path.count("/") == 3)
         or (
             method == "POST"
@@ -137,6 +138,8 @@ def _requires_admin() -> bool:
         or path.endswith("/cleanup-preview")
         or path == "/api/cleanup/dry-run"
         or path == "/api/cleanup/execute"
+        or path == "/api/server-artifact-migrations"
+        or path.startswith("/api/server-artifact-migrations/")
         or path == "/api/sync/retry"
         or (method == "DELETE" and path.startswith("/api/backups/") and path.count("/") == 3)
         or (
@@ -202,6 +205,12 @@ def _permission_requirement(container: Any) -> tuple[str, str | None] | None:
             return "world.view", None
         if method == "POST":
             return "world.create", None
+
+    if path.startswith("/api/server-artifacts"):
+        if method == "GET":
+            return "server_artifact.view", None
+        if path == "/api/server-artifacts/downloads" and method == "POST":
+            return "server_artifact.manage", None
 
     if path.startswith("/api/worlds/") and world_id is not None:
         suffix = path[len(f"/api/worlds/{world_id}") :].rstrip("/")

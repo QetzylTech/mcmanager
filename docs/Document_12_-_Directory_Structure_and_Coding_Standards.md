@@ -89,6 +89,7 @@ app/
 │   │   ├── schedules.py      # /api/schedules, /missed-runs
 │   │   ├── settings.py       # /api/settings, /manager*, /setup
 │   │   ├── templates_runtimes.py  # /api/templates, /api/java-runtimes
+│   │   ├── server_artifacts.py    # planned /api/server-artifacts* and /api/server-artifact-migrations; thin routes
 │   │   ├── admin.py          # /api/users, roles, permissions, devices
 │   │   ├── notifications.py  # /api/notifications*
 │   │   ├── audit.py          # /api/audit*
@@ -131,6 +132,7 @@ app/
 │   ├── file_manager.py       # FileManagerService
 │   ├── templates.py          # TemplateService
 │   ├── java_runtimes.py      # JavaRuntimeService
+│   ├── server_artifacts.py # planned ServerArtifactService (catalog/download/migration/provision orchestration)
 │   ├── configuration.py      # ConfigurationService (3-tier inheritance, optimistic version checks)
 │   ├── metrics.py            # MetricsService
 │   └── reconciliation.py     # startup reconciliation orchestration (Doc 7 §6)
@@ -152,6 +154,7 @@ app/
 │   ├── metrics_export.py     # future MetricsExportAdapter port (Prometheus/Grafana, Doc 6)
 │   ├── clock.py              # Clock port (injectable epoch-seconds source — Doc 11)
 │   ├── secrets_store.py      # SecretsStore port in front of `secrets` table (Doc 7)
+│   ├── server_artifacts.py # planned ServerArtifactProviderPort (metadata and streamed download contract)
 │   └── minecraft.py          # MinecraftServerPort (Doc 14) — capability record, readiness
 │                             # evaluator, EULA detect/accept, version-aware properties
 │                             # validator, save-coordination commands
@@ -169,6 +172,13 @@ app/
 │   ├── backup_engine.py      # native portable backup engine (ZIP + SHA-256, Doc 14 §11)
 │   ├── minecraft/            # MinecraftServerPort impls (Doc 14) — per server type
 │   │   ├── __init__.py
+│   │   ├── providers/        # planned provider metadata/download adapters behind ServerArtifactProviderPort
+│   │   │   ├── vanilla.py
+│   │   │   ├── paper.py
+│   │   │   ├── purpur.py
+│   │   │   ├── fabric.py
+│   │   │   ├── forge.py
+│   │   │   └── neoforge.py
 │   │   ├── capabilities.py   # capability records per server type (Doc 14 §2)
 │   │   ├── readiness.py      # readiness-level evaluator (Doc 14 §3)
 │   │   ├── eula.py           # eula.txt detection + explicit acceptance write (Doc 14 §5)
@@ -189,6 +199,15 @@ app/
     ├── paths.py              # per-OS default root resolution (manager config/data/logs)
     └── process_health.py     # PID reuse guards, orphan detection, exit-status classification (Doc 13)
 ```
+
+The in-app server artifact catalog/downloader is planned by
+[`SERVER_ARTIFACT_CATALOG_PLAN.md`](SERVER_ARTIFACT_CATALOG_PLAN.md), with
+behavioral pseudocode in
+[`server_artifact_catalog_pseudocode.txt`](server_artifact_catalog_pseudocode.txt).
+Provider HTTP and response parsing belong in infrastructure adapters; service
+and route behavior must follow Documents 8 and 10. Initial implementation is
+tracked by `KB-G1-SERVER-JAR-CATALOG`; the planned paths remain incomplete until
+that card's acceptance and independent review pass.
 
 ## 4 Dependency rule (enforced)
 

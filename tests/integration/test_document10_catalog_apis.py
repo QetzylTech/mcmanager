@@ -9,6 +9,7 @@ import time
 import zipfile
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -635,4 +636,426 @@ def test_session_includes_grants_device_and_iso_expiry(catalog_app):
     assert any(
         grant["permission_id"] == permission.json["data"]["permission_id"]
         for grant in refreshed["permission_grants"]
+    )
+
+
+def test_catalog_schedule_template_and_java_runtime_lifecycle(catalog_app, monkeypatch):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+
+    schedule = client.post(
+        "/api/schedules",
+        json={
+            "scope": "global",
+            "world_id": None,
+            "schedule_type": "maintenance",
+            "interval_spec": {"kind": "weekly", "days": [1]},
+            "time_of_day": "03:15",
+            "enabled": True,
+        },
+        headers=headers,
+    )
+    assert schedule.status_code == 201
+    schedule_id = schedule.json["data"]["schedule"]["schedule_id"]
+
+    updated = client.patch(
+        f"/api/schedules/{schedule_id}",
+        json={"version": 1, "enabled": False, "time_of_day": "04:30"},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json["data"]["schedule"]["enabled"] is False
+    assert updated.json["data"]["schedule"]["time_of_day"] == "04:30"
+
+    invalid_schedule = client.patch(
+        f"/api/schedules/{schedule_id}",
+        json={"version": 2, "interval_spec": {"kind": "yearly"}},
+        headers=headers,
+    )
+    assert invalid_schedule.status_code == 400
+    assert invalid_schedule.json["error"]["code"] == "VALIDATION_ERROR"
+    deleted_schedule = client.delete(f"/api/schedules/{schedule_id}", headers=headers)
+    assert deleted_schedule.status_code == 200
+    assert client.get("/api/schedules").json["data"]["schedules"] == []
+
+    template = client.post(
+        "/api/templates",
+        json={
+            "name": "Lifecycle Template",
+            "category": "forge",
+            "default_version": "1.21",
+            "config_defaults": {"launch_command_template": "java -jar server.jar"},
+        },
+        headers=headers,
+    )
+    assert template.status_code == 201
+    template_id = template.json["data"]["template_id"]
+    renamed = client.patch(
+        f"/api/templates/{template_id}",
+        json={
+            "version": 1,
+            "name": "Lifecycle Template Renamed",
+            "category": "neoforge",
+        },
+        headers=headers,
+    )
+    assert renamed.status_code == 200
+    assert renamed.json["data"]["template"]["name"] == "Lifecycle Template Renamed"
+    deprecated = client.delete(f"/api/templates/{template_id}", headers=headers)
+    assert deprecated.status_code == 200
+    assert client.get("/api/templates?deprecated=true").json["data"]["templates"][0]["template_id"] == template_id
+
+    runtime = client.post(
+        "/api/java-runtimes",
+        json={"label": "Lifecycle Java", "path": "java"},
+        headers=headers,
+    )
+    assert runtime.status_code == 201
+    runtime_id = runtime.json["data"]["runtime"]["runtime_id"]
+    monkeypatch.setattr(
+        container.minecraft_adapter,
+        "detect_java",
+        lambda _path: SimpleNamespace(full_version="21.0.5"),
+    )
+    verified = client.post(f"/api/java-runtimes/{runtime_id}/verify", headers=headers)
+    assert verified.status_code == 200
+    assert verified.json["data"]["status"] == "verified"
+    assert verified.json["data"]["version_detected"] == "21.0.5"
+
+    missing_verify = client.post("/api/java-runtimes/missing-runtime/verify", headers=headers)
+    assert missing_verify.status_code == 404
+    deprecated_runtime = client.delete(f"/api/java-runtimes/{runtime_id}", headers=headers)
+    assert deprecated_runtime.status_code == 200
+    runtime_row = container.store.reader().execute(
+        "SELECT status FROM java_runtimes WHERE runtime_id = ?", (runtime_id,)
+    ).fetchone()
+    assert runtime_row["status"] == "deprecated"
+
+
+def test_administration_device_and_role_lifecycle(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+
+    devices = client.get("/api/devices")
+    assert devices.status_code == 200
+    assert any(
+        device["device_id"] == "catalog-admin-device"
+        for device in devices.json["data"]["devices"]
+    )
+
+    renamed = client.patch(
+        "/api/devices/catalog-admin-device",
+        json={"device_name": "Catalog Administrator"},
+        headers=headers,
+    )
+    assert renamed.status_code == 200
+    assert renamed.json["data"]["device_name"] == "Catalog Administrator"
+    sessions = client.get("/api/devices/catalog-admin-device/sessions")
+    assert sessions.status_code == 200
+    assert sessions.json["data"]["sessions"]
+    activity = client.get("/api/session/activity")
+    assert activity.status_code == 200
+    assert activity.json["data"]["activity"]["device_id"] == "catalog-admin-device"
+    assert activity.json["data"]["activity"]["session_id"]
+
+    role = client.post(
+        "/api/roles",
+        json={"name": "Temporary Operator", "description": "Lifecycle test role"},
+        headers=headers,
+    )
+    assert role.status_code == 201
+    role_id = role.json["data"]["role_id"]
+    updated_role = client.patch(
+        f"/api/roles/{role_id}",
+        json={"version": 1, "description": "Updated lifecycle role"},
+        headers=headers,
+    )
+    assert updated_role.status_code == 200
+    permission = client.post(
+        "/api/permissions",
+        json={"role_id": role_id, "action_category": "world.backup.view"},
+        headers=headers,
+    )
+    assert permission.status_code == 201
+    listed = client.get(f"/api/roles/{role_id}/permissions")
+    assert listed.status_code == 200
+    assert listed.json["data"]["permissions"][0]["action_category"] == "world.backup.view"
+    revoked = client.delete(
+        f"/api/permissions/{permission.json['data']['permission_id']}",
+        headers=headers,
+    )
+    assert revoked.status_code == 200
+    assert client.get(f"/api/roles/{role_id}/permissions").json["data"]["permissions"] == []
+
+    deleted_role = client.delete(f"/api/roles/{role_id}", headers=headers)
+    assert deleted_role.status_code == 200
+    missing_role = client.get(f"/api/roles/{role_id}/permissions")
+    assert missing_role.status_code == 404
+
+    superadmin_role = (
+        container.store.reader()
+        .execute("SELECT role_id FROM roles WHERE name = 'Superadmin'")
+        .fetchone()
+    )
+    immutable = client.patch(
+        f"/api/roles/{superadmin_role['role_id']}",
+        json={"version": 1, "description": "must fail"},
+        headers=headers,
+    )
+    assert immutable.status_code == 409
+    assert immutable.json["error"]["code"] == "CONFIG_VERSION_CONFLICT"
+
+
+def test_administration_user_validation_update_and_soft_delete(catalog_app):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+
+    role = client.post(
+        "/api/roles",
+        json={"name": "User Lifecycle Role"},
+        headers=headers,
+    )
+    assert role.status_code == 201
+    role_id = role.json["data"]["role_id"]
+
+    invalid_user = client.post(
+        "/api/users",
+        json={
+            "username": "short-password-user",
+            "password": "short",
+            "role_id": role_id,
+        },
+        headers=headers,
+    )
+    assert invalid_user.status_code == 400
+    assert invalid_user.json["error"]["code"] == "VALIDATION_ERROR"
+
+    created = client.post(
+        "/api/users",
+        json={
+            "username": "  lifecycle-user  ",
+            "display_name": "Lifecycle User",
+            "password": "lifecycle-password",
+            "role_id": role_id,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    user_id = created.json["data"]["user_id"]
+    secret_count_before_duplicate = (
+        container.store.reader().execute("SELECT count(*) FROM secrets").fetchone()[0]
+    )
+    duplicate = client.post(
+        "/api/users",
+        json={
+            "username": "lifecycle-user",
+            "password": "another-password",
+            "role_id": role_id,
+        },
+        headers=headers,
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json["error"]["code"] == "USER_CONFLICT"
+    secret_count_after_duplicate = (
+        container.store.reader().execute("SELECT count(*) FROM secrets").fetchone()[0]
+    )
+    assert secret_count_after_duplicate == secret_count_before_duplicate
+
+    user_row = (
+        container.store.reader()
+        .execute("SELECT status, display_name FROM users WHERE user_id = ?", (user_id,))
+        .fetchone()
+    )
+    assert user_row["status"] == "active"
+    assert user_row["display_name"] == "Lifecycle User"
+    listed_user = next(
+        user
+        for user in client.get("/api/users").json["data"]["users"]
+        if user["user_id"] == user_id
+    )
+    assert listed_user["roles"] == ["User Lifecycle Role"]
+    assert listed_user["last_activity_at"] is None
+
+    current_user_id = client.get("/api/session").json["data"]["user_id"]
+    self_password = client.patch(
+        f"/api/users/{current_user_id}",
+        json={"password": "new-valid-password"},
+        headers=headers,
+    )
+    assert self_password.status_code == 400
+    assert self_password.json["error"]["code"] == "VALIDATION_ERROR"
+
+    step_up = client.post(
+        "/api/auth/step-up",
+        json={"password": "a-strong-password-123"},
+        headers=headers,
+    )
+    assert step_up.status_code == 200
+    headers = {"X-CSRF-Token": client.get_cookie("csrf_token").value}
+
+    for field, value in (("username", " "), ("display_name", 7), ("status", "pending")):
+        rejected = client.patch(
+            f"/api/users/{user_id}",
+            json={field: value},
+            headers=headers,
+        )
+        assert rejected.status_code == 400
+        assert rejected.json["error"]["code"] == "VALIDATION_ERROR"
+
+    target_session = container.auth.authenticate(
+        username="lifecycle-user",
+        password="lifecycle-password",
+        device_id="lifecycle-user-device",
+        device_name="Lifecycle User Device",
+        ip="127.0.0.1",
+    )
+    target_secret_before = (
+        container.store.reader()
+        .execute("SELECT secret_id FROM users WHERE user_id = ?", (user_id,))
+        .fetchone()["secret_id"]
+    )
+    duplicate_username = client.patch(
+        f"/api/users/{user_id}",
+        json={"username": "catalog-admin", "password": "conflicting-password-reset"},
+        headers=headers,
+    )
+    assert duplicate_username.status_code == 409
+    assert duplicate_username.json["error"]["code"] == "USER_CONFLICT"
+    target_secret_after = (
+        container.store.reader()
+        .execute("SELECT secret_id FROM users WHERE user_id = ?", (user_id,))
+        .fetchone()["secret_id"]
+    )
+    assert target_secret_after == target_secret_before
+    target_session_after = (
+        container.store.reader()
+        .execute(
+            "SELECT deleted_at FROM client_sessions WHERE session_id = ?",
+            (target_session.session_id_hash,),
+        )
+        .fetchone()
+    )
+    assert target_session_after["deleted_at"] is None
+
+    updated = client.patch(
+        f"/api/users/{user_id}",
+        json={
+            "username": " renamed-lifecycle-user ",
+            "display_name": "Renamed Lifecycle User",
+            "password": "renamed-user-password",
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json["data"]["updated"] == ["display_name", "password", "username"]
+    user_session = container.auth.authenticate(
+        username="renamed-lifecycle-user",
+        password="renamed-user-password",
+        device_id="lifecycle-user-device",
+        device_name="Lifecycle User Device",
+        ip="127.0.0.1",
+    )
+
+    disabled = client.patch(
+        f"/api/users/{user_id}",
+        json={"status": "disabled"},
+        headers=headers,
+    )
+    assert disabled.status_code == 200
+    session_row = (
+        container.store.reader()
+        .execute(
+            "SELECT deleted_at FROM client_sessions WHERE session_id = ?",
+            (user_session.session_id_hash,),
+        )
+        .fetchone()
+    )
+    assert session_row["deleted_at"] is not None
+
+    deleted = client.delete(f"/api/users/{user_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.json["data"]["deleted"] is True
+    missing_update = client.patch(
+        f"/api/users/{user_id}",
+        json={"status": "active"},
+        headers=headers,
+    )
+    assert missing_update.status_code == 404
+    assert client.delete(f"/api/users/{user_id}", headers=headers).status_code == 404
+
+
+def test_user_create_rolls_back_secret_after_racing_username_conflict(catalog_app, monkeypatch):
+    client, headers = _admin_client(catalog_app)
+    container = catalog_app.extensions["mcmanager_container"]
+    admin_id = client.get("/api/session").json["data"]["user_id"]
+    admin_secret_id = (
+        container.store.reader()
+        .execute("SELECT secret_id FROM users WHERE user_id = ?", (admin_id,))
+        .fetchone()["secret_id"]
+    )
+    role = client.post(
+        "/api/roles",
+        json={"name": "Concurrent User Role"},
+        headers=headers,
+    )
+    assert role.status_code == 201
+
+    username = "racing-user"
+    user_count_before = (
+        container.store.reader()
+        .execute("SELECT count(*) FROM users")
+        .fetchone()[0]
+    )
+    secret_count_before = (
+        container.store.reader().execute("SELECT count(*) FROM secrets").fetchone()[0]
+    )
+    original_store = container.secrets.store
+
+    def store_with_competing_user(**kwargs):
+        secret_id = original_store(**kwargs)
+        if kwargs.get("commit") is False:
+            writer = container.store.writer()
+            now = int(container.clock.now())
+            writer.execute(
+                "INSERT INTO users (user_id, username, display_name, secret_id, status, "
+                "failed_login_count, locked_until, created_by, deleted_at, deleted_by, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, ?, 'active', 0, NULL, ?, NULL, NULL, ?, ?)",
+                (
+                    f"u_{uuid4().hex[:16]}",
+                    username,
+                    admin_secret_id,
+                    admin_id,
+                    now,
+                    now,
+                ),
+            )
+        return secret_id
+
+    monkeypatch.setattr(container.secrets, "store", store_with_competing_user)
+    response = client.post(
+        "/api/users",
+        json={
+            "username": username,
+            "password": "racing-user-password",
+            "role_id": role.json["data"]["role_id"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json["error"]["code"] == "USER_CONFLICT"
+    assert (
+        container.store.reader()
+        .execute("SELECT count(*) FROM users WHERE username = ?", (username,))
+        .fetchone()[0]
+        == 0
+    )
+    assert (
+        container.store.reader().execute("SELECT count(*) FROM users").fetchone()[0]
+        == user_count_before
+    )
+    assert (
+        container.store.reader().execute("SELECT count(*) FROM secrets").fetchone()[0]
+        == secret_count_before
     )

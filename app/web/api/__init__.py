@@ -13,6 +13,7 @@ from app.web.api.history import history_bp
 from app.web.api.manager_content import documentation_bp, manager_logs_bp
 from app.web.api.pages import pages_bp
 from app.web.api.server_properties import server_properties_bp
+from app.web.api.server_artifacts import server_artifacts_bp
 from app.web.api.system import system_bp
 from app.web.api.world_management import world_management_bp
 
@@ -28,5 +29,6 @@ def register_api_blueprints(app: Flask) -> None:
     app.register_blueprint(manager_logs_bp)
     app.register_blueprint(pages_bp)
     app.register_blueprint(server_properties_bp)
+    app.register_blueprint(server_artifacts_bp)
     app.register_blueprint(system_bp)
     app.register_blueprint(world_management_bp)

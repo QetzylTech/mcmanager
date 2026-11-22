@@ -7,16 +7,17 @@ Buildable SQLite schema derived from Document 6 — every table, column, type, k
 - IDs: `TEXT`, app-generated (UUIDv4+), no auto-increment for anything cross-referenced or needing stable export identity. `INTEGER PRIMARY KEY AUTOINCREMENT` only for purely internal, never-referenced rows (none currently).
 - Timestamps: `INTEGER` Unix epoch seconds. Booleans: `INTEGER` 0/1. JSON: `TEXT`, app-validated; JSON1 may query; no native JSON column.
 - Deletion marker: exactly one column `deleted_at INTEGER NULL`, identical everywhere for Tier 2 soft-removal; NULL = active. No second column / status-enum substitute. Deletion actor: `deleted_by TEXT NULL` (user_id or `'system'`) on every table with `deleted_at`.
-- Tier 1 tables (`audit_records`, `notifications`, `notification_reads`, `missed_run_records`, `sync_records`, `sync_attempts`) have **no** `deleted_at` column at all.
+- Tier 1 tables (`audit_records`, `notifications`, `notification_reads`, `missed_run_records`, `sync_records`, `sync_attempts`, `server_artifact_migration_runs`, `server_artifact_migration_entries`) have **no** `deleted_at` column at all.
 - FK enforcement = deletability boundary: every *enforced* FK is `ON DELETE RESTRICT`. A table that must outlive its referent stores the ID as a plain value (deliberately **not an FK**) + a denormalized snapshot (`audit_records.actor_user_id` + `actor_username_snapshot`, `audit_records.device_id_snapshot`, `missed_run_records.schedule_id`, `runtime_sessions.launch_args_snapshot`). "Snapshot references are not FKs" — deletability check for a Tier 2 row counts only enforced FKs.
 - Global persistence invariants (ARCHITECTURE §9 — do not restate): `PRAGMA foreign_keys = ON` every connection before any other statement; boot-time `PRAGMA foreign_key_check` after migrations before serving — violation = startup-blocking critical error, never silently repaired.
 - **No `ON DELETE CASCADE` anywhere.** Only Cleanup physically deletes, and it checks dependents explicitly.
 
-## 1 Full table list (28)
+## 1 Full table list (31)
 
 Manager/global: `manager`, `global_settings`, `schema_migrations`
 World/registry: `world_instances`, `world_settings`, `templates`, `java_runtimes`
 Runtime: `runtime_sessions`, `operations`
+Server artifacts: `server_artifacts`, `server_artifact_migration_runs`, `server_artifact_migration_entries`
 Backup/restore/retention: `backup_artifacts`, `restore_history`, `schedules`, `missed_run_records`, `cleanup_policies`
 Sync: `sync_targets`, `sync_records`, `sync_attempts`
 Notifications/audit: `notifications`, `notification_reads`, `audit_records`
@@ -37,7 +38,7 @@ Legend: type `TEXT` unless marked (`INT`, `JSON`). `PK` = primary key. `FK->t` =
 `version` INT PK sequential | `name` | `applied_at` INT
 
 **2.4 world_instances** // T2, tombstoned, never hard-deleted in practice per Doc 6
-`world_id` PK IMM // forever, even past deleted_at | `display_name` UNIQ_SOFT | `template_id` FK->templates | `server_type` // vanilla/forge/fabric/paper/... | `mc_version` | `java_runtime_id` FK->java_runtimes | `port` INT UNIQ_SOFT | `addressing_strategy` // subdomain/port/path | `addressing_value` | `world_directory` TEXT NULL // persisted physical path; NULL only for legacy rows resolved by compatibility rules | `state` // off/queued/starting/running/stopping/restoring/backing_up/crashed/error/eula_required (Doc 6 §5) | `pre_backup_state` NULL // only while state=backing_up | `launch_args` JSON NULL // editable only while state=off: Doc 6 §4, Doc 9 §5 | `metadata_version` INT // Doc 9 §4, metadata fields only | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
+`world_id` PK IMM // forever, even past deleted_at | `display_name` UNIQ_SOFT | `template_id` FK->templates | `server_type` // vanilla/paper/purpur/fabric/forge/neoforge/... | `mc_version` | `java_runtime_id` FK->java_runtimes | `port` INT UNIQ_SOFT | `addressing_strategy` // subdomain/port/path | `addressing_value` | `world_directory` TEXT NULL // persisted physical path; NULL only for legacy rows resolved by compatibility rules | `server_artifact_id` NULL FK->server_artifacts // selected verified catalog entry; RESTRICT | `server_artifact_provenance_json` JSON NULL // immutable snapshot incl. runtime_relative_path='server.jar', source/runtime hashes, and provider identity | `state` // off/queued/starting/running/stopping/restoring/backing_up/crashed/error/eula_required (Doc 6 §5) | `pre_backup_state` NULL // only while state=backing_up | `launch_args` JSON NULL // editable only while state=off: Doc 6 §4, Doc 9 §5 | `metadata_version` INT // Doc 9 §4, metadata fields only | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 
 **2.5 world_settings** // T2, 1:1 with world_instances; row exists only when a world overrides global_settings
@@ -45,7 +46,7 @@ IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 // notification_defaults deliberately has NO per-world override (Doc 6 §2.10)
 
 **2.6 templates** // T2, soft-deleted/deprecated only, Doc 6 §2.12
-`template_id` PK | `name` UNIQ_SOFT | `category` // free-text, never a closed enum | `default_version` | `config_defaults` JSON // must include generic launch-command template; adapter launches by data | `source` // built_in/imported | `deprecated` INT // distinct from deleted_at: hidden from create, still referenced historically | `version` INT // Doc 9 §4 | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
+`template_id` PK | `name` UNIQ_SOFT | `category` // free-text, never a closed enum | `default_version` | `compatibility_constraints` JSON // allowed provider/server type and Minecraft version; optional build constraints; does not select artifact | `config_defaults` JSON // must include generic launch-command template; adapter launches by data | `source` // built_in/imported | `deprecated` INT // distinct from deleted_at: hidden from create, still referenced historically | `version` INT // Doc 9 §4 | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
 
 **2.7 java_runtimes** // T2, soft-deprecated only, Doc 6 §2.11
 `runtime_id` PK | `label` UNIQ_SOFT | `executable_path` | `version_detected` NULL | `status` // registered/verified/missing/deprecated | `version` INT // API optimistic lock | `deleted_at` NULL | `deleted_by` NULL | `created_at` | `updated_at`
@@ -55,9 +56,20 @@ IDX: `(state)`, `(deleted_at)` partial, `(display_name)`
 CONSTRAINT: partial UNIQUE `(world_id) WHERE ended_at IS NULL` — exactly one open session per world
 
 **2.9 operations** // durable command-plane record; immutable except milestone status progression
-`op_id` PK | `op_type` // CreateWorld/Start/Stop/Kill/Backup/Restore/Cleanup/Sync/ConfigEdit/CrashDetected/DeleteWorld | `world_id` NULL FK->world_instances // null = manager-global | `actor_type` // user/system | `actor_user_id` NULL FK->users // null when actor_type=system | `idempotency_key` NULL | `status` // Created/Queued/Validating/Running/Completed/Failed/Cancelled/TimedOut | `checkpoint` JSON NULL | `attempt` INT | `compensates_operation_id` NULL FK->operations // compensating ops only | `intent_at` | `started_at` NULL | `finished_at` NULL | `error_code` NULL | `message` NULL | `data_json` JSON NULL // type-specific payload incl. cleanup run summaries | `created_at` | `updated_at`
+`op_id` PK | `op_type` // CreateWorld/Start/Stop/Kill/Backup/Restore/Cleanup/Sync/Download/ServerArtifactMigration/ConfigEdit/CrashDetected/DeleteWorld | `world_id` NULL FK->world_instances // null = manager-global | `actor_type` // user/system | `actor_user_id` NULL FK->users // null when actor_type=system | `idempotency_key` NULL | `status` // Created/Queued/Validating/Running/Completed/Failed/Cancelled/TimedOut | `checkpoint` JSON NULL | `attempt` INT | `compensates_operation_id` NULL FK->operations // compensating ops only | `intent_at` | `started_at` NULL | `finished_at` NULL | `error_code` NULL | `message` NULL | `data_json` JSON NULL // type-specific payload incl. cleanup run summaries | `created_at` | `updated_at`
 IDX: `(world_id, status)` — REQUIRED, backs the derived world lock (Doc 9 §1.1); `(idempotency_key)` unique-where-not-null, scoped by op_type
-RULE: progress `checkpoint` payloads are held in OperationService memory and sent over SSE. Persist this row only at initial creation, transition to `Running`, and terminal exit; the persisted terminal row carries the final checkpoint/message.
+RULE: progress `checkpoint` payloads are held in OperationService memory and sent over SSE. Persist this row only at initial creation, transition to `Running`, and terminal exit; the persisted terminal row carries the final checkpoint/message. Durable boundary exception: Download persists its verified final relative path, byte size, and SHA-256 immediately before filesystem promotion so restart reconciliation can complete or safely remove that Operation-owned file.
+
+**2.9.1 server_artifacts** // T2 catalog metadata; files under manager-owned serverjars root
+`server_artifact_id` PK | `provider` // vanilla/paper/purpur/fabric/forge/neoforge | `mc_version` | `build` | `artifact_kind` // runnable_server/launcher/installer | `source_url` | `relative_path` // contained below configured serverjars root; unique | `size_bytes` INT | `sha256` // required local digest | `upstream_checksums` JSON NULL | `verified_at` INT | `downloaded_at` INT | `status` // available/retired | `deleted_at` NULL | `deleted_by` NULL | `created_at`
+IDX: `(provider, mc_version, build, status)`, `(sha256)`. Catalog identity binds provider/version/build/kind/content digest. World references use `ON DELETE RESTRICT`; files and rows are never overwritten by a different digest.
+
+**2.9.2 server_artifact_migration_runs** // T1 permanent
+`operation_id` PK FK->operations | `source_root_kind` // legacy_app_data/configured_artifact_root | `source_manifest_sha256` | `backup_relative_path` | `staging_relative_path` NULL | `outcome` // running/succeeded/failed/rolled_back | `unresolved_count` INT | `orphan_count` INT | `rollback_status` // not_needed/pending/completed/failed | `created_at` | `updated_at`
+
+**2.9.3 server_artifact_migration_entries** // T1 permanent, per-entry review detail
+`entry_id` PK | `operation_id` FK->server_artifact_migration_runs | `entry_kind` // manifest_entry/orphan_file | `source_index` INT // deterministic ordinal within operation_id + entry_kind | `source_name` // sanitized basename only | `relative_path` NULL // normalized path contained under legacy root | `outcome` // imported/unresolved/orphan | `reason_code` NULL // required for unresolved | `candidate_count` INT NULL | `size_bytes` INT NULL | `sha256` NULL | `server_artifact_id` NULL // plain value snapshot, not an FK | `created_at`
+IDX: `(operation_id, outcome, source_index)`. CONSTRAINT: UNIQUE `(operation_id, entry_kind, source_index)`. Never store or follow an absolute path from the manifest. Entries are read-only migration evidence; source files remain unchanged.
 
 **2.10 backup_artifacts** // T2, created-on-success-only, Doc 6 §2.5
 `artifact_id` PK | `world_id` NULL FK->world_instances // NULL = ManagerBackup (manager DB/settings/templates/permissions) | `category` // session_end/manual/scheduled/pre_restore/emergency/manager_config | `storage_path` | `size_bytes` INT | `checksum` // SHA-256 over full artifact (Doc 14 §11) | `suspect` INT // 0/1; set when a restore fails structural validation — surfaced, never auto-deleted (Doc 14 §11) | `operation_id` FK->operations // producing Backup op | `deleted_at` NULL // direct delete removes file; stale cleanup hard-deletes the row and file | `deleted_by` NULL | `stale_tombstoned_at` NULL // legacy marker for pre-policy-change stale tombstones; new cleanup never sets it | `created_at`
@@ -85,6 +97,17 @@ Migration 008 adds the persisted world directory and configurable concurrent
 start limit. New worlds use an immutable world-ID directory (unless an absolute
 custom path is explicitly selected); legacy rows retain their existing
 display-name/path resolution until a rename persists that path.
+
+Migration 009 adds the SQLite server-artifact catalog, permanent migration
+run/entry records, nullable `world_instances.server_artifact_id` and immutable
+`server_artifact_provenance_json`, and `templates.compatibility_constraints`.
+Existing worlds remain valid with NULL provenance; each existing template
+receives an exact-provider/exact-version compatibility value derived from its
+current `category` and non-empty `default_version`, without selecting an
+artifact. The migration must validate that derivation and stop with a
+row-specific report rather than guess if a template is malformed. It adds no
+destructive backfill and does not import the legacy JSON manifest at startup;
+artifact migration is an explicit, restartable Operation.
 
 **2.15 notifications** // T1 — permanent, Doc 6 §2.8
 `notification_id` PK | `category` | `severity` // critical/high/normal/informational — dropdown ordering (Doc 5) | `message` | `related_operation_id` NULL FK->operations | `related_world_id` NULL FK->world_instances | `requires_action` INT | `action_taken` NULL | `created_at`
@@ -166,8 +189,10 @@ ARCHITECTURE §16 ruling 9: the Mermaid ER diagram duplicated the FK graph alrea
 2. Load `world_instances` where `deleted_at IS NULL`.
 3. Load `runtime_sessions` where `ended_at IS NULL`.
 4. Per open session: probe for a live process. Found → keep open, `state = running`. Not found → `ended_at = now`, `end_reason = 'reconciled_missing'`, emit `RuntimeSessionReconciled`, `state = off` (or `error` if the world's last Operation didn't reach a terminal status).
-5. Load `operations` where `status IN ('Queued','Validating','Running')`; re-check world state; mark `Failed` with `error_code = 'manager_restart_incomplete'` if unresumable, else `Completed`/continue.
-6. Republish current snapshots to reconnecting clients (runtime/service concern).
+5. Reconcile non-terminal Download Operations before general operation recovery: if the committed catalog row and final file match the Operation's checkpoint, complete it; otherwise, if the promoted final file matches the persisted path/size/hash, transactionally insert the catalog row and complete it; otherwise remove only its `.part` or uncommitted final file and fail with `SERVER_ARTIFACT_DOWNLOAD_INTERRUPTED` (no HTTP range-resume).
+6. Reconcile non-terminal ServerArtifactMigration Operations: if SQLite publication committed and the catalog validates, complete; otherwise restore the manifest backup when publication had begun, delete only new staging data, mark rolled back/failed, and keep source files untouched.
+7. Load remaining `operations` where `status IN ('Queued','Validating','Running')`; re-check world state; mark `Failed` with `error_code = 'manager_restart_incomplete'` if unresumable, else `Completed`/continue.
+8. Republish current snapshots to reconnecting clients (runtime/service concern).
 
 Worlds in `eula_required` are never probed — no session can be open while `eula_required` (startup gate, Doc 14 §5).
 

@@ -315,6 +315,35 @@ is integrated and reviewed.
 
 ## Done
 
+### KB-G1-SERVER-ARTIFACT-PLAN — Plan the in-app server artifact replacement
+
+- **WBS/Docs:** WP 1.7; Documents 5, 6, 8, 10, 12, and 14; server artifact plan and pseudocode
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-23
+- **Status:** Done
+- **Depends on:** KB-G5-5, KB-G1-3 (Done)
+- **Acceptance:** document all observed external downloader behavior and the
+  application replacement architecture; define phased migration, tests,
+  safety controls, cutover/removal criteria, and decisions that require product
+  approval; add target behavior pseudocode; update the affected plan documents
+  without changing application code or deleting the local archive/script.
+- **Evidence:** `docs/SERVER_ARTIFACT_CATALOG_PLAN.md` and
+  `docs/server_artifact_catalog_pseudocode.txt` document current downloader
+  behavior, provider coverage, the proposed module/port/adapter boundaries,
+  target lifecycle, migration, test strategy, safety controls, and cutover/
+  removal criteria. Documents 5–10, 12, and 14 and WP 1.7 were reconciled;
+  stable content-aware identity, CreateWorld provenance/idempotency, pre-Start
+  integrity checks, restartable migration, and NeoForge mapping fixtures were
+  added. The first independent FAIL identified inconsistent persistence,
+  incomplete API/operation contracts and missing safety decisions; the next
+  independent FAIL identified ambiguous reserve units, missing per-entry
+  migration findings, runtime filename/launch target, API schemas, and root
+  separation. The approved decisions and corrections are recorded in the
+  plan and product documents. Final independent re-review passed with no
+  significant issues. User accepted the reviewed plan and authorized
+  construction. No application behavior or local archive/script was changed.
+  On Windows, `python dev_tools/workflow_verify.py` passed with 0
+  status/section warnings and scoped CRLF-aware `git diff --check` passed.
+
 ### KB-WF-002 — Reconcile legacy workboard status and section placement
 
 - **WBS/Docs:** `docs/WORKBOARD.md`; workflow specification sections 7 and 14
@@ -868,7 +897,6 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   Windows/Python 3.13.17: **30 passed on each platform** (2026-11-20).
 
 ## Review
-
 
 ### KB-G5-3 — Implement backup, restore, cleanup, and sync API catalog
 
@@ -1444,10 +1472,58 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
 
 ## In Progress
 
+### KB-G1-SERVER-JAR-CATALOG — Replace the external downloader and provision server artifacts
+
+- **WBS/Docs:** WP 1.7; Documents 5, 6, 7, 8, 9, 10, 12, and 14;
+  `docs/SERVER_ARTIFACT_CATALOG_PLAN.md`
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-22
+- **Status:** In Progress
+- **Depends on:** KB-G5-5, KB-G1-3, KB-G1-SERVER-ARTIFACT-PLAN (Done)
+- **Acceptance:** replace `minecraft_server_archive.py` with an app-owned
+  provider catalog/downloader and retire the external script only after full
+  provider parity, safe migration, and acceptance pass. Support Vanilla,
+  Purpur, Paper, Fabric, Forge, and NeoForge; retain latest/all-build discovery
+  within approved limits; provide durable job status, bounded concurrent
+  downloads, retry/cancel/recovery, checksum/provenance, safe managed storage,
+  and explicit errors. Distinguish runnable jars, Fabric launchers, and
+  Forge/NeoForge installers; first-release CreateWorld provisioning is limited
+  to verified runnable Vanilla/Paper/Purpur artifacts, with launcher/installer
+  preparation deferred to a separate approved task. Preserve existing archive
+  files and manifest provenance; CreateWorld must use an already acquired
+  artifact, and Start must reject missing, corrupt, and unsupported server
+  setups. Add fixture-driven provider tests and focused
+  unit/integration/browser coverage; deterministic tests must not use live
+  provider downloads. Complete the plan's documented approval gates before
+  implementation.
+- **Current evidence:** `app/data/serverjars/minecraft_server_archive.py` and
+  its archive are ignored runtime data. The downloader defaults to a
+  working-directory-relative `MinecraftArchive` output unless `--output` is
+  supplied. CreateWorld provisions the world directory but does not resolve or
+  copy an archive artifact; world startup searches only the world directory
+  for `*.jar`. The downloader behavior and replacement sequence are recorded
+  in `docs/SERVER_ARTIFACT_CATALOG_PLAN.md` and
+  `docs/server_artifact_catalog_pseudocode.txt`. See `AUD-2026-11-22-01`.
+- **Claim:** the plan's final independent re-review passed, the user accepted
+  the plan and authorized construction, and prerequisite cards KB-G5-5 and
+  KB-G1-3 are Done.
+- **Handoff — 2026-11-23:** Work is partial and remains In Progress. Initial
+  provider adapters, artifact service, migration 009, API routes, operation
+  dispatch, CreateWorld provisioning, and Start integrity checks are present;
+  none has passed feature acceptance yet. `python -m compileall -q app` and
+  targeted Ruff checks passed. Pytest, mypy, migration/API acceptance,
+  browser flows, and independent implementation review are **NOT RUN**.
+  Next: finish and test the catalog UI and API; add deterministic provider,
+  download/cancel/retry, migration/rollback, CreateWorld, and Start-integrity
+  tests; inspect path safety, recovery, and migration transaction behavior;
+  run the workflow and full required verification; then submit for independent
+  review. Keep the external downloader and archive until cutover acceptance.
+  No commit was created; the worktree also contains unrelated existing
+  changes, so do not stage all files without scope review.
+
 ### KB-D11-TEST-PYRAMID — Close the Document 11 test-pyramid gaps
 
 - **WBS/Docs:** Document 11 §§1–3
-- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-21
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-22
 - **Status:** In Progress
 - **Acceptance:** inventory required unit, integration, and end-to-end flows;
   measure the repository-wide test distribution against Document 11's
@@ -1466,47 +1542,12 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   7 passed and is not counted as real-browser E2E. Broader HTTP/process
   workflows, additional browser journeys, and the approximate 70/25/5
   distribution remain open; adapter conformance remains its own layer.
+- **Latest collection follow-up — 2026-11-22:** the full coverage run collected
+  646 cases (643 passed, 3 skipped). The unit/integration/adapter distribution
+  was not recategorized, so the 2026-11-21 inventory remains the latest
+  categorized breakdown; the 70/25/5 acceptance remains open.
 
 ## To Do
-
-### KB-D11-COVERAGE — Meet documented test coverage floors
-
-- **WBS/Docs:** Document 11 coverage requirements
-- **Priority:** P1 · **Owner:** Unassigned
-- **Acceptance:** raise every measured module to at least 80% coverage and
-  overall coverage to at least 85%; preserve meaningful assertions and record
-  the repository-level coverage floor. Feature-specific coverage is owned by
-  each implementation card and is not deferred to this cross-cutting gate.
-- **Current evidence:** coverage-focused additions raised several core modules,
-  but the 85% overall and per-module 80% floors remain unachieved; per-module
-  enforcement is absent from pytest configuration. Prior evidence includes
-  backup catalog API coverage at 44.46% and the 2026-11-19 run at 76.24%.
-- **Previous baseline — 2026-11-21:** clean Windows/Python 3.13.14 full coverage run:
-  **568 passed, 0 failed, 3 skipped**, 297 warnings, 80.97% overall, in
-  404.36s. The configured 80% floor passed; Document 11's 85% floor did not.
-  Thirteen of 92 measured modules remain below 80%: Minecraft properties
-  schema (65.62%), SQLite connection (76.00%), process base (73.74%), POSIX
-  process (22.89%), server-properties service (75.47%), worlds service
-  (72.97%), administration API (54.52%), backup-catalog API (62.76%),
-  catalogs API (65.83%), history API (77.30%), manager-content API (79.85%),
-  server-properties API (77.14%), and world-management API (73.88%). Raw
-  output and report are retained at
-  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes.txt`
-  and
-  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes_coverage.txt`.
-- **Latest follow-up — 2026-11-21:** after adding on-disk property validation,
-  SQLite diagnostics/lifecycle, and history-query regressions, Windows/Python
-  3.13.14 `python -m pytest -q` passed **573 tests, 0 failed, 3 skipped** at
-  **81.67%** overall, with no warning summary, in 405.11s. The coverage run
-  measured 9,275 statements and 10 modules remain below 80%: process base
-  (73.74%), POSIX process adapter (22.89%), server-properties service (75.47%),
-  worlds service (72.83%), administration API (54.52%), backup-catalog API
-  (62.76%), catalogs API (65.83%), manager-content API (79.85%),
-  server-properties API (77.14%), and world-management API (73.88%).
-  `properties_schema.py` is now 96.88%, SQLite `connection.py` 91.20%, and
-  history API 95.74%. The overall 85% floor and remaining per-module floors
-  are still open. Raw coverage output:
-  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_followup_tests.txt`.
 
 ### KB-D11-ISO-25010 — Complete the quality-characteristic evidence map
 
@@ -1534,8 +1575,9 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   remains blocked by repository static findings. Flexibility has adapter
   conformance but no split-topology or storage-adapter substitution proof.
   Safety has cleanup/restore guard tests, while full destructive-route parity
-  remains open. Coverage remains below both documented floors; see
-  `KB-D11-COVERAGE` and `KB-D11-TEST-PYRAMID`.
+  remains open. The latest full coverage run passed both documented coverage
+  floors (87.60% overall; every measured module at least 80%); see
+  `KB-D11-COVERAGE`. The broader quality-characteristic evidence gaps remain.
 
 ### KB-DOC-EVIDENCE-QUALITY — Reconcile status and evidence claims
 
@@ -1762,6 +1804,77 @@ bounded in-memory tailing; default is documented in `app/.env.example`.
   `benchmarks/thresholds.json` values, and pass its acceptance test.
 
 ## Review
+
+### KB-D11-COVERAGE — Meet documented test coverage floors
+
+- **WBS/Docs:** Document 11 coverage requirements
+- **Priority:** P1 · **Owner:** Copilot current session · **Updated:** 2026-11-22
+- **Status:** Review
+- **Acceptance:** raise every measured module to at least 80% coverage and
+  overall coverage to at least 85%; preserve meaningful assertions and record
+  the repository-level coverage floor. Feature-specific coverage is owned by
+  each implementation card and is not deferred to this cross-cutting gate.
+- **Current evidence:** the latest full coverage run on Windows/Python 3.13.18
+  passed 643 tests, skipped 3, and measured 87.60% overall (9,395 statements);
+  every measured module met 80% (lowest: `worlds.py` and
+  `manager_content.py`, both 80%). The fresh run includes the current working
+  tree. Raw output: `dev_artifacts/reports/coverage_current_review_rerun_2026-11-22.txt`.
+  The repository configuration enforces only an 80% overall floor; the 85%
+  overall and per-module floors are verified from the report. Independent
+  re-review returned PASS_WITH_FINDINGS: the stale-evidence blocker is resolved,
+  with manual threshold enforcement recorded as a non-blocking medium finding.
+  Acceptance/status transition remains for the authorized integrator.
+  Focused API/lifecycle regressions passed 17 tests and scoped Ruff passed.
+- **Previous baseline — 2026-11-21:** clean Windows/Python 3.13.14 full coverage run:
+  **568 passed, 0 failed, 3 skipped**, 297 warnings, 80.97% overall, in
+  404.36s. The configured 80% floor passed; Document 11's 85% floor did not.
+  Thirteen of 92 measured modules remained below 80%: Minecraft properties
+  schema (65.62%), SQLite connection (76.00%), process base (73.74%), POSIX
+  process (22.89%), server-properties service (75.47%), worlds service
+  (72.97%), administration API (54.52%), backup-catalog API (62.76%),
+  catalogs API (65.83%), history API (77.30%), manager-content API (79.85%),
+  server-properties API (77.14%), and world-management API (73.88%). Raw
+  output and report are retained at
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes.txt`
+  and
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_merged_agent_changes_coverage.txt`.
+- **Latest follow-up — 2026-11-21:** Windows/Python 3.13.14 `python -m pytest -q`
+  passed **573 tests, 0 failed, 3 skipped** at **81.67%** overall, with no
+  warning summary, in 405.11s. The coverage run measured 9,275 statements and
+  10 modules remained below 80%: process base (73.74%), POSIX process adapter
+  (22.89%), server-properties service (75.47%), worlds service (72.83%),
+  administration API (54.52%), backup-catalog API (62.76%), catalogs API
+  (65.83%), manager-content API (79.85%), server-properties API (77.14%), and
+  world-management API (73.88%). `properties_schema.py` was 96.88%, SQLite
+  `connection.py` 91.20%, and history API 95.74%. The overall 85% floor and
+  remaining per-module floors were still open. Raw coverage output:
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-21_followup_tests.txt`.
+- **Candidate baseline — 2026-11-22:** Windows/Python 3.13.18 coverage run:
+  **577 passed, 3 skipped**, 81.77% total (9,354 statements). The configured
+  80% overall floor passed; Document 11's 85% overall target did not. Nine
+  modules remained below 80%: process base (74%), POSIX process (23%),
+  server-properties service (79%), worlds service (73%), administration API
+  (55%), backup-catalog API (63%), catalogs API (66%), server-properties API
+  (77%), and world-management API (74%). Raw evidence:
+  `dev_artifacts/reports/audit_fullsuite_coverage_2026-11-22.txt`.
+- **Previous remediation verification — 2026-11-22:** Windows/Python 3.13.18
+  `python -m pytest -q` passed **643 tests, 0 failed, 3 skipped** at **87.53%**
+  overall (9,395 statements) in 460.80s. All measured modules met 80%;
+  `app/services/worlds.py` measured 80% and
+  `app/web/api/backup_catalogs.py` measured 81%. The focused coverage additions
+  also assert world provisioning leaves no partial artifacts, cleanup-policy
+  fields persist after update, and sync credentials rotate to the expected
+  stored value. Raw report:
+  `dev_artifacts/reports/coverage_final.txt`.
+- **Fresh review rerun — 2026-11-22:** Windows/Python 3.13.18
+  `.\.venv-phase4\Scripts\python.exe -m pytest -q` passed **643 tests, 0 failed,
+  3 skipped** at **87.60%** overall (9,395 statements) in 467.56s. Every
+  measured module met 80%; the lowest were `app/services/worlds.py` and
+  `app/web/api/manager_content.py` at 80%. Raw output:
+  `dev_artifacts/reports/coverage_current_review_rerun_2026-11-22.txt`.
+  Independent re-review returned PASS_WITH_FINDINGS; the 85% overall and
+  per-module floors remain manually verified rather than configured as CI
+  gates. Acceptance/status transition remains for the authorized integrator.
 
 ### KB-DOC-LEGACY-ARCHIVE — Clarify historical documentation status
 

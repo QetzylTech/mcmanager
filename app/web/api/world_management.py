@@ -23,6 +23,7 @@ from app.domain.value_objects import (
     WorldState,
 )
 from app.services.configuration import ConfigurationConflictError, VersionedUpdate
+from app.services.server_artifacts import ServerArtifactError
 from app.services.world_paths import allocate_world_directory, resolve_world_directory
 from app.web.errors import error, ok
 
@@ -191,6 +192,7 @@ def create_world() -> Any:
         "addressing_strategy",
         "addressing_value",
         "java_runtime_id",
+        "server_artifact_id",
     }
     if body is None or required.difference(body):
         return error("VALIDATION_ERROR", "Required world fields are missing.")
@@ -206,6 +208,8 @@ def create_world() -> Any:
         or not isinstance(body["addressing_value"], str)
         or not body["addressing_value"].strip()
         or not isinstance(body["java_runtime_id"], str)
+        or not isinstance(body["server_artifact_id"], str)
+        or not body["server_artifact_id"]
         or (
             "launch_args" in body
             and (
@@ -235,6 +239,36 @@ def create_world() -> Any:
     except ValueError:
         return error("VALIDATION_ERROR", "The template has an unsupported server type.")
 
+    try:
+        constraints = json.loads(
+            container.store.reader()
+            .execute(
+                "SELECT compatibility_constraints FROM templates WHERE template_id = ?",
+                (body["template_id"],),
+            )
+            .fetchone()["compatibility_constraints"]
+        )
+        provenance = container.server_artifacts.world_provenance(
+            body["server_artifact_id"]
+        )
+    except (TypeError, json.JSONDecodeError):
+        return error("VALIDATION_ERROR", "Template compatibility constraints are invalid.")
+    except ServerArtifactError as exc:
+        return error(exc.code, str(exc), status=exc.status)
+    if (
+        not isinstance(constraints, dict)
+        or provenance["provider"] not in constraints.get("providers", [])
+        or provenance["mc_version"] not in constraints.get("mc_versions", [])
+        or (
+            "builds" in constraints
+            and provenance["build"] not in constraints["builds"]
+        )
+    ):
+        return error(
+            "SERVER_ARTIFACT_INCOMPATIBLE",
+            "Selected artifact does not satisfy the template compatibility constraints.",
+        )
+
     now = int(container.clock.now())
     world_id = f"w_{uuid4().hex}"
     launch_args = json.dumps(body.get("launch_args")) if "launch_args" in body else None
@@ -255,6 +289,10 @@ def create_world() -> Any:
         "server_type": server_type,
         "mc_version": template["default_version"],
         "java_runtime_id": runtime["runtime_id"],
+        "server_artifact_id": body["server_artifact_id"],
+        "server_artifact_provenance_json": json.dumps(
+            provenance, sort_keys=True, separators=(",", ":")
+        ),
         "port": body["port"],
         "addressing_strategy": body["addressing_strategy"],
         "addressing_value": body["addressing_value"].strip(),

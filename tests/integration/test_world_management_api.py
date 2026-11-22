@@ -105,6 +105,21 @@ def _server_properties_client(app, world_id: str):
     return client, {"X-CSRF-Token": csrf}, world_dir
 
 
+def _world_files_client(app, world_id: str):
+    client, csrf = _admin_client(app)
+    container = app.extensions["mcmanager_container"]
+    seed_world(container.store, world_id=world_id)
+    world_dir = app.extensions["world_api_test_root"] / f"{world_id}-files"
+    world_dir.mkdir(parents=True)
+    container.store.writer().execute(
+        "UPDATE world_instances SET addressing_strategy = 'path', addressing_value = ? "
+        "WHERE world_id = ?",
+        (str(world_dir), world_id),
+    )
+    container.store.writer().commit()
+    return client, {"X-CSRF-Token": csrf}, world_dir
+
+
 def test_server_properties_api_updates_versions_and_replays_idempotently(world_api_app):
     client, headers, world_dir = _server_properties_client(world_api_app, "server-properties-world")
     path = "/api/worlds/server-properties-world/server-properties"
@@ -169,6 +184,109 @@ def test_server_properties_api_rejects_managed_or_invalid_edits(
 
     assert response.status_code == 400
     assert response.json["error"]["code"] == expected_code
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {},
+        {"version": -1, "properties": {"max-players": 20}},
+        {"version": 0, "properties": {}},
+        {"version": True, "properties": {"max-players": 20}},
+        {"version": 0, "properties": {"": "value"}},
+    ],
+)
+def test_server_properties_api_rejects_malformed_updates(world_api_app, payload):
+    client, headers, _world_dir = _server_properties_client(
+        world_api_app, "malformed-server-properties-world"
+    )
+    response = client.post(
+        "/api/worlds/malformed-server-properties-world/server-properties",
+        json=payload,
+        headers={**headers, "Idempotency-Key": "malformed-server-properties-edit"},
+    )
+    assert response.status_code == 400
+    assert response.json["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_server_properties_api_requires_non_empty_idempotency_key(world_api_app):
+    client, headers, _world_dir = _server_properties_client(
+        world_api_app, "empty-key-server-properties-world"
+    )
+    response = client.post(
+        "/api/worlds/empty-key-server-properties-world/server-properties",
+        json={"version": 0, "properties": {"max-players": 20}},
+        headers={**headers, "Idempotency-Key": "   "},
+    )
+    assert response.status_code == 400
+    assert response.json["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_server_properties_api_returns_world_not_found(world_api_app):
+    client, csrf = _admin_client(world_api_app)
+    headers = {"X-CSRF-Token": csrf}
+    get_response = client.get(
+        "/api/worlds/missing-server-properties-world/server-properties"
+    )
+    post_response = client.post(
+        "/api/worlds/missing-server-properties-world/server-properties",
+        json={"version": 0, "properties": {"max-players": 20}},
+        headers={**headers, "Idempotency-Key": "missing-world-server-properties"},
+    )
+    assert get_response.status_code == 404
+    assert get_response.json["error"]["code"] == "WORLD_NOT_FOUND"
+    assert post_response.status_code == 404
+    assert post_response.json["error"]["code"] == "WORLD_NOT_FOUND"
+
+
+def test_server_properties_service_updates_existing_version_and_rolls_back(
+    world_api_app, monkeypatch
+):
+    client, headers, world_dir = _server_properties_client(
+        world_api_app, "rollback-server-properties-world"
+    )
+    container = world_api_app.extensions["mcmanager_container"]
+    service = container.server_properties
+
+    first_response = client.post(
+        "/api/worlds/rollback-server-properties-world/server-properties",
+        json={"version": 0, "properties": {"max-players": 20}},
+        headers={**headers, "Idempotency-Key": "rollback-direct-first"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json["data"]["version"] == 1
+    actor_user_id = first_response.json["data"]["operation"]["actor_user_id"]
+
+    second, second_operation, replayed = service.update(
+        world_id="rollback-server-properties-world",
+        expected_version=1,
+        properties={"max-players": 25},
+        actor_user_id=actor_user_id,
+        idempotency_key="rollback-direct-second",
+    )
+    assert replayed is False
+    assert second["version"] == 2
+    assert second_operation["status"] == "Completed"
+
+    def clock_failure():
+        raise RuntimeError("clock failure")
+
+    monkeypatch.setattr(container.clock, "now", clock_failure)
+    with pytest.raises(RuntimeError, match="clock failure"):
+        service.update(
+            world_id="rollback-server-properties-world",
+            expected_version=2,
+            properties={"max-players": 30},
+            actor_user_id=actor_user_id,
+            idempotency_key="rollback-direct-failure",
+        )
+
+    assert (
+        world_dir / "server.properties"
+    ).read_text(encoding="utf-8") == "max-players=25\n"
+    assert service._version("rollback-server-properties-world") == 2
 
 
 def _add_regular_user(container):
@@ -780,3 +898,367 @@ def test_authorized_world_crud_runtime_eula_files_and_logs(world_api_app):
     )
     assert row["deleted_at"] is not None
     assert container.operations.get(delete_op_id)["status"] == "Completed"
+
+
+def test_world_create_rejects_duplicate_name_or_port_and_invalid_launch_args(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, csrf = _admin_client(world_api_app)
+    seed_world(container.store, world_id="world-create-validation")
+    headers = {"X-CSRF-Token": csrf}
+
+    duplicate_name = client.post(
+        "/api/worlds",
+        json={
+            "template_id": "gate3_template",
+            "display_name": "Gate 3",
+            "port": 25566,
+            "addressing_strategy": "port",
+            "addressing_value": "25566",
+            "java_runtime_id": "gate3_java",
+        },
+        headers={**headers, "Idempotency-Key": "duplicate-world-name"},
+    )
+    assert duplicate_name.status_code == 409
+    assert duplicate_name.get_json()["error"]["code"] == "WORLD_CONFLICT"
+
+    duplicate_port = client.post(
+        "/api/worlds",
+        json={
+            "template_id": "gate3_template",
+            "display_name": "A different world",
+            "port": 25565,
+            "addressing_strategy": "port",
+            "addressing_value": "25565",
+            "java_runtime_id": "gate3_java",
+        },
+        headers={**headers, "Idempotency-Key": "duplicate-world-port"},
+    )
+    assert duplicate_port.status_code == 409
+    assert duplicate_port.get_json()["error"]["code"] == "WORLD_CONFLICT"
+
+    invalid_launch_args = client.post(
+        "/api/worlds",
+        json={
+            "template_id": "gate3_template",
+            "display_name": "Invalid launch args",
+            "port": 25567,
+            "addressing_strategy": "port",
+            "addressing_value": "25567",
+            "java_runtime_id": "gate3_java",
+            "launch_args": [],
+        },
+        headers={**headers, "Idempotency-Key": "invalid-world-launch-args"},
+    )
+    assert invalid_launch_args.status_code == 400
+    assert invalid_launch_args.get_json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_world_file_copy_dispatch_preserves_source_and_creates_destination(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, csrf = _admin_client(world_api_app)
+    seed_world(container.store, world_id="world-file-copy")
+    root = world_api_app.extensions["world_api_test_root"]
+    world_dir = root / "world-file-copy"
+    world_dir.mkdir(parents=True)
+    (world_dir / "source.txt").write_text("copy me\n", encoding="utf-8")
+    container.store.writer().execute(
+        "UPDATE world_instances SET addressing_strategy = 'path', addressing_value = ? "
+        "WHERE world_id = ?",
+        (str(world_dir), "world-file-copy"),
+    )
+    container.store.writer().commit()
+    headers = {"X-CSRF-Token": csrf}
+
+    copy = client.patch(
+        "/api/worlds/world-file-copy/files",
+        json={
+            "action": "copy",
+            "from": "source.txt",
+            "to": "copied.txt",
+        },
+        headers={**headers, "Idempotency-Key": "copy-world-file"},
+    )
+    assert copy.status_code == 202
+    op_id = copy.get_json()["data"]["operation"]["op_id"]
+
+    dispatched = container.worlds.dispatch_queued_operations()
+    assert op_id in dispatched
+    assert container.operations.get(op_id)["status"] == "Completed"
+    assert (world_dir / "source.txt").read_text(encoding="utf-8") == "copy me\n"
+    assert (world_dir / "copied.txt").read_text(encoding="utf-8") == "copy me\n"
+
+
+def test_runtime_config_rejects_invalid_fields_and_conflicting_ports(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, csrf = _admin_client(world_api_app)
+    seed_world(container.store, world_id="runtime-config-validation")
+    connection = container.store.writer()
+    connection.execute(
+        "UPDATE world_instances SET port = 25566 WHERE world_id = ?",
+        ("runtime-config-validation",),
+    )
+    connection.execute(
+        """
+        INSERT INTO world_instances (
+            world_id, display_name, template_id, server_type, mc_version, java_runtime_id,
+            port, addressing_strategy, addressing_value, state, pre_backup_state,
+            launch_args, metadata_version, deleted_at, deleted_by, created_at, updated_at
+        )
+        SELECT 'runtime-config-port-conflict', 'Port conflict', template_id, server_type,
+               mc_version, java_runtime_id, 25565, 'port', '25565', 'off', NULL,
+               '{}', 1, NULL, NULL, created_at, updated_at
+        FROM world_instances WHERE world_id = 'runtime-config-validation'
+        """
+    )
+    connection.commit()
+    path = "/api/worlds/runtime-config-validation/runtime-config"
+    headers = {"X-CSRF-Token": csrf}
+
+    def update(payload, key):
+        return client.patch(
+            path,
+            json=payload,
+            headers={**headers, "Idempotency-Key": key},
+        )
+
+    invalid_version = update(
+        {"version": True, "port": 25567}, "runtime-invalid-version"
+    )
+    assert invalid_version.status_code == 400
+    assert invalid_version.json["error"]["code"] == "VALIDATION_ERROR"
+
+    missing_world = client.patch(
+        "/api/worlds/missing-runtime-config/runtime-config",
+        json={"version": 1, "port": 25567},
+        headers={**headers, "Idempotency-Key": "runtime-missing-world"},
+    )
+    assert missing_world.status_code == 404
+    assert missing_world.json["error"]["code"] == "WORLD_NOT_FOUND"
+
+    connection.execute(
+        "UPDATE world_instances SET state = 'eula_required' WHERE world_id = ?",
+        ("runtime-config-validation",),
+    )
+    connection.commit()
+    wrong_state = update({"version": 1, "port": 25567}, "runtime-wrong-state")
+    assert wrong_state.status_code == 409
+    assert wrong_state.json["error"]["code"] == "WORLD_RUNTIME_CONFIG_STATE"
+    connection.execute(
+        "UPDATE world_instances SET state = 'off' WHERE world_id = ?",
+        ("runtime-config-validation",),
+    )
+    connection.commit()
+
+    invalid_updates = (
+        ({"version": 1}, "runtime-empty-update", "VALIDATION_ERROR", 400),
+        (
+            {"version": 1, "java_runtime_id": "missing-java"},
+            "runtime-missing-java",
+            "VALIDATION_ERROR",
+            400,
+        ),
+        (
+            {"version": 1, "launch_args": []},
+            "runtime-empty-launch-args",
+            "VALIDATION_ERROR",
+            400,
+        ),
+        (
+            {"version": 1, "port": True},
+            "runtime-boolean-port",
+            "VALIDATION_ERROR",
+            400,
+        ),
+        (
+            {"version": 1, "addressing_strategy": "unsupported"},
+            "runtime-bad-strategy",
+            "VALIDATION_ERROR",
+            400,
+        ),
+        (
+            {"version": 1, "addressing_value": "   "},
+            "runtime-empty-address",
+            "VALIDATION_ERROR",
+            400,
+        ),
+        (
+            {"version": 1, "port": 25565},
+            "runtime-port-conflict",
+            "WORLD_PORT_CONFLICT",
+            409,
+        ),
+    )
+    for payload, key, expected_code, expected_status in invalid_updates:
+        response = update(payload, key)
+        assert response.status_code == expected_status
+        assert response.json["error"]["code"] == expected_code
+
+
+def test_world_file_listing_handles_missing_invalid_and_hidden_entries(world_api_app):
+    client, _headers, world_dir = _world_files_client(
+        world_api_app, "world-file-listing"
+    )
+    (world_dir / "visible.txt").write_text("visible", encoding="utf-8")
+    (world_dir / ".hidden.txt").write_text("hidden", encoding="utf-8")
+
+    invalid_option = client.get(
+        "/api/worlds/world-file-listing/files?include_hidden=yes"
+    )
+    assert invalid_option.status_code == 400
+    assert invalid_option.json["error"]["code"] == "VALIDATION_ERROR"
+
+    missing_directory = client.get(
+        "/api/worlds/world-file-listing/files?path=missing"
+    )
+    assert missing_directory.status_code == 404
+    assert missing_directory.json["error"]["code"] == "FILE_NOT_FOUND"
+
+    file_as_directory = client.get(
+        "/api/worlds/world-file-listing/files?path=visible.txt"
+    )
+    assert file_as_directory.status_code == 400
+    assert file_as_directory.json["error"]["code"] == "FILE_INVALID"
+
+    traversal = client.get(
+        "/api/worlds/world-file-listing/files?path=../outside"
+    )
+    assert traversal.status_code == 403
+    assert traversal.json["error"]["code"] == "FILE_PATH_UNAUTHORIZED"
+
+    default_listing = client.get("/api/worlds/world-file-listing/files")
+    assert {item["name"] for item in default_listing.json["data"]["files"]} == {
+        "visible.txt"
+    }
+    include_hidden = client.get(
+        "/api/worlds/world-file-listing/files?include_hidden=true"
+    )
+    assert {item["name"] for item in include_hidden.json["data"]["files"]} == {
+        ".hidden.txt",
+        "visible.txt",
+    }
+
+
+def test_world_file_mutations_reject_unsafe_and_unavailable_destinations(world_api_app):
+    client, headers, world_dir = _world_files_client(
+        world_api_app, "world-file-mutations"
+    )
+    (world_dir / "existing.txt").write_text("already here", encoding="utf-8")
+    (world_dir / "existing-directory").mkdir()
+
+    missing_upload = client.post(
+        "/api/worlds/world-file-mutations/files",
+        data={"path": "new.txt"},
+        headers=headers,
+    )
+    assert missing_upload.status_code == 400
+    assert missing_upload.json["error"]["code"] == "VALIDATION_ERROR"
+
+    guarded_upload = client.post(
+        "/api/worlds/world-file-mutations/files",
+        data={
+            "path": "server.properties",
+            "file": (io.BytesIO(b"motd=blocked\n"), "upload.txt"),
+        },
+        headers=headers,
+    )
+    assert guarded_upload.status_code == 403
+    assert guarded_upload.json["error"]["code"] == "FILE_PATH_UNAUTHORIZED"
+
+    invalid_uploads = (
+        ("../outside.txt", "FILE_PATH_UNAUTHORIZED", 403),
+        ("existing.txt", "FILE_EXISTS", 409),
+        ("missing/new.txt", "FILE_NOT_FOUND", 404),
+    )
+    for destination, expected_code, expected_status in invalid_uploads:
+        response = client.post(
+            "/api/worlds/world-file-mutations/files",
+            data={
+                "path": destination,
+                "file": (io.BytesIO(b"new content\n"), "upload.txt"),
+            },
+            headers=headers,
+        )
+        assert response.status_code == expected_status
+        assert response.json["error"]["code"] == expected_code
+
+    invalid_directories = (
+        ({"path": "", "name": "../unsafe"}, "VALIDATION_ERROR", 400),
+        ({"path": "../outside", "name": "new"}, "FILE_PATH_UNAUTHORIZED", 403),
+        ({"path": "missing", "name": "new"}, "FILE_NOT_FOUND", 404),
+        ({"path": "", "name": "existing-directory"}, "FILE_EXISTS", 409),
+    )
+    for payload, expected_code, expected_status in invalid_directories:
+        response = client.post(
+            "/api/worlds/world-file-mutations/files/mkdir",
+            json=payload,
+            headers=headers,
+        )
+        assert response.status_code == expected_status
+        assert response.json["error"]["code"] == expected_code
+
+    invalid_edits = (
+        (
+            {"action": "delete", "from": "existing.txt", "to": "copy.txt"},
+            "VALIDATION_ERROR",
+            400,
+        ),
+        (
+            {"action": "rename", "from": "server.properties", "to": "copy.txt"},
+            "FILE_PATH_UNAUTHORIZED",
+            403,
+        ),
+        (
+            {"action": "rename", "from": "../outside.txt", "to": "copy.txt"},
+            "FILE_PATH_UNAUTHORIZED",
+            403,
+        ),
+        (
+            {"action": "rename", "from": "missing.txt", "to": "copy.txt"},
+            "FILE_NOT_FOUND",
+            404,
+        ),
+        (
+            {"action": "rename", "from": "existing.txt", "to": "existing.txt"},
+            "FILE_EXISTS",
+            409,
+        ),
+        (
+            {"action": "rename", "from": "existing.txt", "to": "missing/copy.txt"},
+            "FILE_NOT_FOUND",
+            404,
+        ),
+    )
+    for index, (payload, expected_code, expected_status) in enumerate(invalid_edits):
+        response = client.patch(
+            "/api/worlds/world-file-mutations/files",
+            json=payload,
+            headers={**headers, "Idempotency-Key": f"invalid-file-edit-{index}"},
+        )
+        assert response.status_code == expected_status
+        assert response.json["error"]["code"] == expected_code
+
+
+def test_world_file_delete_removes_a_directory_tree_after_step_up(world_api_app):
+    container = world_api_app.extensions["mcmanager_container"]
+    client, headers, world_dir = _world_files_client(
+        world_api_app, "world-file-directory-delete"
+    )
+    nested = world_dir / "generated" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "data.txt").write_text("remove with parent", encoding="utf-8")
+    _elevate(world_api_app, client)
+
+    response = client.delete(
+        "/api/worlds/world-file-directory-delete/files",
+        json={"path": "generated"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json["data"]["deleted"] is True
+    assert not (world_dir / "generated").exists()
+    assert container.store.reader().execute(
+        "SELECT event_type FROM audit_records WHERE world_id = ? "
+        "AND event_type = 'world_file_deleted'",
+        ("world-file-directory-delete",),
+    ).fetchone() is not None

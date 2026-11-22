@@ -91,6 +91,20 @@ def _sync_operation_worker(container: Any, stop_event: threading.Event) -> None:
         stop_event.wait(0.25)
 
 
+def _server_artifact_operation_worker(container: Any, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        service = getattr(container, "server_artifacts", None)
+        dispatch = getattr(service, "dispatch_queued_operations", None)
+        if callable(dispatch):
+            try:
+                dispatch()
+            except Exception:
+                if stop_event.is_set():
+                    return
+                _logger.exception("Server artifact operation dispatch failed")
+        stop_event.wait(0.25)
+
+
 def _metrics_worker(container: Any, stop_event: threading.Event) -> None:
     metrics = getattr(container, 'metrics', None)
     if metrics is not None:
@@ -133,6 +147,9 @@ def create_app(
     # Boot reconciliation (Doc 13 §5.1): re-attach any world with an open
     # runtime session that survived a previous manager run.
     reconciliation = getattr(container, 'reconciliation', None)
+    artifact_service = getattr(container, "server_artifacts", None)
+    if artifact_service is not None:
+        artifact_service.reconcile()
     if reconciliation is None:
         container.worlds.reconcile()
     else:
@@ -173,6 +190,12 @@ def create_app(
             target=_sync_operation_worker,
             args=(container, stop_event),
             name='mcmanager-sync-operation-dispatcher',
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_server_artifact_operation_worker,
+            args=(container, stop_event),
+            name='mcmanager-server-artifact-dispatcher',
             daemon=True,
         ),
         threading.Thread(

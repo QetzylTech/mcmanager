@@ -46,7 +46,19 @@ World-scoped pages reflect the selected world. Manager-scoped pages must not dep
 
 **Manager Maintenance** — manager restart; server restart; version update; version rollback; ManagerBackup/restore (manager's own DB/settings/templates/permissions, independent of world content — Doc 6, BackupService); backup history; restore manager config.
 
-**World Template Catalog** — template list; management (add/edit/delete; edit versions, server type, Java runtime); create world from template.
+**World Template Catalog** — template list; management (add/edit/delete; edit
+versions, server type, Java runtime, and artifact compatibility constraints);
+in-app server artifact catalog for
+provider/version/build discovery, acquisition job status, and selecting a
+verified artifact for world creation. Latest/recommended is the default;
+all-build browsing is opt-in and paginated. Only verified runnable Vanilla,
+Paper, or Purpur artifacts are selectable for provisioning in the first
+release; Fabric launchers and Forge/NeoForge installers remain visible with
+their actual artifact kind but are not prepared or provisioned. CreateWorld
+provisions from an already acquired artifact; it does not depend on a live
+provider request. Admin+ can explicitly run legacy-manifest migration and
+review its durable unresolved-entry/orphan report; source files are never
+deleted.
 
 ## World Context
 

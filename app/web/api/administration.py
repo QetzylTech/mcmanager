@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 
 from argon2 import PasswordHasher
@@ -83,6 +84,13 @@ def get_setup():
         .fetchone()[0]
     )
     return ok({"setup_completed": count > 0, "first_superadmin_required": count == 0})
+
+
+def _is_username_conflict(exc: sqlite3.IntegrityError) -> bool:
+    return (
+        getattr(exc, "sqlite_errorname", None) == "SQLITE_CONSTRAINT_UNIQUE"
+        and "users.username" in str(exc)
+    )
 
 
 @administration_bp.post("/setup")
@@ -231,21 +239,31 @@ def create_user():
     container = _container()
     now = int(container.clock.now())
     user_id = f"u_{uuid.uuid4().hex[:16]}"
-    secret_id = container.secrets.store(
-        secret_type=SecretType.USER_PASSWORD,
-        associated_entity_type="user",
-        associated_entity_id=user_id,
-        plaintext=_PASSWORD_HASHER.hash(body["password"]),
-    )
+    username = body["username"].strip()
     writer = container.store.writer()
+    writer.execute("BEGIN IMMEDIATE")
     try:
+        duplicate = writer.execute(
+            "SELECT 1 FROM users WHERE username = ? AND deleted_at IS NULL",
+            (username,),
+        ).fetchone()
+        if duplicate is not None:
+            writer.rollback()
+            return error("USER_CONFLICT", "Username is already in use.")
+        secret_id = container.secrets.store(
+            secret_type=SecretType.USER_PASSWORD,
+            associated_entity_type="user",
+            associated_entity_id=user_id,
+            plaintext=_PASSWORD_HASHER.hash(body["password"]),
+            commit=False,
+        )
         writer.execute(
             "INSERT INTO users (user_id, username, display_name, secret_id, status, "
             "failed_login_count, locked_until, created_by, deleted_at, deleted_by, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, 'active', 0, NULL, ?, NULL, NULL, ?, ?)",
             (
                 user_id,
-                body["username"].strip(),
+                username,
                 body.get("display_name"),
                 secret_id,
                 g.current_user_id,
@@ -259,9 +277,14 @@ def create_user():
             (f"ra_{uuid.uuid4().hex[:12]}", user_id, body["role_id"], now, g.current_user_id),
         )
         writer.commit()
-    except Exception as exc:
+    except sqlite3.IntegrityError as exc:
         writer.rollback()
-        return error("VALIDATION_ERROR", str(exc), status=409)
+        if _is_username_conflict(exc):
+            return error("USER_CONFLICT", "Username is already in use.")
+        raise
+    except Exception:
+        writer.rollback()
+        raise
     container.audit.write(
         event_type="user_created",
         actor=container.audit.snapshot_for_user(
@@ -270,9 +293,9 @@ def create_user():
             device_name=None,
             ip=request.remote_addr,
         ),
-        payload={"target_user_id": user_id, "username": body["username"].strip()},
+        payload={"target_user_id": user_id, "username": username},
     )
-    return ok({"user_id": user_id, "username": body["username"].strip()}, status=201)
+    return ok({"user_id": user_id, "username": username}, status=201)
 
 
 @administration_bp.patch("/users/<user_id>")
@@ -334,31 +357,49 @@ def update_user(user_id: str):
             return error("VALIDATION_ERROR", "password must contain at least 12 characters.")
         if user_id == g.current_user_id:
             return error("VALIDATION_ERROR", "Use password change for your own account.")
-        container.auth.change_password(
-            user_id=user_id, new_password=body["password"], by_user_id=g.current_user_id
-        )
     fields = {key: value for key, value in body.items() if key != "password"}
     if "username" in fields:
         fields["username"] = fields["username"].strip()
-    if fields:
-        assignments = ", ".join(f"{key} = ?" for key in fields)
-        writer = container.store.writer()
-        try:
+
+    writer = container.store.writer()
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        if "username" in fields:
+            duplicate = writer.execute(
+                "SELECT 1 FROM users WHERE username = ? AND user_id != ? AND deleted_at IS NULL",
+                (fields["username"], user_id),
+            ).fetchone()
+            if duplicate is not None:
+                writer.rollback()
+                return error("USER_CONFLICT", "Username is already in use.")
+        if "password" in body:
+            container.auth.change_password(
+                user_id=user_id,
+                new_password=body["password"],
+                by_user_id=g.current_user_id,
+                commit=False,
+            )
+        if fields:
+            assignments = ", ".join(f"{key} = ?" for key in fields)
             writer.execute(
                 f"UPDATE users SET {assignments}, updated_at = ? WHERE user_id = ?",
                 [*fields.values(), int(container.clock.now()), user_id],
             )
-            writer.commit()
-        except Exception as exc:
-            writer.rollback()
-            return error("VALIDATION_ERROR", str(exc), status=409)
         if fields.get("status") == "disabled":
             writer.execute(
                 "UPDATE client_sessions SET deleted_at = ?, deleted_by = ? "
                 "WHERE user_id = ? AND deleted_at IS NULL",
                 (int(container.clock.now()), g.current_user_id, user_id),
             )
-            writer.commit()
+        writer.commit()
+    except sqlite3.IntegrityError as exc:
+        writer.rollback()
+        if _is_username_conflict(exc):
+            return error("USER_CONFLICT", "Username is already in use.")
+        raise
+    except Exception:
+        writer.rollback()
+        raise
     return ok({"user_id": user_id, "updated": sorted(body)})
 
 

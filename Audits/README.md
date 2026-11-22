@@ -58,6 +58,8 @@ control task status.
 
 ## Current records
 
+- [Full repository audit - 2026-11-22](FULL_AUDIT_2026-11-22.md)
+- [Independent workflow migration audit - 2026-11-22](INDEPENDENT_AUDIT_2026-11-22.md)
 - [Full repository audit — 2026-11-21](FULL_AUDIT_2026-11-21.md)
 - [2026-11-20 realignment and verification](REALIGNMENT_2026-11-20.md)
 - [2026-11-20 verification log](verification_log_2026-11-20.md)

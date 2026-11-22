@@ -22,6 +22,7 @@ from app.infrastructure.backup_engine import NativeBackupEngine
 from app.infrastructure.filesystem import LocalFilesystem
 from app.infrastructure.metrics import PsutilHostMetrics
 from app.infrastructure.minecraft.adapter import MinecraftServerAdapter
+from app.infrastructure.minecraft.providers.base import SafeHttpClient
 from app.infrastructure.minecraft.rcon import RconClient
 from app.infrastructure.secrets import SqliteSecretsStore, provision_keyfile
 from app.infrastructure.sqlite.connection import SqliteStore
@@ -49,6 +50,7 @@ from app.services.restore import RestoreService
 from app.services.runtime import RuntimeService
 from app.services.save_coordination import RconSaveCoordinator
 from app.services.scheduler import SchedulerService
+from app.services.server_artifacts import ServerArtifactService
 from app.services.server_properties import ServerPropertiesService
 from app.services.sync import SyncService
 from app.services.worlds import WorldsService
@@ -83,6 +85,7 @@ class Container:
     sync: SyncService
     configuration: ConfigurationService
     server_properties: ServerPropertiesService
+    server_artifacts: ServerArtifactService
     worlds: WorldsService
     save_coordinator: RconSaveCoordinator
     manager_lifecycle: ManagerLifecycleService
@@ -157,6 +160,16 @@ def build_container(
         filesystem=filesystem,
     )
     server_properties = ServerPropertiesService(store, clock, configuration, operations)
+    artifact_root = Path(database_path).resolve().parent / "serverjars"
+    legacy_root = Path(__file__).resolve().parent / "data" / "serverjars"
+    server_artifacts = ServerArtifactService(
+        store,
+        clock,
+        operations,
+        artifact_root,
+        legacy_root,
+        http=SafeHttpClient(),
+    )
     manager_lifecycle = ManagerLifecycleService(
         store, clock, operations, configuration, backup_engine
     )
@@ -172,6 +185,7 @@ def build_container(
         logs=logs,
         audit=audit,
         realtime=realtime,
+        server_artifacts=server_artifacts,
     )
     runtime = RuntimeService(worlds)
     restore = RestoreService(store, clock, operations, backups, runtime)
@@ -212,6 +226,7 @@ def build_container(
         sync=sync,
         configuration=configuration,
         server_properties=server_properties,
+        server_artifacts=server_artifacts,
         worlds=worlds,
         save_coordinator=save_coordinator,
         manager_lifecycle=manager_lifecycle,

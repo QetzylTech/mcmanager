@@ -1,6 +1,6 @@
 # Document 14: Minecraft Server Adapter Contract
 
-Minecraft-specific runtime contract the manager depends on: readiness, EULA, version-aware `server.properties`, Java compatibility, RCON, save coordination, server-type capability model. Generic OS process mechanics live in Doc 13; this document binds those mechanics to real Vanilla/Paper/Fabric/Forge behavior. A **capability schema + adapter contract**, implementable per server type before the corresponding lifecycle feature ships (ARCHITECTURE §15 item 1 spike).
+Minecraft-specific runtime contract the manager depends on: readiness, EULA, version-aware `server.properties`, Java compatibility, RCON, save coordination, server-type capability model, and verified server-artifact provisioning. Generic OS process mechanics live in Doc 13; this document binds those mechanics to real Vanilla/Paper/Purpur/Fabric/Forge/NeoForge behavior. A **capability schema + adapter contract**, implementable per server type before the corresponding lifecycle feature ships (ARCHITECTURE §15 item 1 spike).
 
 Governing: domain state — Doc 6; schema — Doc 7; services — Doc 8; process control — Doc 13; API — Doc 10; tests — Doc 11; directory placement — Doc 12.
 
@@ -27,15 +27,15 @@ Governing: domain state — Doc 6; schema — Doc 7; services — Doc 8; process
 
 Each supported type declares a capability record (`infrastructure/minecraft/capabilities.py`, Doc 12). Capabilities are **declared, then implemented** — a feature requiring a capability absent from a type is either adapted (documented fallback signal) or surfaced as `NOT_IMPLEMENTED` (Doc 10), never silently assumed.
 
-| Capability | Vanilla | Paper | Fabric | Forge |
-|---|---|---|---|---|
-| RCON | required/optional (`server.properties`) | yes | yes (vanilla parity) | yes |
-| Safe readiness probe (level 4) | protocol ping if enabled; else downgrade | yes (extended) | protocol ping | protocol ping |
-| Player-list query | RCON `list` / query protocol | RCON `list` | RCON `list` | RCON `list` |
-| Save coordination (`save-off`/`save-all`/`save-on`) | RCON commands | same + Paper save API | RCON | RCON (may be slower/fragile — flagged) |
-| TPS metric | none (absent) | `/tps` (or `/tick`) | none | none |
-| stdin `stop` | yes | yes | yes | yes (some consoles need a console → ConPTY, Doc 13 §3.2) |
-| Management protocol | query protocol (optional) | Paper API (optional) | none | none |
+| Capability | Vanilla | Paper | Purpur | Fabric | Forge | NeoForge |
+|---|---|---|---|---|---|---|
+| RCON | required/optional (`server.properties`) | yes | Paper-compatible | yes (vanilla parity) | yes | Forge-compatible |
+| Safe readiness probe (level 4) | protocol ping if enabled; else downgrade | yes (extended) | Paper-compatible | protocol ping | protocol ping | protocol ping |
+| Player-list query | RCON `list` / query protocol | RCON `list` | Paper-compatible | RCON `list` | RCON `list` | RCON `list` |
+| Save coordination (`save-off`/`save-all`/`save-on`) | RCON commands | same + Paper save API | Paper-compatible | RCON | RCON (may be slower/fragile — flagged) | Forge-compatible |
+| TPS metric | none (absent) | `/tps` (or `/tick`) | Paper-compatible | none | none | none |
+| stdin `stop` | yes | yes | yes | yes | yes (some consoles need a console → ConPTY, Doc 13 §3.2) | yes |
+| Management protocol | query protocol (optional) | Paper API (optional) | Paper-compatible | none | none | none |
 
 Cell meanings: `yes` = first-class; `optional` = present only when enabled in config; `none/absent` = intentionally not provided — management must not rely on it. Where a capability is absent and a fallback signal is used, that fallback is a **declared limitation**, surfaced in the world's resolved capability record, never a silent downgrade.
 
@@ -68,6 +68,7 @@ The Minecraft adapter validates before Start dispatch and again immediately befo
 1. **Java compatibility** — resolved Java major within the server type/version's supported range (§7); mismatch → Start/CreateWorld rejected `JAVA_INCOMPATIBLE` (Doc 10), no process spawned.
 2. **EULA state** — §5; unaccepted → Start rejected `EULA_NOT_ACCEPTED`, world → `eula_required` if not already there.
 3. **Server JAR existence** — configured jar path exists and is non-empty; else Start → `Failed`, exit classification `spawn_failed` (Doc 13 §4.1).
+3a. **Artifact integrity** — when world provenance exists, resolve its `runtime_relative_path` (first-release value: `server.jar`) beneath the world directory and require the effective `-jar` launch target to resolve to that exact file. Compute its SHA-256 immediately before spawn and compare with the immutable recorded runtime hash. A mismatch or launch-command bypass fails Start with `SERVER_ARTIFACT_INTEGRITY_FAILED`, records a terminal audit, and never spawns the process. Legacy worlds without provenance retain the existing non-empty-file check and are surfaced as unverified.
 4. **Working directory** — provisioned world dir exists and is writable.
 5. **Launch arguments** — argv assembled from Template + JavaRuntime + `launch_args`; no shell interpolation (Doc 13 §3.1); memory args validated non-negative and within host budget (advisory).
 6. **Port availability** — assigned port + RCON port (if enabled) not already bound on the host; conflict → Start rejected (Doc 9, Doc 10 `WORLD_PORT_CONFLICT`-class).
@@ -186,6 +187,16 @@ restart attempted (world was running before restore)
 ## 13 Conformance & test expectations
 
 Doc 11 gains: capability-schema tests (every declared capability cell has an implementation or an explicit `none`); EULA state-machine tests; Java-compat matrix validation tests; `server.properties` schema tests per curated version; save-coordination edge tests (each §10 bullet); backup integrity tests (interrupt/checksum/structure); restore rollback decision-tree tests.
+
+## 14 Server artifact discovery, verification, and provisioning
+
+- Provider discovery/download covers Vanilla, Paper, Purpur, Fabric, Forge, and NeoForge. Latest/recommended is the default; all-build discovery is explicit and paginated. The downloader classifies `runnable_server`, `launcher`, and `installer` by provider contract, never by `.jar` suffix alone.
+- The first release provisions only checksum-verified runnable Vanilla, Paper, or Purpur artifacts. Fabric launchers and Forge/NeoForge installers can be catalogued/downloaded but are rejected for CreateWorld and Start; installer/launcher preparation is not part of this contract.
+- `POST /api/worlds` supplies the exact `server_artifact_id`. The selected Template provides compatibility constraints (server type/provider and Minecraft version/build); it does not silently select an artifact. CreateWorld copies from the manager-owned catalog root without mutating the shared artifact, computes and stores an immutable provenance snapshot, then verifies the world-local copy before publishing the world.
+- The first-release provisioned file is always named `server.jar`; immutable world provenance records `runtime_relative_path = "server.jar"`. The effective launch command must use that exact contained file as its `-jar` target. Custom full-argv overrides that point elsewhere or bypass the artifact are rejected before spawn.
+- Catalog files live under the configured manager data root's `serverjars` directory. Resolve every destination beneath that root; provider URLs and redirects are HTTPS and allow-listed. Enforce the one GiB artifact maximum and the architecture-defined 10 GB (10,000,000,000-byte) free-space reserve before and during download.
+- Each Download is a durable Operation. At most two transfers run concurrently. A transfer makes at most three attempts (1-second then 2-second bounded waits), verifies an available upstream checksum plus local SHA-256, writes to an operation-specific `.part`, and atomically promotes only after verification. Running cancellation closes the stream and removes only that `.part`; restart reconciliation fails incomplete downloads explicitly. Re-download requires explicit force and cannot overwrite a different content digest.
+- Legacy JSON-manifest migration is explicit, durable, and restartable. The legacy source root is `<application-root>/data/serverjars` (the current `app/data/serverjars`); the destination is the configured manager data root's `serverjars`. When roots differ, copy verified candidates via `.part`, recheck SHA-256, and atomically publish while retaining all source files. Preserve the manifest byte-for-byte, never follow stored absolute paths, and import only a unique contained candidate matching filename, size, and SHA-256. Durable sanitized per-entry unresolved/orphan records remain visible through a paginated migration-detail route; rollback removes only newly staged catalog data, never source files.
 
 The Doc 13 fake-server binary gains EULA-file behavior and `--save-slow-ms` /
 `--ignore-save-on` modes so save-coordination edge cases are integration-testable
