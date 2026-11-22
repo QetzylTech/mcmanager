@@ -8,8 +8,8 @@
 
 Migration of repository development governance to `docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md` approved status. No application functionality, numbered product requirement, architecture contract, historical audit, or quality gate was changed.
 
-- Candidate source revision: `d4301f37b5fd`
-- Candidate state: documentation/workflow migration changes are uncommitted; no application source or historical audit file was modified.
+- Candidate source revision: `436fc3c`
+- Candidate state: the migration is committed as `436fc3c`; no application source or historical audit file was modified.
 - Independent reviewer: GitHub Copilot subagent, 2026-11-22
 
 ## Phase A — Initial assessment

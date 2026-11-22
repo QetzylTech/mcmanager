@@ -333,7 +333,7 @@ is integrated and reviewed.
 - **Acceptance:** update the repository entry point and audit/planning references; reconcile workflow terminology and justified workboard placements; preserve historical audits and numbered-document authority; add a migration audit and remaining-gap list; run reproducible documentation consistency and repository-boundary verification.
 - **In scope:** `AGENTS.md`, `docs/AGENT_DEVELOPMENT_WORKFLOW_SPEC.md` integration references, `docs/WORKBOARD.md` reconciliation, `docs/wbs.txt`, `Audits/README.md`, one small workflow consistency check, and `Audits/WORKFLOW_MIGRATION_2026-11-22.md`.
 - **Out of scope:** application behavior, numbered product requirements, architectural contracts, audit evidence rewriting, task reacceptance, and commit authorization.
-- **Evidence:** independent audit passed with findings; CRLF-aware `git diff --check` passed; `python dev_tools/workflow_verify.py` passed authority checks and identified six legacy status/section mismatches now assigned to `KB-WF-002`; no application source or historical audit files were modified. Migration report: `Audits/WORKFLOW_MIGRATION_2026-11-22.md`.
+- **Evidence:** independent audit passed with findings; CRLF-aware `git diff --check` passed; `python dev_tools/workflow_verify.py` passed authority checks and identified six legacy status/section mismatches now assigned to `KB-WF-002`; no application source or historical audit files were modified. Migration report: `Audits/WORKFLOW_MIGRATION_2026-11-22.md`. Migration commit: `436fc3c`.
 
 ### KB-G5-CLEANUP-POLICY — Approve safe stale-backup and log cleanup policy
 
